@@ -5,7 +5,7 @@
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
-        <mxCell id="title" value="Trade Repo：LINE → OMX/Codex 工作流架構" style="text;html=1;strokeColor=none;fillColor=none;fontSize=26;fontStyle=1;fontColor=#1F2937;align=center;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="title" value="Agentic Trade Research：Repo Agent Harness 架構" style="text;html=1;strokeColor=none;fillColor=none;fontSize=26;fontStyle=1;fontColor=#1F2937;align=center;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="320" y="30" width="960" height="40" as="geometry" />
         </mxCell>
 
@@ -15,7 +15,7 @@
         <mxCell id="lane-bridge" value="本機 LINE bridge / 授權 / FIFO 佇列" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#F0FDF4;strokeColor=#86EFAC;fontStyle=1;fontColor=#14532D;" vertex="1" parent="1">
           <mxGeometry x="40" y="280" width="1520" height="260" as="geometry" />
         </mxCell>
-        <mxCell id="lane-agent" value="OMX/Codex agent 與回覆交付" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#FFFBEB;strokeColor=#FCD34D;fontStyle=1;fontColor=#78350F;" vertex="1" parent="1">
+        <mxCell id="lane-agent" value="Runtime Adapter 與回覆交付" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#FFFBEB;strokeColor=#FCD34D;fontStyle=1;fontColor=#78350F;" vertex="1" parent="1">
           <mxGeometry x="40" y="570" width="1520" height="230" as="geometry" />
         </mxCell>
         <mxCell id="lane-ops" value="啟停與驗證" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#F8FAFC;strokeColor=#CBD5E1;fontStyle=1;fontColor=#334155;" vertex="1" parent="1">
@@ -90,7 +90,7 @@
         <mxCell id="tmux-icon" value="▣" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=22;" vertex="1" parent="1">
           <mxGeometry x="186" y="645" width="30" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="codex" value="OMX / Codex agent&#xa;執行 repo 工作流與工具" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontColor=#4C1D95;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+        <mxCell id="codex" value="外部執行 runtime&#xa;Codex/tmux 只負責執行 prompt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontColor=#4C1D95;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
           <mxGeometry x="510" y="625" width="255" height="70" as="geometry" />
         </mxCell>
         <mxCell id="codex-icon" value="🤖" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=20;" vertex="1" parent="1">

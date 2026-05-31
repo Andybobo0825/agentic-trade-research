@@ -1,67 +1,64 @@
-# Codex Finance Tools
+# Agentic Trade Research
 
-這是一套給 Codex 使用的輕量財經資料 CLI 工具。
+這是一套把 LINE 指令入口、授權白名單、FIFO 任務佇列、tmux runtime adapter 與財經 MCP/CLI 工具串成一條本機 agent workflow 的研究 harness。
 
 重點：
 
 - **Codex 負責分析與推理**：使用你現有的 Codex / ChatGPT 額度。
-- **本 repo 只負責抓資料**：從外部財經資料 API 取得資料，輸出 JSON 或 Markdown。
-- **Agent workflow management harness**：LINE、tmux、MCP、OMX/Codex 與資料工具被包成一個可啟停、可排隊、可驗證的本機 agent 操作平台。
+- **本 repo 負責 agent harness 與資料工具**：把 LINE webhook、授權、排程、tmux runtime adapter、MCP/CLI 金融資料工具與回覆交付串成可運作的本機 agent workflow。
+- **低 token evidence pipeline**：MCP 預設 `compact-json`，並提供 `research-pack`、`outputFields`、`maxRows`，讓 agent 讀到精簡但可追溯的資料輸出。
 
-## 作品集版架構總覽：Agent Workflow Management Harness
+## 作品集版架構總覽：Repo-native Agent Harness
 
-這個 repo 的核心不是單一 CLI，而是一個 **本機 agent harness**：
+這個 repo 本身定義的是一組 **repo-native logical agents / harness modules**。它不把外部 Codex/OMX 的 agent/skill 當成專案內容，而是提供一個可由手機操作、可授權、可排隊、可呼叫金融資料工具、可交付 Markdown 結果的本機 agent workflow harness。
 
-1. **LINE bridge** 把手機訊息轉成可控的 Codex/tmux prompt。
-2. **授權層** 用 LINE friend / userId 白名單控管誰能操作本機 agent。
-3. **全域 FIFO queue** 讓多位 LINE 使用者同時送 prompt 時不漏訊息，依序送進同一個 Codex/tmux pane。
-4. **Codex / OMX runtime** 負責推理、規劃、修改 repo、驗證與產生回覆。
-5. **trade-finance MCP / CLI tools** 提供低 token 的結構化金融資料工具。
-6. **response-file contract** 要求 Codex 把完整 LINE-safe Markdown 回覆寫入 `.omx/line-bridge/responses/*.md`，再由 bridge push 回原使用者。
+主要資料流：
+
+1. **Message Intake Agent** 接收 LINE webhook，驗證簽章並解析使用者訊息。
+2. **Authorization Agent** 透過 LINE friend / userId 本機白名單控管可操作者。
+3. **Command Router Agent** 區分 `/help`、`/status`、`/tail` 與一般 prompt。
+4. **FIFO Scheduler Agent** 在多使用者同時送 prompt 時排隊，回覆目前第 N 位，避免遺失任務。
+5. **Runtime Adapter Agent** 把排程後的 prompt 安全送進指定 tmux pane，讓外部 Codex runtime 執行。
+6. **Finance Data Tool Agent** 以 MCP/CLI 方式提供美股、台股、新聞、公告、財報、估值等低 token evidence。
+7. **Response Dispatcher Agent** 讀取 response-file contract 或 fallback turn log，將結果 push 回原 LINE 使用者。
+8. **Ops Supervisor** 負責 `tradstart` / `tradestop`，管理 bridge process、Cloudflare tunnel、tmux target 與 runtime state。
 
 架構圖 PNG：[`docs/diagrams/trade-line-bridge-workflow.png`](docs/diagrams/trade-line-bridge-workflow.png)  
+架構圖 source：[`docs/diagrams/trade-line-bridge-workflow.drawio`](docs/diagrams/trade-line-bridge-workflow.drawio)
 
-![Trade LINE Bridge Workflow](docs/diagrams/trade-line-bridge-workflow.png)
+![Agentic Trade Research Repo Harness](docs/diagrams/trade-line-bridge-workflow.png)
 
-### Agent / workflow 定義在哪裡？
+### Repo 內的 agent / harness modules
 
-這個專案刻意把「repo 內 harness」與「Codex/OMX agent 定義」分層：
+> 這裡的「agent」指本 repo 內負責一段自主流程的 logical agent/module；不是外部 OMX/Codex native agent 定義。
 
-- **Repo 內沒有 checked-in `AGENTS.md`**。目前看到的 AGENTS.md 指令是 OMX/Codex session 注入的 runtime contract，不是這個 repo commit 的檔案。
-- **Codex native agents** 安裝在使用者層：`~/.codex/agents/*.toml`，每個 agent 通常搭配 `~/.codex/prompts/*.md`。
-- **OMX workflow skills** 安裝在：`~/.codex/skills/*/SKILL.md`。
-- **Repo-native workflow prompts** 放在：`workflows/*.md`，它們不是常駐 agent，而是給 Codex 執行投資研究時引用的流程模板。
+| Repo logical agent / module | 主要檔案 | 責任 |
+| --- | --- | --- |
+| Message Intake Agent | `src/line-bridge.js` | 建立 LINE webhook server、驗證 `x-line-signature`、解析 LINE text/follow events |
+| Authorization Agent | `src/line-bridge.js`, `.omx/line-bridge/authorized-users.json`（runtime ignored） | 自動授權加入好友/首次私訊使用者、維護本機白名單、拒絕未授權來源 |
+| Command Router Agent | `src/line-bridge.js` | 處理 `/help`、`/status`、`/tail`、未知指令與一般 prompt |
+| FIFO Scheduler Agent | `src/line-bridge.js` | global FIFO queue、busy 狀態、排隊順位回覆、依序啟動 job |
+| Runtime Adapter Agent | `src/line-bridge.js`, `src/line-bridge-auto.js` | 選擇/確認 tmux target，透過 tmux paste/send-keys 把 prompt 送進外部執行 runtime |
+| Response Dispatcher Agent | `src/line-bridge.js` | 產生 response-file contract、等待 `.omx/line-bridge/responses/*.md`、fallback 到 `.omx/logs/turns-*.jsonl`、切分 LINE push 訊息 |
+| Finance Data Tool Agent | `src/mcp-server.js`, `src/tools.js`, `src/cli.js` | expose MCP `tools/list` / `tools/call` 與 CLI，提供 `research-pack`、台股/美股資料、低 token render controls |
+| Market Data Connectors | `src/financial-datasets.js`, `src/taiwan-market.js` | 封裝 Financial Datasets、FinMind、TWSE、TPEx、Fugle 等外部資料來源 |
+| Ops Supervisor | `src/tradstart.js`, `src/tradstop.js`, `src/trade-runtime.js`, `bin/tradstart`, `bin/tradestop` | 啟停 LINE bridge、Cloudflare tunnel、tmux target/session，寫入/清理 runtime state |
+| Research Workflow Templates | `workflows/*.md` | repo-native 投資研究流程模板：美股 memo、台股 memo、DCF、新聞敘事 triage |
+| Regression Harness | `tests/*.test.js` | 驗證 CLI、MCP、LINE bridge、授權、FIFO queue、tmux target 選擇、runtime state |
 
-主要 agent / workflow surfaces：
+### 外部 runtime 邊界
 
-| 類型 | 名稱 | 定義位置 | 在本 repo 的角色 |
-| --- | --- | --- | --- |
-| Runtime contract | AGENTS.md / OMX session contract | session 注入；本 repo 目前無 checked-in `AGENTS.md` | 規範 agent 自主執行、驗證、技能路由、子代理協作與安全邊界 |
-| Native agent | `explore` | `~/.codex/agents/explore.toml` + `~/.codex/prompts/explore.md` | 快速 repo lookup、檔案/符號/關係探索 |
-| Native agent | `researcher` | `~/.codex/agents/researcher.toml` + `~/.codex/prompts/researcher.md` | 官方文件、外部資料、Jina/web research |
-| Native agent | `dependency-expert` | `~/.codex/agents/dependency-expert.toml` + `~/.codex/prompts/dependency-expert.md` | MCP / SDK / package 採用與替換評估 |
-| Native agent | `executor` | `~/.codex/agents/executor.toml` + `~/.codex/prompts/executor.md` | 實作功能、重構、修 bug |
-| Native agent | `debugger` | `~/.codex/agents/debugger.toml` + `~/.codex/prompts/debugger.md` | 追 log、定位 webhook / queue / tmux 問題 |
-| Native agent | `test-engineer` | `~/.codex/agents/test-engineer.toml` + `~/.codex/prompts/test-engineer.md` | 設計 regression test、排隊/授權/工具測試 |
-| Native agent | `verifier` | `~/.codex/agents/verifier.toml` + `~/.codex/prompts/verifier.md` | 驗證完成條件、確認測試證據 |
-| Native agent | `code-reviewer` | `~/.codex/agents/code-reviewer.toml` + `~/.codex/prompts/code-reviewer.md` | 最終 code review 與風險檢查 |
-| Workflow skill | `$plan` / `$ralplan` | `~/.codex/skills/plan/SKILL.md`, `~/.codex/skills/ralplan/SKILL.md` | 複雜改動前的計畫與測試形狀 |
-| Workflow skill | `$ralph` / `$ultragoal` | `~/.codex/skills/ralph/SKILL.md`, `~/.codex/skills/ultragoal/SKILL.md` | 長任務 self-loop、目標拆解與驗證 |
-| Workflow skill | `$team` | `~/.codex/skills/team/SKILL.md` | 多 lane 平行 execution / verification |
-| Workflow skill | `$code-review` / `$ultraqa` | `~/.codex/skills/code-review/SKILL.md`, `~/.codex/skills/ultraqa/SKILL.md` | adversarial review、端到端 QA |
-| Repo workflow prompt | `research-memo` | `workflows/research-memo.md` | 美股 evidence-first 投資 memo |
-| Repo workflow prompt | `taiwan-research-memo` | `workflows/taiwan-research-memo.md` | 台股研究 memo |
-| Repo workflow prompt | `dcf-valuation` | `workflows/dcf-valuation.md` | DCF / 估值流程 |
-| Repo workflow prompt | `x-research` | `workflows/x-research.md` | 市場敘事 / 新聞 triage |
+- **Codex / ChatGPT / OMX 不屬於本 repo 的 agent 實作**；它們是這個 harness 可以驅動的外部推理 runtime。
+- 本 repo 的責任是把任務可靠送進 runtime、提供資料工具、保存/交付結果、並用 tests 確保流程可回歸。
+- `.env`、`.omx/**`、LINE 白名單、回覆檔、logs、runtime state 都是本機 runtime artifacts，已由 `.gitignore` 排除，不進 GitHub。
 
 ### Harness 工程亮點
 
-- **LINE → Codex 的可靠交付**：`src/line-bridge.js` 驗簽、授權、排隊、寫入 response-file contract，避免 LINE push 回覆被截斷或混線。
+- **LINE → runtime 的可靠交付**：`src/line-bridge.js` 驗簽、授權、排隊、注入 response-file contract，避免 LINE push 回覆被截斷或混線。
 - **多使用者短期佇列化**：global FIFO queue 讓多位使用者同時送 prompt 時會排隊，不會直接拒絕或遺失訊息。
 - **可重啟的 ops harness**：`src/tradstart.js` / `src/tradstop.js` 管理 tmux target、bridge process、Cloudflare tunnel 與 runtime state。
 - **低 token MCP 工具層**：`src/mcp-server.js` 預設 `compact-json`，支援 `outputFields` / `maxRows` / `research-pack`，把「壓縮輸出」和「保留資料覆蓋」分開。
 - **驗證導向**：`tests/*.test.js` 覆蓋 CLI、MCP、LINE bridge、授權、queue、tmux target 選擇與 runtime state。
-
 
 ## 設定 `.env`
 

@@ -1,0 +1,121 @@
+#!/usr/bin/env node
+import { loadDotEnv } from './dotenv.js';
+loadDotEnv();
+import readline from 'node:readline';
+import { renderToolResult, runTool, tools } from './tools.js';
+
+const serverInfo = { name: 'codex-finance-tools', version: '0.1.0' };
+
+function toolSchema(name, tool) {
+  const base = {
+    name,
+    description: tool.description,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: true },
+  };
+  if (name === 'statement') {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      statement: { type: 'string', enum: ['income', 'balance', 'cash-flow', 'financials'] },
+      period: { type: 'string', enum: ['annual', 'quarterly'] },
+      limit: { type: 'number' },
+    };
+    base.inputSchema.required = ['ticker'];
+  } else if (['metrics', 'price', 'filings'].includes(name)) {
+    base.inputSchema.properties = { ticker: { type: 'string' }, limit: { type: 'number' }, filingType: { type: 'string' } };
+    base.inputSchema.required = ['ticker'];
+  } else if (name === 'news') {
+    base.inputSchema.properties = { ticker: { type: 'string' }, limit: { type: 'number' } };
+  } else if (name.startsWith('tw-')) {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      provider: { type: 'string' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      limit: { type: 'number' },
+      statement: { type: 'string' },
+      dataset: { type: 'string' },
+      endpoint: { type: 'string' },
+    };
+    if (!['tw-endpoints', 'tw-raw'].includes(name)) base.inputSchema.required = ['ticker'];
+  } else if (name.startsWith('fugle-')) {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      type: { type: 'string' },
+      timeframe: { type: 'string' },
+      sort: { type: 'string' },
+      from: { type: 'string' },
+      to: { type: 'string' },
+      adjusted: { type: 'string' },
+      fields: { type: 'string' },
+      limit: { type: 'number' },
+      scope: { type: 'string', enum: ['intraday', 'historical'] },
+      market: { type: 'string' },
+      kind: { type: 'string', enum: ['quotes', 'movers', 'actives'] },
+      indicator: { type: 'string', enum: ['sma', 'rsi', 'kdj', 'macd', 'bb'] },
+      period: { type: 'string' },
+      fastPeriod: { type: 'string' },
+      slowPeriod: { type: 'string' },
+      signalPeriod: { type: 'string' },
+      endpoint: { type: 'string' },
+    };
+    if (!['fugle-snapshot', 'fugle-raw'].includes(name)) base.inputSchema.required = ['ticker'];
+    if (name === 'fugle-raw') base.inputSchema.required = ['endpoint'];
+  } else if (name === 'research-pack') {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      market: { type: 'string', enum: ['us', 'tw', 'taiwan'] },
+      include: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      limit: { type: 'number' },
+      newsLimit: { type: 'number' },
+      filingLimit: { type: 'number' },
+      statementLimit: { type: 'number' },
+      announcementLimit: { type: 'number' },
+      statement: { type: 'string' },
+      period: { type: 'string' },
+      provider: { type: 'string' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+    };
+    base.inputSchema.required = ['ticker'];
+  }
+  base.inputSchema.properties = { ...outputControlProperties(), ...base.inputSchema.properties };
+  return base;
+}
+
+function outputControlProperties() {
+  return {
+    format: { type: 'string', enum: ['compact-json', 'json', 'markdown'], description: 'Output rendering only. compact-json is the MCP default to reduce Codex token use.' },
+    outputFields: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional output-only field projection for row objects. Does not reduce upstream fetch coverage.' },
+    maxRows: { type: 'number', description: 'Optional output-only row cap for rendered arrays. Use API limit separately when you intentionally want to fetch less data.' },
+  };
+}
+
+async function handle(message) {
+  const { id, method, params = {} } = message;
+  if (method === 'initialize') return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo } };
+  if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: Object.entries(tools).map(([name, tool]) => toolSchema(name, tool)) } };
+  if (method === 'tools/call') {
+    const args = params.arguments || {};
+    const { format = 'compact-json', outputFields, maxRows, ...toolArgs } = args;
+    const result = await runTool(params.name, toolArgs);
+    return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: renderToolResult(params.name, result, format, { fields: outputFields, maxRows }).trimEnd() }] } };
+  }
+  if (id === undefined) return null;
+  return { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown method: ${method}` } };
+}
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on('line', async (line) => {
+  if (!line.trim()) return;
+  try {
+    const response = await handle(JSON.parse(line));
+    if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
+  } catch (error) {
+    const id = safeId(line);
+    process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32000, message: error.message || String(error) } })}\n`);
+  }
+});
+
+function safeId(line) {
+  try { return JSON.parse(line).id ?? null; } catch { return null; }
+}

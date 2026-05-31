@@ -1,0 +1,53 @@
+{
+  "name": "codex-finance-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lightweight finance data tools for Codex-driven research without a second LLM API backend.",
+  "bin": {
+    "trade-finance": "./src/cli.js",
+    "tradstart": "./bin/tradstart",
+    "tradestop": "./bin/tradestop"
+  },
+  "scripts": {
+    "trade": "node src/cli.js",
+    "mcp": "node src/mcp-server.js",
+    "test": "node --test tests/*.test.js",
+    "start": "node src/cli.js help",
+    "help": "node src/cli.js help",
+    "tw:endpoints": "node src/cli.js tw-endpoints",
+    "tw:company": "node src/cli.js tw-company",
+    "tw:price": "node src/cli.js tw-price",
+    "tw:revenue": "node src/cli.js tw-revenue",
+    "tw:financials": "node src/cli.js tw-financials",
+    "tw:institutional": "node src/cli.js tw-institutional",
+    "tw:valuation": "node src/cli.js tw-valuation",
+    "tw:announcements": "node src/cli.js tw-announcements",
+    "tw:news": "node src/cli.js tw-news",
+    "us:endpoints": "node src/cli.js endpoints",
+    "us:price": "node src/cli.js price",
+    "us:metrics": "node src/cli.js metrics",
+    "us:statement": "node src/cli.js statement",
+    "us:news": "node src/cli.js news",
+    "us:filings": "node src/cli.js filings",
+    "fugle:quote": "node src/cli.js fugle-quote",
+    "fugle:ticker": "node src/cli.js fugle-ticker",
+    "fugle:candles": "node src/cli.js fugle-candles",
+    "fugle:trades": "node src/cli.js fugle-trades",
+    "fugle:volumes": "node src/cli.js fugle-volumes",
+    "fugle:snapshot": "node src/cli.js fugle-snapshot",
+    "fugle:stats": "node src/cli.js fugle-stats",
+    "fugle:technical": "node src/cli.js fugle-technical",
+    "smoke:tw": "node src/cli.js tw-company --ticker 2330 --format markdown",
+    "line:bridge": "node src/line-bridge.js",
+    "line:check": "node -e \"import('./src/dotenv.js').then(async d=>{d.loadDotEnv(); const target=process.env.TMUX_PANE||process.env.LINE_BRIDGE_TMUX_TARGET||process.env.OMX_TARGET_PANE; if(target) process.env.LINE_BRIDGE_TMUX_TARGET=target; const m=await import('./src/line-bridge.js'); const c=m.readLineBridgeConfig(); console.log(JSON.stringify({tmuxTarget:c.tmuxTarget, autoAuthorizeFriends:c.autoAuthorizeFriends, authorizedUserIdsFile:c.authorizedUserIdsFile, authorizedUserCount:c.allowedUserIds.size, allowedUserIds:[...c.allowedUserIds], port:c.port, path:c.path, turnLogDir:c.turnLogDir, submitKeys:c.submitKeys, submitDelayMs:c.submitDelayMs, clearBeforeSend:c.clearBeforeSend}, null, 2));})\"",
+    "line:bridge:auto": "node src/line-bridge-auto.js",
+    "cloudflare:line:tunnel": "cloudflared tunnel --config ~/.cloudflared/trade-line.yml run trade-line",
+    "cloudflare:line:health": "curl -sS https://line.beautyrxstore.cc/health",
+    "tradstart": "node src/tradstart.js",
+    "tradestop": "node src/tradstop.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

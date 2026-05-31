@@ -1,0 +1,231 @@
+<mxfile host="app.diagrams.net" modified="2026-05-31T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="trade-line-bridge-workflow" name="Trade LINE Bridge Workflow">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Trade Repo：LINE → OMX/Codex 工作流架構" style="text;html=1;strokeColor=none;fillColor=none;fontSize=26;fontStyle=1;fontColor=#1F2937;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="320" y="30" width="960" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lane-external" value="外部通道" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#EFF6FF;strokeColor=#93C5FD;fontStyle=1;fontColor=#1E3A8A;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="1520" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-bridge" value="本機 LINE bridge / 授權 / FIFO 佇列" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#F0FDF4;strokeColor=#86EFAC;fontStyle=1;fontColor=#14532D;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="1520" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-agent" value="OMX/Codex agent 與回覆交付" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#FFFBEB;strokeColor=#FCD34D;fontStyle=1;fontColor=#78350F;" vertex="1" parent="1">
+          <mxGeometry x="40" y="570" width="1520" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-ops" value="啟停與驗證" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#F8FAFC;strokeColor=#CBD5E1;fontStyle=1;fontColor=#334155;" vertex="1" parent="1">
+          <mxGeometry x="40" y="825" width="1520" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- External nodes -->
+        <mxCell id="user" value="LINE 使用者&#xa;傳送 prompt / 指令" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontColor=#1E3A8A;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="145" width="180" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="user-icon" value="👤" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="96" y="165" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="line-api" value="LINE Messaging API&#xa;Webhook / Push" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontColor=#14532D;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="350" y="145" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="line-icon" value="💬" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#16A34A;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="366" y="165" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="cloudflare" value="Cloudflare Tunnel&#xa;公開 HTTPS edge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#F97316;fontColor=#7C2D12;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="650" y="145" width="210" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="cloud-icon" value="☁" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#F97316;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="666" y="165" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="local-port" value="127.0.0.1:8787&#xa;/line/webhook" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#0C4A6E;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="980" y="145" width="210" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="port-icon" value="🌐" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#0284C7;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="996" y="165" width="30" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Bridge nodes -->
+        <mxCell id="signature" value="驗證 x-line-signature&#xa;LINE_CHANNEL_SECRET" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;fontColor=#064E3B;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="90" y="335" width="215" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sig-icon" value="🔐" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="106" y="355" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="auth" value="授權白名單&#xa;follow / 首次私訊自動加入" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;fontColor=#14532D;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="365" y="335" width="245" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-icon" value="✅" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#16A34A;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="381" y="355" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="whitelist" value=".omx/line-bridge/&#xa;authorized-users.json" style="shape=cylinder3d;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#DCFCE7;strokeColor=#16A34A;fontColor=#14532D;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="445" width="175" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="router" value="指令路由&#xa;/help /status /tail / prompt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontColor=#4C1D95;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="680" y="335" width="230" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="router-icon" value="🔀" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="696" y="355" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="queue" value="全域 FIFO queue&#xa;busy 時回覆目前第 N 位" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#78350F;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="980" y="335" width="245" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="queue-icon" value="🧾" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="996" y="355" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="worker" value="Queue worker&#xa;一次取 1 個 job 依序處理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE68A;strokeColor=#B45309;fontColor=#78350F;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="335" width="230" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="worker-icon" value="⚙" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B45309;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1306" y="355" width="30" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Agent / response nodes -->
+        <mxCell id="tmux" value="tmux target pane&#xa;LINE_BRIDGE_TMUX_TARGET" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#78350F;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="170" y="625" width="235" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="tmux-icon" value="▣" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D97706;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="186" y="645" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="codex" value="OMX / Codex agent&#xa;執行 repo 工作流與工具" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontColor=#4C1D95;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="510" y="625" width="255" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="codex-icon" value="🤖" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#7C3AED;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="526" y="645" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="tools" value="Finance / Taiwan data tools&#xa;src/cli.js、mcp-server.js" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0E7FF;strokeColor=#4F46E5;fontColor=#312E81;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="840" y="625" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="tools-icon" value="📈" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4F46E5;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="856" y="645" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="response-file" value="回覆檔 contract&#xa;.omx/line-bridge/responses/*.md" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontColor=#7F1D1D;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="625" width="285" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="file-icon" value="📝" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1186" y="645" width="30" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="turn-log" value="fallback&#xa;.omx/logs/turns-*.jsonl" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#F1F5F9;strokeColor=#64748B;fontColor=#334155;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1175" y="715" width="250" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- Ops nodes -->
+        <mxCell id="tradstart" value="tradstart --no-notify&#xa;choose target → start bridge → tunnel → health" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E2E8F0;strokeColor=#475569;fontColor=#1E293B;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="110" y="865" width="355" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="start-icon" value="▶" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#475569;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="126" y="878" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="health" value="/health&#xa;busy + queued + tmuxTarget" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E2E8F0;strokeColor=#475569;fontColor=#1E293B;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="865" width="245" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="health-icon" value="❤" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#475569;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="556" y="878" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="tests" value="npm test&#xa;LINE bridge / queue / auth regression" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E2E8F0;strokeColor=#475569;fontColor=#1E293B;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="865" y="865" width="305" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="test-icon" value="✓" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#475569;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="881" y="878" width="28" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="tradstop" value="tradestop&#xa;push 關閉通知 → 停 bridge/tunnel/session" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E2E8F0;strokeColor=#475569;fontColor=#1E293B;fontStyle=1;spacingLeft=42;align=left;verticalAlign=middle;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1245" y="865" width="280" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="stop-icon" value="■" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#475569;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1261" y="878" width="28" height="28" as="geometry" />
+        </mxCell>
+
+        <!-- Forward flow edges; source/target points avoid left icon zones. -->
+        <mxCell id="e-user-line" value="message" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#2563EB;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="user" target="line-api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-line-cloud" value="webhook" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#2563EB;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="line-api" target="cloudflare">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-cloud-port" value="HTTPS tunnel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#2563EB;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="cloudflare" target="local-port">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-port-sig" value="POST body" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#059669;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="local-port" target="signature">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1085" y="260" />
+              <mxPoint x="198" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-sig-auth" value="valid" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#059669;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="signature" target="auth">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-auth-router" value="authorized" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#059669;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="auth" target="router">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-auth-file" value="persist" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#16A34A;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="auth" target="whitelist">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-router-queue" value="prompt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#D97706;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="router" target="queue">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-queue-worker" value="dequeue" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#D97706;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="queue" target="worker">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-worker-tmux" value="tmux paste" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#B45309;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="worker" target="tmux">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1405" y="555" />
+              <mxPoint x="288" y="555" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-tmux-codex" value="submit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#7C3AED;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="tmux" target="codex">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-codex-tools" value="research/data calls" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#4F46E5;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="codex" target="tools">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-codex-file" value="final markdown" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#DC2626;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.65;entryX=0;entryY=0.65;" edge="1" parent="1" source="codex" target="response-file">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="800" y="735" />
+              <mxPoint x="1140" y="735" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-log-file" value="fallback preview" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;dashed=1;strokeColor=#64748B;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="turn-log" target="response-file">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-file-line" value="push result" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#DC2626;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="response-file" target="line-api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1313" y="595" />
+              <mxPoint x="1500" y="595" />
+              <mxPoint x="1500" y="260" />
+              <mxPoint x="450" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-line-user" value="LINE reply" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#DC2626;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;entryX=0.5;entryY=0;" edge="1" parent="1" source="line-api" target="user">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="450" y="115" />
+              <mxPoint x="170" y="115" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Ops edges routed inside ops lane below icons. -->
+        <mxCell id="e-start-health" value="checks" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#475569;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="tradstart" target="health">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-health-tests" value="regression" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#475569;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="health" target="tests">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-tests-stop" value="ops" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#475569;endArrow=block;endFill=1;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="tests" target="tradstop">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -20,7 +20,6 @@
 6. **response-file contract** 要求 Codex 把完整 LINE-safe Markdown 回覆寫入 `.omx/line-bridge/responses/*.md`，再由 bridge push 回原使用者。
 
 架構圖 PNG：[`docs/diagrams/trade-line-bridge-workflow.png`](docs/diagrams/trade-line-bridge-workflow.png)  
-架構圖 source：[`docs/diagrams/trade-line-bridge-workflow.drawio`](docs/diagrams/trade-line-bridge-workflow.drawio)
 
 ![Trade LINE Bridge Workflow](docs/diagrams/trade-line-bridge-workflow.png)
 

@@ -25,6 +25,104 @@ function toolSchema(name, tool) {
     base.inputSchema.required = ['ticker'];
   } else if (name === 'news') {
     base.inputSchema.properties = { ticker: { type: 'string' }, limit: { type: 'number' } };
+  } else if (name === 'hma-signal') {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      market: { type: 'string', enum: ['tw', 'taiwan'] },
+      source: { type: 'string', enum: ['finmind', 'tw-price', 'fugle'] },
+      provider: { type: 'string' },
+      period: { type: 'number', description: 'Hull MA period. Defaults to 20, matching the provided Pine input.' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      limit: { type: 'number' },
+      scope: { type: 'string', enum: ['intraday', 'historical'] },
+      timeframe: { type: 'string' },
+      from: { type: 'string' },
+      to: { type: 'string' },
+      adjusted: { type: 'string' },
+    };
+    base.inputSchema.required = ['ticker'];
+  } else if (name === 'signal-study') {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      market: { type: 'string', enum: ['tw', 'taiwan'] },
+      provider: { type: 'string' },
+      period: { type: 'number', description: 'Hull MA period. Defaults to 20.' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      limit: { type: 'number' },
+      volumeWindow: { type: 'number' },
+      volumeMultiplier: { type: 'number' },
+      institutionalDays: { type: 'number' },
+      institutionalProvider: { type: 'string' },
+      institutionalLimit: { type: 'number' },
+      liquidityWindow: { type: 'number' },
+      minAverageVolume: { type: 'number' },
+      minAverageTurnover: { type: 'number' },
+      maxPositionPctOfAvgVolume: { type: 'number' },
+      forwardDays: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'number' } }] },
+      falseBreakoutDays: { type: 'number' },
+      falseBreakoutThreshold: { type: 'number' },
+    };
+    base.inputSchema.required = ['ticker'];
+  } else if (name === 'daily-decision-study') {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      market: { type: 'string', enum: ['tw', 'taiwan'] },
+      provider: { type: 'string' },
+      period: { type: 'number', description: 'Hull MA period. Defaults to 20.' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      limit: { type: 'number' },
+      decisionDays: { type: 'number' },
+      lookbackBars: { type: 'number' },
+      volumeWindow: { type: 'number' },
+      volumeMultiplier: { type: 'number' },
+      liquidityWindow: { type: 'number' },
+      minAverageVolume: { type: 'number' },
+      minAverageTurnover: { type: 'number' },
+      maxPositionPctOfAvgVolume: { type: 'number' },
+      forwardDays: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'number' } }] },
+    };
+    base.inputSchema.required = ['ticker'];
+  } else if (name === 'chip-study') {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      market: { type: 'string', enum: ['tw', 'taiwan'] },
+      provider: { type: 'string' },
+      period: { type: 'number', description: 'Hull MA period used for price/volume confirmation. Defaults to 20.' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      limit: { type: 'number' },
+      foreignDays: { type: 'number', description: 'Required consecutive net-buy days by foreign investors. Defaults to 3.' },
+      holderWeeks: { type: 'number', description: 'Required consecutive increases in holder distribution observations. Defaults to 3.' },
+      minHolderLots: { type: 'number', description: 'Minimum holding-share level lower bound in lots. Defaults to 1000.' },
+      holdingLimit: { type: 'number' },
+      volumeWindow: { type: 'number' },
+      volumeMultiplier: { type: 'number' },
+      institutionalProvider: { type: 'string' },
+      institutionalLimit: { type: 'number' },
+      liquidityWindow: { type: 'number' },
+      minAverageVolume: { type: 'number' },
+      minAverageTurnover: { type: 'number' },
+      maxPositionPctOfAvgVolume: { type: 'number' },
+      forwardDays: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'number' } }] },
+    };
+    base.inputSchema.required = ['ticker'];
+  } else if (name === 'sector-flow') {
+    base.inputSchema.properties = {
+      mode: { type: 'string', enum: ['realtime', 'close'] },
+      date: { type: 'string' },
+      tickers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      exchange: { type: 'string', enum: ['TSE', 'OTC'] },
+      securityType: { type: 'string', enum: ['STK'] },
+      provider: { type: 'string' },
+      companyProvider: { type: 'string' },
+      institutionalProvider: { type: 'string' },
+      rankBy: { type: 'string', enum: ['turnover', 'institutionalNetValue', 'foreignNetValue', 'investmentTrustNetValue'] },
+      chunkSize: { type: 'number' },
+      limit: { type: 'number' },
+    };
   } else if (name.startsWith('tw-')) {
     base.inputSchema.properties = {
       ticker: { type: 'string' },
@@ -60,6 +158,37 @@ function toolSchema(name, tool) {
     };
     if (!['fugle-snapshot', 'fugle-raw'].includes(name)) base.inputSchema.required = ['ticker'];
     if (name === 'fugle-raw') base.inputSchema.required = ['endpoint'];
+  } else if (name.startsWith('shioaji-')) {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      tickers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      exchange: { type: 'string', enum: ['TSE', 'OTC', 'OES', 'TAIFEX'] },
+      securityType: { type: 'string', enum: ['STK', 'FUT', 'OPT', 'IND'] },
+      page: { type: 'number' },
+      pageSize: { type: 'number' },
+      start: { type: 'string' },
+      end: { type: 'string' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      chunkSize: { type: 'number' },
+      cacheDir: { type: 'string' },
+      refresh: { type: 'boolean' },
+      timeoutMs: { type: 'number', description: 'Only for shioaji-orderbook SSE wait. Defaults to 3000 ms.' },
+      intradayOdd: { type: 'boolean' },
+      date: { type: 'string' },
+      last: { type: 'number' },
+      all: { type: 'boolean' },
+      timeStart: { type: 'string' },
+      timeEnd: { type: 'string' },
+    };
+    if (['shioaji-snapshots', 'shioaji-cache-kbars'].includes(name)) base.inputSchema.required = ['tickers'];
+    else if (['shioaji-contracts'].includes(name)) base.inputSchema.required = [];
+    else if (['shioaji-daily-quotes'].includes(name)) base.inputSchema.required = ['date'];
+    else if (['shioaji-cache-daily-quotes'].includes(name)) base.inputSchema.required = [];
+    else base.inputSchema.required = ['ticker'];
+    if (['shioaji-kbars', 'shioaji-cache-kbars', 'shioaji-cache-daily-quotes'].includes(name)) {
+      base.inputSchema.required = [...base.inputSchema.required, 'start', 'end'];
+    }
   } else if (name === 'research-pack') {
     base.inputSchema.properties = {
       ticker: { type: 'string' },
@@ -70,11 +199,32 @@ function toolSchema(name, tool) {
       filingLimit: { type: 'number' },
       statementLimit: { type: 'number' },
       announcementLimit: { type: 'number' },
+      hmaLimit: { type: 'number' },
+      hmaPeriod: { type: 'number' },
+      hmaSource: { type: 'string', enum: ['finmind', 'tw-price', 'fugle'] },
+      volumeWindow: { type: 'number' },
+      volumeMultiplier: { type: 'number' },
+      institutionalDays: { type: 'number' },
+      institutionalProvider: { type: 'string' },
+      institutionalLimit: { type: 'number' },
+      holdingLimit: { type: 'number' },
+      foreignDays: { type: 'number' },
+      holderWeeks: { type: 'number' },
+      minHolderLots: { type: 'number' },
+      decisionDays: { type: 'number' },
+      lookbackBars: { type: 'number' },
+      forwardDays: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'number' } }] },
+      falseBreakoutDays: { type: 'number' },
+      falseBreakoutThreshold: { type: 'number' },
       statement: { type: 'string' },
       period: { type: 'string' },
       provider: { type: 'string' },
       startDate: { type: 'string' },
       endDate: { type: 'string' },
+      liquidityWindow: { type: 'number' },
+      minAverageVolume: { type: 'number' },
+      minAverageTurnover: { type: 'number' },
+      maxPositionPctOfAvgVolume: { type: 'number' },
     };
     base.inputSchema.required = ['ticker'];
   }

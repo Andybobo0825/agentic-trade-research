@@ -43,3 +43,69 @@ test('MCP tools/call defaults to compact JSON text', async () => {
   assert.equal(text.includes('\n  '), false);
   assert.match(text, /^\{"endpoints":/);
 });
+
+test('MCP tools/list exposes hma-signal input schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 3, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'hma-signal');
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.required.includes('ticker'), true);
+  assert.ok(tool.inputSchema.properties.period);
+  assert.ok(tool.inputSchema.properties.source);
+  assert.ok(tool.inputSchema.properties.startDate);
+});
+
+test('MCP tools/list exposes signal-study input schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 4, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'signal-study');
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.required.includes('ticker'), true);
+  assert.ok(tool.inputSchema.properties.volumeWindow);
+  assert.ok(tool.inputSchema.properties.institutionalDays);
+  assert.ok(tool.inputSchema.properties.forwardDays);
+  assert.ok(tool.inputSchema.properties.falseBreakoutDays);
+});
+
+test('MCP tools/list exposes daily-decision-study input schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 5, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'daily-decision-study');
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.required.includes('ticker'), true);
+  assert.ok(tool.inputSchema.properties.decisionDays);
+  assert.ok(tool.inputSchema.properties.lookbackBars);
+  assert.ok(tool.inputSchema.properties.minAverageTurnover);
+  assert.ok(tool.inputSchema.properties.maxPositionPctOfAvgVolume);
+});
+
+test('MCP tools/list exposes chip-study input schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 6, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'chip-study');
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.required.includes('ticker'), true);
+  assert.ok(tool.inputSchema.properties.foreignDays);
+  assert.ok(tool.inputSchema.properties.holderWeeks);
+  assert.ok(tool.inputSchema.properties.minHolderLots);
+  assert.ok(tool.inputSchema.properties.forwardDays);
+});
+
+test('MCP tools/list exposes Shioaji read-only tool schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 7, method: 'tools/list' });
+  const quote = response.result.tools.find((entry) => entry.name === 'shioaji-quote');
+  const orderbook = response.result.tools.find((entry) => entry.name === 'shioaji-orderbook');
+  const ticks = response.result.tools.find((entry) => entry.name === 'shioaji-ticks');
+  assert.ok(quote);
+  assert.ok(orderbook);
+  assert.ok(ticks);
+  assert.equal(quote.inputSchema.required.includes('ticker'), true);
+  assert.ok(orderbook.inputSchema.properties.timeoutMs);
+  assert.ok(ticks.inputSchema.properties.last);
+});
+
+
+test('MCP tools/list exposes sector-flow input schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 8, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'sector-flow');
+  assert.ok(tool);
+  assert.ok(tool.inputSchema.properties.mode);
+  assert.ok(tool.inputSchema.properties.tickers);
+  assert.ok(tool.inputSchema.properties.rankBy);
+});

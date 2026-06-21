@@ -6,6 +6,7 @@
   "description": "Lightweight finance data tools for Codex-driven research without a second LLM API backend.",
   "bin": {
     "trade-finance": "./src/cli.js",
+    "tradestart": "./bin/tradestart",
     "tradstart": "./bin/tradstart",
     "tradestop": "./bin/tradestop"
   },
@@ -21,6 +22,7 @@
     "tw:revenue": "node src/cli.js tw-revenue",
     "tw:financials": "node src/cli.js tw-financials",
     "tw:institutional": "node src/cli.js tw-institutional",
+    "tw:sector-flow": "node src/cli.js sector-flow",
     "tw:valuation": "node src/cli.js tw-valuation",
     "tw:announcements": "node src/cli.js tw-announcements",
     "tw:news": "node src/cli.js tw-news",
@@ -44,8 +46,13 @@
     "line:bridge:auto": "node src/line-bridge-auto.js",
     "cloudflare:line:tunnel": "cloudflared tunnel --config ~/.cloudflared/trade-line.yml run trade-line",
     "cloudflare:line:health": "curl -sS https://line.beautyrxstore.cc/health",
+    "tradestart": "node src/tradstart.js",
     "tradstart": "node src/tradstart.js",
-    "tradestop": "node src/tradstop.js"
+    "tradestop": "node src/tradstop.js",
+    "shioaji:quote": "node src/cli.js shioaji-quote",
+    "shioaji:orderbook": "node src/cli.js shioaji-orderbook",
+    "shioaji:ticks": "node src/cli.js shioaji-ticks",
+    "shioaji:server": "node src/shioaji-server.js"
   },
   "engines": {
     "node": ">=20"

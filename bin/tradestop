@@ -1,4 +1,13 @@
 #!/usr/bin/env sh
-DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+PRG="$0"
+while [ -h "$PRG" ]; do
+  LINK="$(ls -ld -- "$PRG")"
+  LINK="${LINK#* -> }"
+  case "$LINK" in
+    /*) PRG="$LINK" ;;
+    *) PRG="$(dirname -- "$PRG")/$LINK" ;;
+  esac
+done
+DIR="$(CDPATH= cd -- "$(dirname -- "$PRG")/.." && pwd)"
 cd "$DIR" || exit 1
 exec node src/tradstop.js "$@"

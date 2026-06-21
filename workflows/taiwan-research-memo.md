@@ -10,6 +10,8 @@ node src/cli.js tw-company --ticker <TICKER>
 node src/cli.js fugle-quote --ticker <TICKER> --format markdown
 node src/cli.js fugle-candles --ticker <TICKER> --scope intraday --timeframe 1 --format markdown
 node src/cli.js tw-price --ticker <TICKER> --provider finmind --start-date <YYYY-MM-DD> --format markdown
+node src/cli.js hma-signal --ticker <TICKER> --market tw --source finmind --period 20 --start-date <YYYY-MM-DD> --format markdown
+node src/cli.js signal-study --ticker <TICKER> --market tw --period 20 --start-date <YYYY-MM-DD> --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
 node src/cli.js tw-revenue --ticker <TICKER> --start-date <YYYY-MM-DD> --format markdown
 node src/cli.js tw-financials --ticker <TICKER> --statement income --provider finmind --start-date <YYYY-MM-DD> --format markdown
 node src/cli.js tw-financials --ticker <TICKER> --statement balance --provider finmind --start-date <YYYY-MM-DD> --format markdown
@@ -21,7 +23,7 @@ node src/cli.js tw-announcements --ticker <TICKER> --limit 10
 ## Codex synthesis instructions
 
 1. Identify listing venue and business profile.
-2. Build realtime quote/intraday trend if Fugle data is available, then price trend, monthly revenue trend, margin/profitability trend, balance-sheet risk, valuation, and institutional-flow sections.
+2. Build realtime quote/intraday trend if Fugle data is available, then price trend, HMA trend signal, monthly revenue trend, margin/profitability trend, balance-sheet risk, valuation, and institutional-flow sections.
 3. Separate official-source evidence from FinMind-derived historical data.
 4. Flag data gaps and provider limitations; do not invent missing fields.
 5. Write in Traditional Chinese unless the user requests another language.
@@ -36,6 +38,7 @@ node src/cli.js tw-announcements --ticker <TICKER> --limit 10
 - 一句話結論
 - 公司與產業定位
 - 價格與估值
+- HMA 趨勢、成交量/法人確認與訊號研究
 - 00981A / 主動 ETF 納入狀態與意義
 - 月營收與財報趨勢
 - 籌碼 / 三大法人

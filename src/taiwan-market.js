@@ -12,6 +12,7 @@ const FINMIND_DATASETS = {
   balance: 'TaiwanStockBalanceSheet',
   cashflow: 'TaiwanStockCashFlowsStatement',
   institutional: 'TaiwanStockInstitutionalInvestorsBuySell',
+  holdingShares: 'TaiwanStockHoldingSharesPer',
   valuation: 'TaiwanStockPER',
   dividend: 'TaiwanStockDividend',
   company: 'TaiwanStockInfo',
@@ -199,6 +200,10 @@ export async function getTaiwanInstitutional({ ticker, provider = 'finmind', sta
   return limitRows(await finmindData(FINMIND_DATASETS.institutional, withDateRange({ data_id: ticker }, startDate, endDate)), limit);
 }
 
+export async function getTaiwanHoldingShares({ ticker, startDate, endDate, limit }) {
+  return limitRows(await finmindData(FINMIND_DATASETS.holdingShares, withDateRange({ data_id: ticker }, startDate, endDate)), limit);
+}
+
 export async function getTaiwanValuation({ ticker, provider = 'auto', startDate, endDate, limit }) {
   if (provider === 'finmind') return limitRows(await finmindData(FINMIND_DATASETS.valuation, withDateRange({ data_id: ticker }, startDate, endDate)), limit);
   if (provider === 'twse') return filterRows(await twseOpenApi(TWSE_ENDPOINTS.valuation), ticker, ['Code']);
@@ -247,11 +252,21 @@ async function fetchOpenApi(baseUrl, endpoint, source) {
 }
 
 async function fetchJson(url, meta, headers = {}) {
-  const res = await fetch(url, { headers: { accept: 'application/json', ...headers } });
+  let res;
+  try {
+    res = await fetch(url, { headers: { accept: 'application/json', ...headers } });
+  } catch (error) {
+    throw new Error(`${meta.source} request failed before response for ${safeUrlForError(url)}: ${error?.message || error}`);
+  }
   const text = await res.text();
   if (!res.ok) throw new Error(`${meta.source} request failed (${res.status} ${res.statusText}) for ${url.pathname}: ${text.slice(0, 500)}`);
   const payload = text ? JSON.parse(text) : null;
   return { ...meta, url: url.toString(), data: payload?.data ?? payload };
+}
+
+function safeUrlForError(url) {
+  const value = url instanceof URL ? url : new URL(String(url));
+  return `${value.origin}${value.pathname}`;
 }
 
 function symbolPath(template, ticker) {

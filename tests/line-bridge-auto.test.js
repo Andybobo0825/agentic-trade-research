@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseTmuxTarget, findLineBridgePids, isLineBridgeHealthy, paneExists, parseTmuxPaneList } from '../src/line-bridge-auto.js';
+import { chooseTmuxTarget, findLineBridgePids, getLineBridgeHealth, isLineBridgeHealthy, paneExists, parseTmuxPaneList } from '../src/line-bridge-auto.js';
 
 test('parseTmuxPaneList parses tab-separated tmux pane metadata', () => {
   const panes = parseTmuxPaneList('%0\t/repo\tzsh\t1\ts\t0\t0\n%1\t/tmp\tnode\t0\ts\t0\t1');
@@ -43,4 +43,13 @@ test('isLineBridgeHealthy checks the local health JSON', async () => {
   });
   assert.equal(await isLineBridgeHealthy(8787, okFetch), true);
   assert.equal(await isLineBridgeHealthy(8787, badFetch), false);
+});
+
+test('getLineBridgeHealth returns target so auto-start can reject stale panes', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({ service: 'line-bridge', tmuxTarget: '%2' }),
+  });
+
+  assert.deepEqual(await getLineBridgeHealth(8787, fetchImpl), { service: 'line-bridge', tmuxTarget: '%2' });
 });

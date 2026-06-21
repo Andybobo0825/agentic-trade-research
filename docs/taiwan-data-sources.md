@@ -6,7 +6,7 @@ This repo now exposes Taiwan stock research tools through free/open data first.
 
 | Provider | CLI coverage | Notes |
 | --- | --- | --- |
-| FinMind | `tw-price`, `tw-revenue`, `tw-financials`, `tw-institutional`, `tw-valuation`, `tw-news`, `tw-raw` | Free API works without token at a lower quota. Optional `FINMIND_API_TOKEN` can raise quota after registration. |
+| FinMind | `tw-price`, `tw-revenue`, `tw-financials`, `tw-institutional`, `tw-valuation`, `tw-news`, `chip-study`, `tw-raw` | Free API works without token at a lower quota. Optional `FINMIND_API_TOKEN` can raise quota after registration. `chip-study` uses `TaiwanStockInstitutionalInvestorsBuySell` plus `TaiwanStockHoldingSharesPer`; FinMind documents the holder-distribution dataset as backer/sponsor-only. |
 | TWSE OpenAPI | `tw-price`, `tw-company`, `tw-valuation`, `tw-announcements`, `tw-financials --provider twse`, `tw-raw` | Official listed-company/open-market snapshots. Mostly latest snapshots rather than historical ranges. |
 | TPEx OpenAPI | `tw-price`, `tw-company`, `tw-valuation`, `tw-announcements`, `tw-institutional --provider tpex`, `tw-financials --provider tpex`, `tw-raw` | Official OTC/emerging-market snapshots. |
 | MOPS-backed open data | `tw-announcements`, `tw-financials --provider twse|tpex` | MOPS company disclosures exposed through TWSE/TPEx OpenAPI datasets. |
@@ -23,6 +23,7 @@ node src/cli.js tw-revenue --ticker 2330 --start-date 2024-01-01 --format markdo
 node src/cli.js tw-financials --ticker 2330 --statement income --provider finmind --start-date 2024-01-01 --format markdown
 node src/cli.js tw-financials --ticker 2330 --statement income --provider twse --format markdown
 node src/cli.js tw-institutional --ticker 2330 --start-date 2024-01-01
+node src/cli.js chip-study --ticker 2330 --start-date 2026-01-01 --foreign-days 3 --holder-weeks 3 --min-holder-lots 1000 --format markdown
 node src/cli.js tw-valuation --ticker 2330 --provider auto --format markdown
 node src/cli.js tw-announcements --ticker 2330 --limit 5
 node src/cli.js tw-raw --provider finmind --dataset TaiwanStockDividend --ticker 2330 --start-date 2020-01-01

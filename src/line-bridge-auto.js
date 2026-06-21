@@ -39,15 +39,19 @@ export function findLineBridgePids(processListText, cwd = process.cwd()) {
     .filter(Boolean);
 }
 
-export async function isLineBridgeHealthy(port = 8787, fetchImpl = globalThis.fetch) {
+export async function getLineBridgeHealth(port = 8787, fetchImpl = globalThis.fetch) {
   try {
     const res = await fetchImpl(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1500) });
-    if (!res.ok) return false;
-    const json = await res.json().catch(() => null);
-    return json?.service === 'line-bridge';
+    if (!res.ok) return null;
+    return await res.json().catch(() => null);
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function isLineBridgeHealthy(port = 8787, fetchImpl = globalThis.fetch) {
+  const json = await getLineBridgeHealth(port, fetchImpl);
+  return json?.service === 'line-bridge';
 }
 
 function run(command, args, options = {}) {
@@ -65,6 +69,16 @@ function run(command, args, options = {}) {
   });
 }
 
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function killPids(pids) {
+  for (const pid of [...new Set(pids.filter(Boolean))]) {
+    await run('kill', [pid]).catch(() => undefined);
+  }
+}
+
 async function main() {
   loadDotEnv();
   const cwd = process.cwd();
@@ -77,7 +91,8 @@ async function main() {
   process.env.LINE_BRIDGE_TMUX_TARGET = target;
 
   const config = readLineBridgeConfig();
-  if (await isLineBridgeHealthy(config.port)) {
+  const health = await getLineBridgeHealth(config.port);
+  if (health?.service === 'line-bridge' && health.tmuxTarget === target) {
     console.log(STARTUP_MESSAGE);
     return;
   }
@@ -85,8 +100,8 @@ async function main() {
   const ps = await run('ps', ['-axo', 'pid=,command=']);
   const existingPids = findLineBridgePids(ps.stdout, cwd);
   if (existingPids.length > 0) {
-    console.log(STARTUP_MESSAGE);
-    return;
+    await killPids(existingPids);
+    await sleep(500);
   }
 
   const env = { ...process.env, LINE_BRIDGE_TMUX_TARGET: target };

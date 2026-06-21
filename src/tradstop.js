@@ -177,12 +177,19 @@ function summaryText(result) {
   ].join('\n');
 }
 
-export async function tradstop({ cwd = process.cwd() } = {}) {
+export function parseTradstopArgs(argv) {
+  return {
+    notify: argv.includes('--notify') && !argv.includes('--no-notify'),
+  };
+}
+
+export async function tradstop({ cwd = process.cwd(), argv = process.argv.slice(2) } = {}) {
   loadDotEnv();
+  const args = parseTradstopArgs(argv);
   const runtimeStatePath = tradeRuntimeStatePath(cwd);
   const runtimeState = readTradeRuntimeState(runtimeStatePath);
   const port = positiveInt(process.env.LINE_BRIDGE_PORT, 8787);
-  const notification = await notifyLineShutdown().catch((error) => ({ skipped: true, reason: error.message }));
+  const notification = args.notify ? await notifyLineShutdown().catch((error) => ({ skipped: true, reason: error.message })) : { skipped: true, reason: 'notify disabled; pass --notify to broadcast shutdown' };
   const lineBridge = await stopLineBridge(cwd, port);
   const cloudflared = await stopCloudflared({
     configPath: process.env.TRADE_LINE_TUNNEL_CONFIG || '~/.cloudflared/trade-line.yml',

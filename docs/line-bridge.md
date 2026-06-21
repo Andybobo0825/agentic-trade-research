@@ -61,7 +61,7 @@ Multiple manual allowed users can be comma-separated.
 
 ## tmux target setup
 
-Run `tradstart` from the OMX agent pane you want LINE to control. It uses that pane's `$TMUX_PANE` as `LINE_BRIDGE_TMUX_TARGET`, so you normally do not need to set the target manually.
+Run `tradestart` from the OMX agent pane you want LINE to control. It uses that pane's `$TMUX_PANE` as `LINE_BRIDGE_TMUX_TARGET`, so you normally do not need to set the target manually.
 
 If you must run startup outside tmux, set `LINE_BRIDGE_TMUX_TARGET` yourself. In the OMX agent pane, run:
 
@@ -82,18 +82,34 @@ npm run line:check
 One-command startup for the local LINE bridge plus the Cloudflare named tunnel:
 
 ```sh
-npm run tradstart
+npm run tradestart
 # or after npm link:
-tradstart
+tradestart
 ```
 
-`tradstart` first uses an existing live tmux pane in this repo as `LINE_BRIDGE_TMUX_TARGET`. If it is launched from a normal terminal and no usable pane exists, it creates tmux session `trade-line-codex`, starts `codex` in the repo, uses that pane as the bridge target, then cleans old Markdown response files, starts or restarts the repo-local LINE bridge, starts the Cloudflare tunnel in tmux session `trade-line-cloudflared`, checks local/public health, and sends a full startup summary back to LINE. Use `--no-notify` when you do not want the LINE push:
+`tradestart` first uses an existing live tmux pane in this repo as `LINE_BRIDGE_TMUX_TARGET`. If it is launched from a normal terminal and no usable pane exists, it creates tmux session `trade-line-codex`, starts Codex in the repo, uses that pane as the bridge target, then cleans expired runtime artifacts (LINE responses, OMX logs, old resume/session state, and smoke temp files), starts or restarts the repo-local LINE bridge, and starts the Cloudflare tunnel in tmux session `trade-line-cloudflared`.
+
+LINE investment prompts also inject a compact reference to [`docs/line-session-handoff.md`](line-session-handoff.md) by default, so newly created `trade-line-codex` sessions inherit the required market-data workflow without pasting the full handoff into the context window. The agent reads the handoff file from the repo when needed, then uses the connected APIs first, fetches Fugle quotes when current prices matter, and runs both `daily-decision-study` plus `signal-study` before entry advice. To avoid wasting tokens, the default handoff mode is `once`: the bridge sends this short file-reference only on the first prompt of a running bridge/agent session. Set `LINE_BRIDGE_HANDOFF_MODE=always` only when deliberately testing or starting every prompt in a fresh agent context.
 
 ```sh
-npm run tradstart -- --no-notify
+npm run tradestart
 ```
 
-Stop the LINE bridge and Cloudflare Tunnel. If `tradstart` created its own `trade-line-codex` or `trade-line-cloudflared` session/panes, `tradestop` removes those too:
+Startup/shutdown LINE broadcasts are disabled by default. Use `--notify` only when you explicitly want to push the service message to all authorized LINE users:
+
+```sh
+npm run tradestart -- --notify
+```
+
+The managed fallback `trade-line-codex` session is launched with non-interactive defaults so LINE jobs do not hang behind Codex approval prompts:
+
+```sh
+codex --ask-for-approval never --sandbox workspace-write
+```
+
+`tradestart` also injects `OMX_AUTO_UPDATE=0` and `CODEX_NON_INTERACTIVE=1` for the managed session, which prevents OMX launch-time update prompts and Codex installer/update prompts from blocking unattended LINE requests. Override `TRADE_LINE_AGENT_COMMAND`, `OMX_AUTO_UPDATE`, or `CODEX_NON_INTERACTIVE` only if you intentionally want different behavior.
+
+Stop the LINE bridge and Cloudflare Tunnel. If `tradestart` created its own `trade-line-codex` or `trade-line-cloudflared` session/panes, `tradestop` removes those too:
 
 ```sh
 npm run tradestop
@@ -173,7 +189,7 @@ For full LINE replies, the bridge injects a delivery contract into each forwarde
 
 If the response file is not produced, the bridge falls back to the OMX `agent-turn-complete` preview under `.omx/logs/turns-*.jsonl`. If no completion appears before `LINE_BRIDGE_COMPLETION_TIMEOUT_MS`, it returns a recent tmux pane capture as a last-resort diagnostic.
 
-## tradstart startup helper
+## tradestart startup helper
 
 Optional overrides:
 
@@ -182,6 +198,12 @@ TRADE_LINE_TUNNEL_CONFIG=~/.cloudflared/trade-line.yml
 TRADE_LINE_TUNNEL_NAME=trade-line
 TRADE_LINE_TUNNEL_SESSION=trade-line-cloudflared
 TRADE_LINE_TUNNEL_LOG=/tmp/trade-line-cloudflared.log
+TRADE_LINE_AGENT_SESSION=trade-line-codex
+# Leave empty for: codex --ask-for-approval never --sandbox workspace-write
+TRADE_LINE_AGENT_COMMAND=
+OMX_AUTO_UPDATE=0
+CODEX_NON_INTERACTIVE=1
+TRADE_LINE_ARTIFACT_RETENTION_DAYS=7
 TRADE_LINE_PUBLIC_HEALTH_URL=https://line.beautyrxstore.cc/health
 LINE_BRIDGE_WEBHOOK_URL=https://line.beautyrxstore.cc/line/webhook
 ```
@@ -194,7 +216,7 @@ LINE_CHANNEL_SECRET=
 LINE_BRIDGE_AUTO_AUTHORIZE_FRIENDS=true
 LINE_BRIDGE_AUTHORIZED_USER_IDS_FILE=.omx/line-bridge/authorized-users.json
 LINE_ALLOWED_USER_IDS=
-# Optional; tradstart normally fills this from $TMUX_PANE
+# Optional; tradestart normally fills this from $TMUX_PANE
 LINE_BRIDGE_TMUX_TARGET=
 LINE_BRIDGE_PORT=8787
 LINE_BRIDGE_PATH=/line/webhook
@@ -210,7 +232,17 @@ LINE_BRIDGE_RESPONSE_FILE_CONTRACT=true
 LINE_BRIDGE_RESPONSE_RETENTION_DAYS=7
 LINE_BRIDGE_RESPONSE_MAX_FILES=200
 LINE_BRIDGE_COMMAND_PREFIX=
+LINE_BRIDGE_HANDOFF_FILE=docs/line-session-handoff.md
+LINE_BRIDGE_HANDOFF=true
+LINE_BRIDGE_HANDOFF_MODE=once
+TRADE_LINE_AGENT_SESSION=trade-line-codex
+TRADE_LINE_AGENT_COMMAND=
+OMX_AUTO_UPDATE=0
+CODEX_NON_INTERACTIVE=1
+TRADE_LINE_ARTIFACT_RETENTION_DAYS=7
 ```
+
+`tradstart` remains available as a legacy alias for existing local scripts; prefer `tradestart` for new usage.
 
 ## Notes and limitations
 

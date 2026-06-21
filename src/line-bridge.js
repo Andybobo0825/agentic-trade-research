@@ -9,6 +9,13 @@ import { loadDotEnv } from './dotenv.js';
 export const STARTUP_MESSAGE = '投資小幫手已上線';
 
 const LINE_MAX_MESSAGE = 4900;
+const DEFAULT_HANDOFF_FILE = 'docs/line-session-handoff.md';
+const LINE_FLEX_TEXT_SIZES = {
+  body: 'md',
+  heading: 'lg',
+  tableHeader: 'sm',
+  tableCell: 'md',
+};
 
 export class BridgeConfigError extends Error {
   constructor(message) {
@@ -97,6 +104,11 @@ export class TmuxBridge {
   async capture(lines = 140) {
     const result = await runProcess('tmux', ['capture-pane', '-t', this.target, '-p', '-S', `-${lines}`]);
     return result.stdout.trim();
+  }
+
+  async isTargetAlive() {
+    await runProcess('tmux', ['display-message', '-p', '-t', this.target, '#{pane_id}']);
+    return true;
   }
 }
 
@@ -258,6 +270,9 @@ export function readLineBridgeConfig(env = process.env) {
     turnLogDir: env.LINE_BRIDGE_TURN_LOG_DIR || '.omx/logs',
     captureLines: positiveInt(env.LINE_BRIDGE_CAPTURE_LINES, 140),
     commandPrefix: env.LINE_BRIDGE_COMMAND_PREFIX || '',
+    handoffFile: env.LINE_BRIDGE_HANDOFF_FILE || DEFAULT_HANDOFF_FILE,
+    injectHandoff: env.LINE_BRIDGE_HANDOFF !== '0' && env.LINE_BRIDGE_HANDOFF !== 'false',
+    handoffMode: env.LINE_BRIDGE_HANDOFF_MODE || 'once',
     responseDir: env.LINE_BRIDGE_RESPONSE_DIR || '.omx/line-bridge/responses',
     injectResponseFileContract: env.LINE_BRIDGE_RESPONSE_FILE_CONTRACT !== '0' && env.LINE_BRIDGE_RESPONSE_FILE_CONTRACT !== 'false',
     responseRetentionDays: nonNegativeInt(env.LINE_BRIDGE_RESPONSE_RETENTION_DAYS, 7),
@@ -291,11 +306,19 @@ export class LineApi {
   }
 
   reply(replyToken, text) {
-    return this.call('/reply', { replyToken, messages: [{ type: 'text', text: clipLineText(text) }] });
+    return this.replyMessages(replyToken, [{ type: 'text', text: clipLineText(text) }]);
+  }
+
+  replyMessages(replyToken, messages) {
+    return this.call('/reply', { replyToken, messages });
   }
 
   push(to, text) {
-    return this.call('/push', { to, messages: [{ type: 'text', text: clipLineText(text) }] });
+    return this.pushMessages(to, [{ type: 'text', text: clipLineText(text) }]);
+  }
+
+  pushMessages(to, messages) {
+    return this.call('/push', { to, messages });
   }
 }
 
@@ -360,7 +383,22 @@ export function maskLineUserId(userId) {
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
-export function buildLinePrompt(text, commandPrefix = '', responseFilePath = '') {
+export function readLineHandoff(filePath = DEFAULT_HANDOFF_FILE) {
+  if (!filePath || !existsSync(filePath)) return '';
+  return readFileSync(filePath, 'utf8').trim();
+}
+
+export function buildLineHandoffReference(filePath = DEFAULT_HANDOFF_FILE) {
+  if (!filePath || !existsSync(filePath)) return '';
+  const absolutePath = resolve(filePath);
+  return [
+    '請先讀取 repo 內建 handoff 文件，再回答 LINE 使用者訊息。',
+    `handoff 文件路徑：${absolutePath}`,
+    '不要把 handoff 文件全文貼進 prompt；只在不影響分析品質的前提下，依文件規則操作並壓低 token 用量。',
+  ].join('\n');
+}
+
+export function buildLinePrompt(text, commandPrefix = '', responseFilePath = '', handoffText = '') {
   const parts = [];
   if (commandPrefix) parts.push(commandPrefix);
   if (responseFilePath) parts.push([
@@ -370,8 +408,111 @@ export function buildLinePrompt(text, commandPrefix = '', responseFilePath = '')
     '寫入檔案後，再正常回覆使用者同一份內容。',
     '[End LINE bridge delivery contract]',
   ].join('\n'));
+  if (handoffText) parts.push([
+    '[LINE session handoff]',
+    handoffText.trim(),
+    '[End LINE session handoff]',
+  ].join('\n'));
   parts.push(text.trim());
   return parts.join('\n\n');
+}
+
+
+function clipLineAltText(text) {
+  const value = String(text || 'LINE 回覆').replace(/\s+/g, ' ').trim() || 'LINE 回覆';
+  return value.length > 400 ? `${value.slice(0, 397)}...` : value;
+}
+
+function lineFlexText(text, options = {}) {
+  return {
+    type: 'text',
+    text: String(text || ' '),
+    wrap: true,
+    size: options.size || LINE_FLEX_TEXT_SIZES.body,
+    color: options.color || '#111827',
+    weight: options.weight,
+  };
+}
+
+function splitMarkdownTableRow(line) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+  return trimmed.slice(1, -1).split('|').map((cell) => cell.trim()).filter((cell) => cell.length > 0);
+}
+
+function isMarkdownTableSeparator(cells = []) {
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function tableToFlexBox(headers, rows) {
+  const contents = [];
+  for (const row of rows) {
+    const rowContents = row.map((cell, index) => ({
+      type: 'box',
+      layout: 'vertical',
+      flex: index === 0 ? 2 : 5,
+      contents: [
+        headers?.[index] ? lineFlexText(headers[index], { size: LINE_FLEX_TEXT_SIZES.tableHeader, color: '#6B7280', weight: 'bold' }) : undefined,
+        lineFlexText(cell, { size: LINE_FLEX_TEXT_SIZES.tableCell }),
+      ].filter(Boolean),
+    }));
+    contents.push({ type: 'box', layout: 'horizontal', spacing: 'sm', contents: rowContents });
+    contents.push({ type: 'separator', margin: 'sm' });
+  }
+  if (contents.at(-1)?.type === 'separator') contents.pop();
+  return { type: 'box', layout: 'vertical', spacing: 'sm', margin: 'md', contents };
+}
+
+function markdownChunkToFlexContents(chunk, altText) {
+  const lines = String(chunk || '').split(/\r?\n/);
+  const contents = [];
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    const cells = splitMarkdownTableRow(line);
+    const nextCells = splitMarkdownTableRow(lines[index + 1]);
+    if (cells && nextCells && isMarkdownTableSeparator(nextCells)) {
+      const rows = [];
+      index += 2;
+      while (index < lines.length) {
+        const row = splitMarkdownTableRow(lines[index]);
+        if (!row) break;
+        rows.push(row);
+        index += 1;
+      }
+      if (rows.length) contents.push(tableToFlexBox(cells, rows));
+      continue;
+    }
+
+    const trimmed = line.trim();
+    if (trimmed) {
+      const isHeading = /^#{1,6}\s+/.test(trimmed) || contents.length === 0;
+      contents.push(lineFlexText(trimmed.replace(/^#{1,6}\s+/, ''), {
+        weight: isHeading ? 'bold' : undefined,
+        size: isHeading ? LINE_FLEX_TEXT_SIZES.heading : LINE_FLEX_TEXT_SIZES.body,
+      }));
+    }
+    index += 1;
+  }
+
+  return contents.length ? contents.slice(0, 80) : [lineFlexText(altText)];
+}
+
+export function buildLineFlexMessages(text, { altText = 'LINE 回覆' } = {}) {
+  const safeAltText = clipLineAltText(altText);
+  return splitLineText(text, 3200).map((chunk) => ({
+    type: 'flex',
+    altText: safeAltText,
+    contents: {
+      type: 'bubble',
+      size: 'giga',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: markdownChunkToFlexContents(chunk, safeAltText),
+      },
+    },
+  }));
 }
 
 export function splitLineText(text, maxLen = LINE_MAX_MESSAGE) {
@@ -404,11 +545,37 @@ function ensureQueue(state) {
   return state.queue;
 }
 
+async function tmuxTargetHealth(tmux) {
+  if (!tmux || typeof tmux.isTargetAlive !== 'function') return { alive: true };
+  try {
+    return { alive: Boolean(await tmux.isTargetAlive()) };
+  } catch (error) {
+    return { alive: false, error };
+  }
+}
+
+function deadTmuxTargetMessage(config, error) {
+  const suffix = error?.message ? `：${error.message}` : '';
+  return `Bridge 執行失敗：tmux target ${config.tmuxTarget} 不存在或無法連線${suffix}。請重新執行 tradestart 以綁定新的 live pane。`;
+}
+
 export async function processLineQueue(context) {
   const { api, config, tmux, state, logger = console } = context;
   const waitForCompletionImpl = context.waitForCompletion || waitForCompletion;
   const queue = ensureQueue(state);
   if (state.busy) return { started: false, reason: 'busy' };
+
+  const health = await tmuxTargetHealth(tmux);
+  if (!health.alive) {
+    let processed = 0;
+    while (queue.length > 0) {
+      const job = queue.shift();
+      await sendLongLineMessage(api, job.message.to || job.message.userId, deadTmuxTargetMessage(config, health.error));
+      processed += 1;
+    }
+    logger.error?.(`[line-queue] tmux target dead target=${config.tmuxTarget} error=${health.error?.stack || health.error?.message || 'not alive'}`);
+    return { started: false, processed, reason: 'tmux-target-dead' };
+  }
 
   state.busy = true;
   let processed = 0;
@@ -420,7 +587,13 @@ export async function processLineQueue(context) {
       const responseFilePath = config.injectResponseFileContract ? createResponseFilePath(config, message) : '';
       logger.log?.(`[line-queue] start user=${maskLineUserId(message.userId)} remaining=${queue.length}`);
       try {
-        await tmux.sendPrompt(buildLinePrompt(text, config.commandPrefix, responseFilePath));
+        const handoffMode = config.handoffMode || 'once';
+        const shouldInjectHandoff = Boolean(config.injectHandoff)
+          && handoffMode !== 'never'
+          && (handoffMode === 'always' || !state.handoffInjected);
+        const handoffText = shouldInjectHandoff ? buildLineHandoffReference(config.handoffFile) : '';
+        await tmux.sendPrompt(buildLinePrompt(text, config.commandPrefix, responseFilePath, handoffText));
+        if (handoffText && handoffMode !== 'always') state.handoffInjected = true;
         const completion = await waitForCompletionImpl({
           logDir: config.turnLogDir,
           sinceMs: startedAtMs,
@@ -518,7 +691,13 @@ export async function handleLineMessage(message, context) {
   return { handled: true, prompt: true, queued: true, position };
 }
 
-async function sendLongLineMessage(api, to, text) {
+async function sendLongLineMessage(api, to, text, { altText = '完成摘要' } = {}) {
+  if (typeof api.pushMessages === 'function') {
+    for (const message of buildLineFlexMessages(text, { altText })) {
+      await api.pushMessages(to, [message]);
+    }
+    return;
+  }
   for (const chunk of splitLineText(text)) {
     await api.push(to, chunk);
   }
@@ -548,8 +727,17 @@ export function createLineWebhookServer({ api, config, tmux, logger = console } 
     try {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
       if (req.method === 'GET' && url.pathname === '/health') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, service: 'line-bridge', busy: state.busy, queued: state.queue.length, tmuxTarget: config.tmuxTarget }));
+        const health = await tmuxTargetHealth(tmux);
+        res.writeHead(health.alive ? 200 : 503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: health.alive,
+          service: 'line-bridge',
+          busy: state.busy,
+          queued: state.queue.length,
+          tmuxTarget: config.tmuxTarget,
+          tmuxTargetAlive: health.alive,
+          error: health.alive ? undefined : health.error?.message,
+        }));
         return;
       }
       if (req.method !== 'POST' || url.pathname !== config.path) {

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { openSync } from 'node:fs';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { loadDotEnv } from './dotenv.js';
 import { cleanupResponseFiles, LineApi, readLineBridgeConfig, STARTUP_MESSAGE } from './line-bridge.js';
 import { chooseTmuxTarget, findLineBridgePids, paneExists, parseTmuxPaneList } from './line-bridge-auto.js';
@@ -25,8 +25,26 @@ export function cloudflaredCommand({ cwd, configPath, tunnelName, logPath }) {
   ].join(' && ');
 }
 
-export function codexAgentCommand({ cwd, command = process.env.TRADE_LINE_AGENT_COMMAND || 'codex' }) {
-  return [`cd ${shQuote(cwd)}`, `exec ${command}`].join(' && ');
+function defaultAgentCommand(env = process.env) {
+  return env.TRADE_LINE_AGENT_COMMAND || 'codex --ask-for-approval never --sandbox workspace-write';
+}
+
+function agentStartupEnv(env = process.env) {
+  return {
+    OMX_AUTO_UPDATE: env.OMX_AUTO_UPDATE || '0',
+    CODEX_NON_INTERACTIVE: env.CODEX_NON_INTERACTIVE || '1',
+  };
+}
+
+function envPrefix(env) {
+  return Object.entries(env)
+    .map(([key, value]) => `${key}=${shQuote(value)}`)
+    .join(' ');
+}
+
+export function codexAgentCommand({ cwd, command, env = process.env } = {}) {
+  const agentCommand = command || defaultAgentCommand(env);
+  return [`cd ${shQuote(cwd)}`, `exec env ${envPrefix(agentStartupEnv(env))} ${agentCommand}`].join(' && ');
 }
 
 export function findCloudflaredPids(processListText, configPath, tunnelName) {
@@ -41,6 +59,11 @@ export function findCloudflaredPids(processListText, configPath, tunnelName) {
 
 export function resolveBridgeTargetEnv({ env = process.env, discoveredTarget = '' } = {}) {
   return discoveredTarget || env.TMUX_PANE || env.OMX_TARGET_PANE || env.LINE_BRIDGE_TMUX_TARGET || '';
+}
+
+export function resolveLineBridgeHandoffEnv({ agent = {}, env = process.env } = {}) {
+  if (env.LINE_BRIDGE_HANDOFF !== undefined && env.LINE_BRIDGE_HANDOFF !== '') return env.LINE_BRIDGE_HANDOFF;
+  return agent.created ? '1' : '0';
 }
 
 function positiveInt(value, fallback) {
@@ -90,18 +113,54 @@ async function listAllTmuxPanes() {
   return parseTmuxPaneList(panesText.stdout);
 }
 
+export async function waitForManagedAgentTarget(cwd, {
+  initialPaneIds = [],
+  attempts = positiveInt(process.env.TRADE_LINE_AGENT_TARGET_WAIT_ATTEMPTS, 20),
+  intervalMs = positiveInt(process.env.TRADE_LINE_AGENT_TARGET_WAIT_MS, 500),
+  currentPane = process.env.TMUX_PANE,
+  listAllPanes = listAllTmuxPanes,
+  sleepFn = sleep,
+} = {}) {
+  let fallbackTarget = initialPaneIds[0] || '';
+  let fallbackPaneIds = initialPaneIds;
+  const initial = new Set(initialPaneIds);
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const panes = await listAllPanes();
+    const repoPaneIds = panes
+      .filter((pane) => {
+        try {
+          return pane.currentPath && resolve(pane.currentPath) === resolve(cwd);
+        } catch {
+          return false;
+        }
+      })
+      .map((pane) => pane.paneId);
+    const target = chooseTmuxTarget(panes, cwd, currentPane);
+    if (target) {
+      fallbackTarget = target;
+      fallbackPaneIds = repoPaneIds.length ? repoPaneIds : [target];
+      if (!initial.has(target)) return { target, paneIds: fallbackPaneIds };
+    }
+    if (attempt < attempts - 1) await sleepFn(intervalMs);
+  }
+
+  return { target: fallbackTarget, paneIds: fallbackPaneIds };
+}
+
 async function ensureCodexAgentSession(cwd) {
   const sessionName = process.env.TRADE_LINE_AGENT_SESSION || 'trade-line-codex';
   const command = codexAgentCommand({ cwd });
   const sessionExists = await commandOk('tmux', ['has-session', '-t', sessionName]);
   if (!sessionExists) {
     await run('tmux', ['new-session', '-d', '-s', sessionName, command]);
-    await sleep(1200);
   }
-  const paneIds = await listTmuxPaneIds(sessionName);
-  const target = paneIds[0] || '';
+  await sleep(1200);
+  const initialPaneIds = await listTmuxPaneIds(sessionName);
+  const resolved = await waitForManagedAgentTarget(cwd, { initialPaneIds });
+  const target = resolved.target || '';
   if (!target) throw new Error(`Could not create or find tmux pane for Codex agent session: ${sessionName}`);
-  return { target, agent: { created: !sessionExists, sessionName, paneIds, command } };
+  return { target, agent: { created: !sessionExists, sessionName, paneIds: resolved.paneIds || initialPaneIds, command } };
 }
 
 async function chooseOrCreateTarget(cwd) {
@@ -138,6 +197,157 @@ async function killPids(pids) {
     await run('kill', [pid]).catch(() => undefined);
   }
   return unique;
+}
+
+function latestMtimeMs(path) {
+  const stat = statSync(path);
+  if (!stat.isDirectory()) return stat.mtimeMs;
+  const childTimes = readdirSync(path).map((name) => latestMtimeMs(join(path, name)));
+  return childTimes.length ? Math.max(...childTimes) : stat.mtimeMs;
+}
+
+function cleanupByAge({ dir, include, retentionDays, now = Date.now(), maxFiles = 0, recursive = false }) {
+  if (!dir || !existsSync(dir)) return { deleted: 0, kept: 0 };
+  const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+  const entries = readdirSync(dir)
+    .filter((name) => !include || include(name))
+    .map((name) => {
+      const path = join(dir, name);
+      return { name, path, mtimeMs: latestMtimeMs(path) };
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  const toDelete = new Set();
+  if (retentionDays > 0) {
+    for (const entry of entries) {
+      if (now - entry.mtimeMs > retentionMs) toDelete.add(entry.path);
+    }
+  }
+  if (maxFiles > 0) {
+    for (const entry of entries.slice(maxFiles)) toDelete.add(entry.path);
+  }
+
+  for (const path of toDelete) rmSync(path, { recursive, force: true });
+  return { deleted: toDelete.size, kept: entries.length - toDelete.size };
+}
+
+function rolloutTimeMs(name) {
+  const match = String(name).match(/^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second] = match;
+  const parsed = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function pruneEmptyDirs(dir, stopDir) {
+  if (!dir || dir === stopDir || !existsSync(dir)) return 0;
+  let removed = 0;
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) removed += pruneEmptyDirs(path, stopDir);
+  }
+  if (dir !== stopDir && readdirSync(dir).length === 0) {
+    rmSync(dir, { recursive: true, force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
+function sessionOpenedInCwd(path, cwd) {
+  if (!cwd) return false;
+  const targetCwd = resolve(cwd);
+  try {
+    const lines = readFileSync(path, 'utf8').split(/\r?\n/, 50);
+    for (const line of lines) {
+      if (!line.includes('"turn_context"') || !line.includes('"cwd"')) continue;
+      const entry = JSON.parse(line);
+      const sessionCwd = entry?.payload?.cwd;
+      if (sessionCwd && resolve(sessionCwd) === targetCwd) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function cleanupCodexResumeSessions({ cwd, codexHomeDir = process.env.CODEX_HOME || join(homedir(), '.codex'), retentionDays, now = Date.now() } = {}) {
+  const sessionsDir = resolve(codexHomeDir, 'sessions');
+  if (!sessionsDir || !existsSync(sessionsDir) || retentionDays <= 0) return { deleted: 0, kept: 0, prunedDirs: 0, dir: sessionsDir };
+  const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+  let deleted = 0;
+  let kept = 0;
+
+  function visit(dir) {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      const stat = statSync(path);
+      if (stat.isDirectory()) {
+        visit(path);
+        continue;
+      }
+      if (!/^rollout-.*\.jsonl$/.test(name)) continue;
+      const startedAt = rolloutTimeMs(name) ?? stat.mtimeMs;
+      if (now - startedAt > retentionMs && sessionOpenedInCwd(path, cwd)) {
+        rmSync(path, { force: true });
+        deleted += 1;
+      } else {
+        kept += 1;
+      }
+    }
+  }
+
+  visit(sessionsDir);
+  const prunedDirs = pruneEmptyDirs(sessionsDir, sessionsDir);
+  return { deleted, kept, prunedDirs, dir: sessionsDir };
+}
+
+export function cleanupStartupArtifacts({
+  cwd = process.cwd(),
+  tmpDir = tmpdir(),
+  codexHomeDir = process.env.CODEX_HOME || join(homedir(), '.codex'),
+  retentionDays = 7,
+  responseDir = '.omx/line-bridge/responses',
+  responseMaxFiles = 200,
+  logDir = '.omx/logs',
+  now = Date.now(),
+} = {}) {
+  const resolvedResponseDir = resolve(cwd, responseDir);
+  const resolvedLogDir = resolve(cwd, logDir);
+  const sessionsDir = resolve(cwd, '.omx/state/sessions');
+  const responses = cleanupResponseFiles({
+    responseDir: resolvedResponseDir,
+    responseRetentionDays: retentionDays,
+    responseMaxFiles,
+  }, now);
+  const logs = cleanupByAge({
+    dir: resolvedLogDir,
+    include: (name) => /\.(jsonl|log)$/.test(name),
+    retentionDays,
+    now,
+  });
+  const sessions = cleanupByAge({
+    dir: sessionsDir,
+    include: () => true,
+    retentionDays,
+    now,
+    recursive: true,
+  });
+  const codexSessions = cleanupCodexResumeSessions({
+    cwd,
+    codexHomeDir,
+    retentionDays,
+    now,
+  });
+  const tmp = cleanupByAge({
+    dir: tmpDir,
+    include: (name) => /^trade-smoke-/.test(name) || /^trade-api-smoke-.*\.log$/.test(name) || /^trade-line-bridge-smoke-.*\.log$/.test(name),
+    retentionDays,
+    now,
+    recursive: true,
+  });
+  const deleted = responses.deleted + logs.deleted + sessions.deleted + codexSessions.deleted + tmp.deleted;
+  const kept = responses.kept + logs.kept + sessions.kept + codexSessions.kept + tmp.kept;
+  return { deleted, kept, responses, logs, sessions, codexSessions, tmp };
 }
 
 async function lineBridgeProcessPids(cwd, port, { includePortListeners = false } = {}) {
@@ -213,10 +423,14 @@ async function notifyLine(config, text) {
   return { skipped: false, sent };
 }
 
-function parseArgs(argv) {
+export function parseTradstartArgs(argv) {
   return {
-    notify: !argv.includes('--no-notify'),
+    notify: argv.includes('--notify') && !argv.includes('--no-notify'),
   };
+}
+
+function parseArgs(argv) {
+  return parseTradstartArgs(argv);
 }
 
 function sleep(ms) {
@@ -228,8 +442,16 @@ export async function tradstart({ cwd = process.cwd(), argv = process.argv.slice
   const args = parseArgs(argv);
   const { target, agent } = await chooseOrCreateTarget(cwd);
   process.env.LINE_BRIDGE_TMUX_TARGET = target;
+  process.env.LINE_BRIDGE_HANDOFF = resolveLineBridgeHandoffEnv({ agent, env: process.env });
   const config = readLineBridgeConfig();
-  const cleanup = cleanupResponseFiles(config);
+  const retentionDays = positiveInt(process.env.TRADE_LINE_ARTIFACT_RETENTION_DAYS, config.responseRetentionDays || 7);
+  const cleanup = cleanupStartupArtifacts({
+    cwd,
+    retentionDays,
+    responseDir: config.responseDir,
+    responseMaxFiles: config.responseMaxFiles,
+    logDir: config.turnLogDir,
+  });
   const lineBridge = await ensureLineBridge(cwd, config);
   const cloudflared = await ensureCloudflared(cwd, {
     configPath: process.env.TRADE_LINE_TUNNEL_CONFIG || '~/.cloudflared/trade-line.yml',
@@ -250,7 +472,7 @@ export async function tradstart({ cwd = process.cwd(), argv = process.argv.slice
     cloudflared: { pids: cloudflared.pids || [], sessionName: cloudflared.sessionName, paneIds: cloudflared.paneIds || [] },
   });
   const text = summaryText(result);
-  const notification = args.notify ? await notifyLine(config, text).catch((error) => ({ skipped: true, reason: error.message })) : { skipped: true, reason: '--no-notify' };
+  const notification = args.notify ? await notifyLine(config, text).catch((error) => ({ skipped: true, reason: error.message })) : { skipped: true, reason: 'notify disabled; pass --notify to broadcast startup' };
   return { ...result, notification, runtimeStatePath, text };
 }
 

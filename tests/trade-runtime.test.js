@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { filterKillablePaneIds, notifyLineShutdown, resolveManagedAgentSessionName, SHUTDOWN_MESSAGE } from '../src/tradstop.js';
+import { filterKillablePaneIds, notifyLineShutdown, parseTradstopArgs, resolveManagedAgentSessionName, SHUTDOWN_MESSAGE } from '../src/tradstop.js';
 import { readTradeRuntimeState, removeTradeRuntimeState, tradeRuntimeStatePath, writeTradeRuntimeState } from '../src/trade-runtime.js';
 
 test('runtime state helpers write, read, and remove owned tmux pane metadata', () => {
@@ -45,4 +45,11 @@ test('notifyLineShutdown pushes service closed message before shutdown', async (
   assert.deepEqual(calls.map((call) => call.body.to), ['U1', 'U2']);
   assert.deepEqual(calls.map((call) => call.body.messages[0].text), [SHUTDOWN_MESSAGE, SHUTDOWN_MESSAGE]);
   assert.equal(calls[0].options.headers.authorization, 'Bearer token');
+});
+
+
+test('tradstop notifications are opt-in only', () => {
+  assert.deepEqual(parseTradstopArgs([]), { notify: false });
+  assert.deepEqual(parseTradstopArgs(['--notify']), { notify: true });
+  assert.deepEqual(parseTradstopArgs(['--no-notify']), { notify: false });
 });

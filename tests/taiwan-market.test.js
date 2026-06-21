@@ -112,6 +112,28 @@ test('Fugle quote, candles, and snapshot build documented endpoint paths', async
   }
 });
 
+
+
+test('fetch failures include provider and URL context without leaking secrets', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => {
+      throw new TypeError('fetch failed');
+    };
+    await assert.rejects(
+      () => fugleMarketData('/intraday/quote/2330', {}, { baseUrl: 'https://fugle.test/stock', apiKey: 'secret' }),
+      (error) => {
+        assert.match(error.message, /fugle request failed before response/);
+        assert.match(error.message, /\/intraday\/quote\/2330/);
+        assert.doesNotMatch(error.message, /secret/);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('fugle-quote markdown renders realtime quote fields', () => {
   const out = renderToolResult('fugle-quote', { data: { date: '2026-05-26', symbol: '2330', name: '台積電', lastPrice: 2310, change: 55, changePercent: 2.44, openPrice: 2275, highPrice: 2310, lowPrice: 2275, total: { tradeVolume: 28250 } } }, 'markdown');
   assert.match(out, /\| Date \| Code \| Name \| Last \| Change \| Change % \|/);

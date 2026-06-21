@@ -13,17 +13,6 @@
 
 目前 repo 的標準流程來源是 [`docs/standard-workflow-v1.md`](docs/standard-workflow-v1.md)。若舊對話、舊 backtest、舊策略名稱與該文件衝突，以 Standard Workflow 1.0 為準。
 
-標準版只保留：
-
-- MVP：`R18H6_VOL_exit_only`
-- 台股資料：Shioaji primary，其他來源只作 fallback
-- 股癌題材：官方 RSS -> whatmkreallysaid -> 本機 worker -> S3 manifest
-- LINE bridge：response-file contract first；新 session 才讀 handoff
-
-- 架構流程圖 source：[`docs/diagrams/standard-workflow-v1.drawio`](docs/diagrams/standard-workflow-v1.drawio)
-- 架構流程圖 SVG：[`docs/diagrams/standard-workflow-v1.svg`](docs/diagrams/standard-workflow-v1.svg)
-
-![Trade Repo Standard Workflow 1.0 Architecture](docs/diagrams/standard-workflow-v1.svg)
 
 ## 作品集版架構總覽：Repo-native Agent Harness
 

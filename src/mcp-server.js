@@ -3,6 +3,7 @@ import { loadDotEnv } from './dotenv.js';
 loadDotEnv();
 import readline from 'node:readline';
 import { renderToolResult, runTool, tools } from './tools.js';
+import { TAIWAN_AGENT_TEAM_INPUT_SCHEMA } from './taiwan-agent-team.js';
 
 const serverInfo = { name: 'codex-finance-tools', version: '0.1.0' };
 
@@ -123,6 +124,41 @@ function toolSchema(name, tool) {
       chunkSize: { type: 'number' },
       limit: { type: 'number' },
     };
+  } else if (name === 'preopen-brief') {
+    base.inputSchema.properties = {
+      date: { type: 'string' },
+      updateTime: { type: 'string' },
+      month: { type: 'number' },
+      watchlist: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      fxPreviousClose: { type: 'number' },
+      fxCurrent: { type: 'number' },
+      futureClose: { type: 'number' },
+      futureChange: { type: 'number' },
+      futureVolume: { type: 'number' },
+      previousSpotClose: { type: 'number' },
+      usMoves: { oneOf: [{ type: 'string' }, { type: 'object' }] },
+      branchData: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'object' } }] },
+      branchFile: { type: 'string' },
+      auctionData: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'object' } }] },
+      auctionFile: { type: 'string' },
+      auctionThresholdPct: { type: 'number' },
+      noFetch: { type: 'boolean' },
+      spotFrom: { type: 'string' },
+    };
+  } else if (name === 'xiaoyu-etf') {
+    base.inputSchema.properties = {
+      mode: { type: 'string', enum: ['stock', 'etf', 'rank', 'overview'] },
+      ticker: { type: 'string' },
+      etf: { type: 'string' },
+      scope: { type: 'string', enum: ['active', 'market'] },
+      window: { type: 'string', enum: ['d1', 'd5', 'd10', 'd20', 'd60'] },
+      direction: { type: 'string', enum: ['buy', 'sell'] },
+      limit: { type: 'number' },
+      includeDetail: { type: 'boolean' },
+      baseUrl: { type: 'string' },
+    };
+  } else if (name === 'taiwan-agent-team') {
+    base.inputSchema.properties = TAIWAN_AGENT_TEAM_INPUT_SCHEMA;
   } else if (name.startsWith('tw-')) {
     base.inputSchema.properties = {
       ticker: { type: 'string' },

@@ -4,6 +4,23 @@
 
 目前 `.env` 若已填好，CLI 會自動載入；不要把 `.env` commit 到 git。
 
+
+## 台股 Dexter-style Agent Team
+
+整合既有 Shioaji、盤前流程、MVP 回測、小宇 ETF lens 與 repo artifacts：
+
+```bash
+node src/cli.js taiwan-agent-team --query "盤前+回測+推測" --tickers 2330,00981A,00991A --capital 500000 --format markdown
+```
+
+離線只看既有 artifacts：
+
+```bash
+node src/cli.js taiwan-agent-team --query "整合既有資料" --offline --format markdown
+```
+
+輸出會寫入 `.omx/agent-team/scratchpad/` 與 `.omx/agent-team/reports/`，不會覆蓋既有台股 workflow。
+
 ## 最基本用法
 
 ```sh

@@ -1,4 +1,29 @@
-const DEFAULT_EXCLUDED_INDUSTRIES = new Set(['17']); // finance/insurance: usually liquid but not short-term theme heat.
+export const TAIWAN_INDUSTRY_CODES = Object.freeze({
+  '17': '金融保險',
+  '28': '電子零組件',
+});
+
+export const PROTECTED_TRADABLE_INDUSTRIES = new Map([
+  ['28', '電子零組件'],
+]);
+
+export const DEFAULT_EXCLUDED_INDUSTRIES = new Set(['17']); // finance/insurance: usually liquid but not short-term theme heat.
+
+export function normalizeTaiwanIndustryCode(value) {
+  return String(value ?? '').padStart(2, '0');
+}
+
+function normalizeIndustrySet(value) {
+  return new Set([...value].map(normalizeTaiwanIndustryCode));
+}
+
+function assertNoProtectedIndustryExclusions(excludedIndustries) {
+  for (const [code, label] of PROTECTED_TRADABLE_INDUSTRIES) {
+    if (excludedIndustries.has(code)) {
+      throw new Error(`Protected Taiwan industry code ${code} (${label}) must not be excluded from hot-stock screening.`);
+    }
+  }
+}
 
 function number(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
@@ -15,8 +40,9 @@ export function hotStockScore({ row = {}, ind = {} } = {}) {
 }
 
 export function isHotStockCandidate({ meta = {}, row = {}, ind = {} } = {}, options = {}) {
-  const excludedIndustries = options.excludedIndustries ?? DEFAULT_EXCLUDED_INDUSTRIES;
-  const industry = String(meta.industry ?? '').padStart(2, '0');
+  const excludedIndustries = normalizeIndustrySet(options.excludedIndustries ?? DEFAULT_EXCLUDED_INDUSTRIES);
+  assertNoProtectedIndustryExclusions(excludedIndustries);
+  const industry = normalizeTaiwanIndustryCode(meta.industry);
   if (excludedIndustries.has(industry)) {
     return { allowed: false, reason: 'excluded-industry', score: 0 };
   }

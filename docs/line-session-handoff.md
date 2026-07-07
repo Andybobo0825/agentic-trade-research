@@ -41,6 +41,15 @@ node src/cli.js daily-decision-study --ticker <TICKER> --market tw --period 20 -
 node src/cli.js signal-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
 ```
 
+Add the ETF holding lens when the question involves ETF, 投信/主動式 ETF, or whether institutions/ETFs are adding a stock:
+
+```sh
+node src/cli.js xiaoyu-etf --mode stock --ticker <TICKER> --format markdown
+node src/cli.js xiaoyu-etf --mode etf --etf <ETF_CODE> --format markdown
+```
+
+Treat `xiaoyu-etf` as auxiliary ETF-holding / inferred ETF-flow evidence only. It does not replace Shioaji price/volume and is not official 投信買賣超.
+
 Also fetch the latest quote when today's price/action matters:
 
 ```sh
@@ -61,9 +70,10 @@ Use this answer structure for LINE:
 
 1. **今日資料摘要** — latest quote/date, change %, intraday high/low when available.
 2. **兩個 study 結論** — `daily-decision-study` and `signal-study`; separate direct tool output from inference.
-3. **進場判斷** — can enter / wait / avoid chasing; include conditions.
-4. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
-5. **限制** — market-data timing, insufficient rows, or ETF-newness caveats.
+3. **ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
+4. **進場判斷** — can enter / wait / avoid chasing; include conditions.
+5. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
+6. **限制** — market-data timing, insufficient rows, ETF-newness caveats, or auxiliary-source caveats.
 
 Preferred wording:
 

@@ -1,22 +1,32 @@
 # Agentic Trade Research
 
-這是一套把 FIFO 任務佇列、tmux runtime adapter 與財經 MCP/CLI 工具串成一條本機 agent workflow 的研究 harness。
+這是一套把 LINE 指令入口、授權白名單、FIFO 任務佇列、tmux runtime adapter 與財經 MCP/CLI 工具串成一條本機 agent workflow 的研究 harness。
 
 重點：
 
 - **Codex 負責分析與推理**：使用你現有的 Codex / ChatGPT 額度。
 - **本 repo 負責 agent harness 與資料工具**：把 LINE webhook、授權、排程、tmux runtime adapter、MCP/CLI 金融資料工具與 LINE Flex Message 回覆交付串成可運作的本機 agent workflow。
 - **低 token evidence pipeline**：MCP 預設 `compact-json`，並提供 `research-pack`、`outputFields`、`maxRows`，讓 agent 讀到精簡但可追溯的資料輸出。
+- **Repo-native dynamic memory**：`memory-sync` 會把可長期保存的決策、驗證修復、失誤復盤與里程碑分層寫入 `.omx/memory/hot.md`、`warm.md`、`archive.md`、`obsolete.md`，避免每次 session 載入過期脈絡。
 
+
+## Standard Workflow 1.01
+
+目前 repo 的標準流程來源是 [`docs/standard-workflow-v1.md`](docs/standard-workflow-v1.md)。若舊對話、舊 backtest、舊策略名稱與該文件衝突，以 Standard Workflow 1.01 為準。
+
+標準版只保留：
+
+- MVP：`R18H6_VOL_exit_only_WR3`
+- WR3：買進當天若最高價達買價 +2%，但收盤未站回買價，視為假突破並以 +2% 目標價先收小利。
+- 台股資料：Shioaji primary，其他來源只作 fallback
+- ETF 籌碼：`xiaoyu-etf` 只作 ETF 持股 / 主動式 ETF 推估買賣輔助，不取代 Shioaji 價量
+- 股癌題材：whatmkreallysaid 完整逐字稿優先；只有明確要求最新資訊才走 SoundOn RSS -> 本機 worker -> S3 manifest
+- LINE bridge：response-file contract first；新 session 才讀 handoff
 
 - 架構流程圖 source：[`docs/diagrams/standard-workflow-v1.drawio`](docs/diagrams/standard-workflow-v1.drawio)
 - 架構流程圖 SVG：[`docs/diagrams/standard-workflow-v1.svg`](docs/diagrams/standard-workflow-v1.svg)
 
-![Trade Repo Standard Workflow 1.0 Architecture](docs/diagrams/standard-workflow-v1.svg)
-## Standard Workflow 1.0
-
-目前 repo 的標準流程來源是 [`docs/standard-workflow-v1.md`](docs/standard-workflow-v1.md)。若舊對話、舊 backtest、舊策略名稱與該文件衝突，以 Standard Workflow 1.0 為準。
-
+![Trade Repo Standard Workflow 1.01 Architecture](docs/diagrams/standard-workflow-v1.svg)
 
 ## 作品集版架構總覽：Repo-native Agent Harness
 
@@ -32,6 +42,11 @@
 6. **Finance Data Tool Agent** 以 MCP/CLI 方式提供美股、台股、新聞、公告、財報、估值等低 token evidence。
 7. **Response Dispatcher Agent** 讀取 response-file contract 或 fallback turn log，將結果轉成 LINE Flex Message 後 push 回原 LINE 使用者，避免 Markdown 表格在手機訊息框跑版。
 8. **Ops Supervisor** 負責 `tradestart` / `tradestop`，管理 bridge process、Cloudflare tunnel、tmux target 與 runtime state。
+
+架構圖 PNG：[`docs/diagrams/trade-line-bridge-workflow.png`](docs/diagrams/trade-line-bridge-workflow.png)  
+架構圖 source：[`docs/diagrams/trade-line-bridge-workflow.drawio`](docs/diagrams/trade-line-bridge-workflow.drawio)
+
+![Agentic Trade Research Repo Harness](docs/diagrams/trade-line-bridge-workflow.png)
 
 ### Repo 內的 agent / harness modules
 
@@ -60,11 +75,125 @@
 ### Harness 工程亮點
 
 - **LINE → runtime 的可靠交付**：`src/line-bridge.js` 驗簽、授權、排隊、注入 response-file contract，避免 LINE push 回覆被截斷或混線。
+- **LINE 友善排版**：完成回覆會以 Flex Message bubble 推送；Markdown 表格會拆成 Flex row，降低中文欄位在 LINE 訊息框跑版的機率。
 - **多使用者短期佇列化**：global FIFO queue 讓多位使用者同時送 prompt 時會排隊，不會直接拒絕或遺失訊息。
 - **可重啟的 ops harness**：`src/tradstart.js` / `src/tradstop.js` 管理 tmux target、bridge process、Cloudflare tunnel 與 runtime state；`tradestart` 啟動前會清理過期 LINE responses、OMX logs、舊 resume/session state 與 smoke temp；啟動/關閉預設不廣播通知所有 LINE 使用者，需要時加 `--notify` 明確 opt-in。
 - **低 token MCP 工具層**：`src/mcp-server.js` 預設 `compact-json`，支援 `outputFields` / `maxRows` / `research-pack`，把「壓縮輸出」和「保留資料覆蓋」分開。
 - **驗證導向**：`tests/*.test.js` 覆蓋 CLI、MCP、LINE bridge、授權、queue、tmux target 選擇與 runtime state。
 
+## 設定 `.env`
+
+```env
+# 美股 / Financial Datasets 指令需要
+FINANCIAL_DATASETS_API_KEY=your-key
+FINANCIAL_DATASETS_BASE_URL=https://api.financialdatasets.ai
+
+# FinMind 台股資料，可選；沒填也能用較低免費額度
+FINMIND_API_TOKEN=your-token
+FINMIND_BASE_URL=https://api.finmindtrade.com
+
+# TWSE / TPEx 官方 OpenAPI base URL，可選，通常不用改
+TWSE_OPENAPI_BASE_URL=https://openapi.twse.com.tw/v1
+TPEX_OPENAPI_BASE_URL=https://www.tpex.org.tw/openapi/v1
+
+# Fugle 台股即時 / 盤中資料需要
+FUGLE_API_KEY=your-fugle-key
+FUGLE_MARKETDATA_BASE_URL=https://api.fugle.tw/marketdata/v1.0/stock
+
+# 永豐 Shioaji 只讀行情工具需要先啟動本機 Shioaji server
+SJ_API_KEY=
+SJ_SEC_KEY=
+SJ_CA_PATH=
+SJ_CA_PASSWD=
+SJ_PERSON_ID=
+SHIOAJI_SERVER_BASE_URL=http://localhost:8080
+SHIOAJI_SIMULATION=true
+# 下單路徑預設關閉；只讀行情工具不需要開啟
+TRADE_ORDER_ENABLED=0
+TRADE_ORDER_CONFIRM=
+```
+
+## 怎麼搭配 Codex 使用？
+
+你可以叫 Codex 先跑 CLI 抓資料，再用回傳資料做分析。
+
+範例：
+
+> 使用這個 repo 的 CLI 工具研究 2330。請抓公司資料、近期股價、月營收、財報、估值與重大公告，然後用繁體中文寫一份 evidence-first 投資 memo，並清楚分開「資料直接顯示」與「推論」。
+
+台股 HMA 趨勢訊號範例：
+
+```sh
+node src/cli.js hma-signal --ticker 2330 --market tw --source finmind --period 20 --start-date 2026-01-01 --format markdown
+```
+
+`hma-signal` 依照 Pine `Hull MA` 公式計算：`WMA(2*WMA(close, floor(n/2))-WMA(close,n), floor(sqrt(n)))`，並輸出趨勢、買進/賣出觀察建議、最近 HMA 數值與技術訊號免責說明。
+
+永豐 Shioaji 只讀行情範例：
+
+```sh
+# 先在另一個 terminal 啟動本機 Shioaji HTTP/SSE server
+npm run shioaji:server
+
+# 即時快照：成交價、委買/委賣、成交量、漲跌/漲停狀態
+npm run shioaji:quote -- --ticker 2330 --format markdown
+
+# 五檔委買委賣：透過 Shioaji BidAsk SSE 讀取一筆即時事件
+npm run shioaji:orderbook -- --ticker 2330 --timeout-ms 3000 --format markdown
+
+# 最近 tick：預設 LastCount，可用 --last 指定筆數
+npm run shioaji:ticks -- --ticker 2330 --date 2026-06-18 --last 10 --format markdown
+```
+
+Shioaji 工具只接官方 server 的行情端點：`/api/v1/data/snapshots`、`/api/v1/data/ticks`、`/api/v1/stream/subscribe` + `/api/v1/stream/data/bidask_stk`。本 repo 另外提供 `src/order-guard.js`，未來若新增下單路徑，必須同時設定 `TRADE_ORDER_ENABLED=1` 與 `TRADE_ORDER_CONFIRM=I_UNDERSTAND_LIVE_ORDER_RISK` 才能通過 guard；目前新增工具皆為 `readOnly: true`，不會送單。
+
+LINE/trad session handoff：[`docs/line-session-handoff.md`](docs/line-session-handoff.md) 是新 LINE session 的交接 runbook；LINE bridge 預設只在同一個 bridge/agent session 的第一個一般 prompt 注入一次「讀檔 reference」，讓 agent 從 repo 讀取 handoff，而不是把整份文件塞進 context window。它要求 agent 先用已接好的 API、必要時抓 Fugle 即時報價，並在給進場建議前跑 `daily-decision-study` 與 `signal-study`，同時降低每次啟動服務的 token 消耗。
+
+台股近期訊號研究範例：
+
+```sh
+node src/cli.js signal-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
+```
+
+`signal-study` 把 HMA 訊號、成交量確認、**流動性確認**、法人確認、買訊後 3/5/10 日表現、假突破次數、最近一次訊號可信度，以及「追 / 等回測 / 避開」建議包成同一份 CLI/MCP 輸出。台股 `research-pack` 預設會使用 `signal-study` 作為技術與籌碼確認層。
+
+籌碼篩選回測範例：
+
+```sh
+node src/cli.js chip-study --ticker 2330 --market tw --start-date 2026-01-01 --foreign-days 3 --holder-weeks 3 --min-holder-lots 1000 --format markdown
+```
+
+`chip-study` 會把「外資連 N 日買超」與「N 週 1000 張以上持股比例連增」做成 point-in-time 篩選事件，回頭統計事件後 3/5/10 日表現，並用 HMA、量能、流動性與產業欄位做二次確認。台股 `research-pack` 預設也會納入 `chip-study`；若 FinMind `TaiwanStockHoldingSharesPer` 權限不足，輸出會標示股權分級資料 unavailable，而不是硬判定通過。
+
+逐日 K 棒決策研究範例：
+
+```sh
+node src/cli.js daily-decision-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --min-average-turnover 20000000 --format markdown
+```
+
+`daily-decision-study` 會用「第 d 天只看第 d 天以前 K 棒」的 point-in-time 方式，替最近 N 個交易日產生 Codex/advisor 可讀的 `advisorFrame` 與 `advisorPrompt`，同時輸出 HMA、量能、流動性門檻、建議最大張數與後續 3/5/10 日 outcome。這個工具不會呼叫 LLM、不會下單；它是把資料餵給 Codex 前的結構化決策輸入與回測 audit trail。
+
+類股資金流/熱度範例：
+
+```sh
+# 盤中即時熱度：需先 npm run shioaji:server；用永豐 snapshot 估成交金額、漲停家數、強勢個股
+node src/cli.js sector-flow --mode realtime --tickers 2330,2327,3481 --format markdown
+
+# 收盤後資金流：用 FinMind 日成交與法人買賣超，依產業別加總
+node src/cli.js sector-flow --mode close --date 2026-06-18 --rank-by foreignNetValue --format markdown
+```
+
+`sector-flow` 的 realtime 是盤中成交金額/漲停熱度 proxy；close 是收盤成交金額與法人淨買值 proxy，兩者都不是交易所認證的「真實資金去向」，但可快速看資金集中在哪些類股。
+
+流動性預設門檻：
+
+- `--min-average-volume 1000000`：最近流動性視窗平均至少 100 萬股。
+- `--min-average-turnover 20000000`：最近流動性視窗平均成交金額至少 2,000 萬元。
+- `--max-position-pct-of-avg-volume 0.02`：單筆建議最大股數預設不超過平均成交量 2%，用來降低滑價與小型股隔日流動性風險。
+
+美股範例：
+
+> 使用這個 repo 的 CLI 工具研究 AAPL。請抓 5 年 income statement、最新 metrics、最新價格、近期新聞與最近 10-K filing metadata，然後寫一份 concise investment memo，並分開 evidence 與 inference。
 
 ## Workflow 文件
 
@@ -74,8 +203,11 @@
 - `workflows/dcf-valuation.md`：DCF / 估值流程
 - `workflows/x-research.md`：市場敘事 / 新聞 triage 流程
 - `workflows/taiwan-research-memo.md`：台股研究 memo 流程
+- `workflows/taiwan-preopen-brief.md`：台股盤前 30 分鐘流程；啟動 prompt：`盤前流程`，輸出盤前市場傾向、風險、追價限制、觀察/排除清單。
 
 ## MCP 模式
+
+
 MCP server 會 expose `tools/list` 與 `tools/call`，工具名稱與 CLI 對應。
 
 為了降低 Codex token，MCP `tools/call` 預設回傳 `compact-json`；也可在 arguments 裡指定：
@@ -83,6 +215,12 @@ MCP server 會 expose `tools/list` 與 `tools/call`，工具名稱與 CLI 對應
 - `format`: `compact-json`、`json` 或 `markdown`
 - `outputFields`: 只渲染 row 物件的指定欄位，不改變上游資料抓取量
 - `maxRows`: 只限制輸出給 Codex 的 rows，不等同於 provider/API 的 `limit`
+
+本 repo 也提供 `research-pack` 工具，讓一次投資研究把 price/metrics/financials/news/filings 或台股 open data 包成單一低 token evidence bundle。
+
+完整低 token Codex + 必接 MCP 設定見：`docs/token-efficient-codex-mcp.md`。
+
+動態記憶分層與 `memory-sync` 使用方式見：[`docs/dynamic-memory.md`](docs/dynamic-memory.md)。
 
 ## 成本邊界
 

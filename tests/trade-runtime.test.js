@@ -16,6 +16,11 @@ test('runtime state helpers write, read, and remove owned tmux pane metadata', (
   assert.equal(readTradeRuntimeState(path), null);
 });
 
+test('tradeRuntimeStatePath honors TRADE_LINE_RUNTIME_STATE overrides', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'trade-runtime-path-'));
+  assert.equal(tradeRuntimeStatePath(cwd, { TRADE_LINE_RUNTIME_STATE: '.custom/runtime.json' }), join(cwd, '.custom/runtime.json'));
+});
+
 test('filterKillablePaneIds dedupes panes and never kills the current pane', () => {
   assert.deepEqual(filterKillablePaneIds(['%1', '%2', '%2', 'not-pane', '%3'], '%2'), ['%1', '%3']);
 });

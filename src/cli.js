@@ -4,6 +4,7 @@ loadDotEnv();
 import { parseArgs, requireArg, optionalInt } from './args.js';
 import { ConfigError, UsageError } from './errors.js';
 import { renderToolResult, runTool, tools } from './tools.js';
+import { parseTaiwanAgentTeamCliArgs } from './taiwan-agent-team.js';
 
 const HELP = `trade-finance: Codex-friendly finance data CLI
 
@@ -19,10 +20,14 @@ US / global commands:
   filings   --ticker AAPL [--filing-type 10-K|10-Q|8-K] [--limit 5]
   research-pack --ticker AAPL|2330 [--market us|tw] [--include price,metrics,news] [--format markdown|compact-json]
   sector-flow --mode realtime|close [--date YYYY-MM-DD] [--tickers 2330,2327] [--limit 1000] [--format markdown]
+  preopen-brief [--date YYYY-MM-DD] [--watchlist 2330,2454] [--format markdown]
   hma-signal    --ticker 2330 [--market tw] [--source finmind|fugle] [--period 20] [--start-date YYYY-MM-DD] [--format markdown]
   signal-study  --ticker 2330 [--market tw] [--period 20] [--volume-window 20] [--institutional-days 5] [--forward-days 3,5,10] [--format markdown]
   daily-decision-study --ticker 2330 [--market tw] [--period 20] [--decision-days 20] [--lookback-bars 60] [--min-average-turnover 20000000] [--format markdown]
   chip-study    --ticker 2330 [--market tw] [--foreign-days 3] [--holder-weeks 3] [--min-holder-lots 1000] [--format markdown]
+  xiaoyu-etf    [--mode stock|etf|rank|overview] [--ticker 2330] [--etf 00981A] [--scope active|market] [--window d1|d5|d10|d20|d60] [--direction buy|sell] [--limit 10] [--format markdown]
+  taiwan-agent-team [--query "盤前+回測+推測"] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--capital 500000] [--offline] [--format markdown]
+  memory-sync   [--memory-dir .omx/memory] [--entry-file entries.json] [--entry "text" --date YYYY-MM-DD --category decision|verified-fix|failure-case|milestone] [--now YYYY-MM-DD] [--format markdown]
 
 Taiwan free-data commands:
   tw-endpoints
@@ -152,6 +157,27 @@ export async function main(argv = process.argv.slice(2)) {
       chunkSize: optionalInt(args, 'chunk-size', undefined),
       limit: common.limit,
     };
+  } else if (command === 'preopen-brief') {
+    toolArgs = {
+      date: args.date ? String(args.date) : undefined,
+      updateTime: args['update-time'] ? String(args['update-time']) : undefined,
+      month: optionalInt(args, 'month', undefined),
+      watchlist: args.watchlist ? String(args.watchlist) : undefined,
+      fxPreviousClose: args['fx-prev-close'] ? Number(args['fx-prev-close']) : undefined,
+      fxCurrent: args['fx-current'] ? Number(args['fx-current']) : undefined,
+      futureClose: args['future-close'] ? Number(args['future-close']) : undefined,
+      futureChange: args['future-change'] ? Number(args['future-change']) : undefined,
+      futureVolume: args['future-volume'] ? Number(args['future-volume']) : undefined,
+      previousSpotClose: args['previous-spot-close'] ? Number(args['previous-spot-close']) : undefined,
+      usMoves: args['us-moves'] ? String(args['us-moves']) : undefined,
+      branchData: args['branch-data'] ? String(args['branch-data']) : undefined,
+      branchFile: args['branch-file'] ? String(args['branch-file']) : undefined,
+      auctionData: args['auction-data'] ? String(args['auction-data']) : undefined,
+      auctionFile: args['auction-file'] ? String(args['auction-file']) : undefined,
+      auctionThresholdPct: args['auction-threshold-pct'] ? Number(args['auction-threshold-pct']) : undefined,
+      noFetch: args['no-fetch'] === true || args['no-fetch'] === 'true',
+      spotFrom: args['spot-from'] ? String(args['spot-from']) : undefined,
+    };
   } else if (command === 'hma-signal') {
     toolArgs = {
       ticker: requireArg(args, 'ticker').toUpperCase(),
@@ -231,6 +257,33 @@ export async function main(argv = process.argv.slice(2)) {
       minAverageTurnover: args['min-average-turnover'] ? Number(args['min-average-turnover']) : undefined,
       maxPositionPctOfAvgVolume: args['max-position-pct-of-avg-volume'] ? Number(args['max-position-pct-of-avg-volume']) : undefined,
       forwardDays: args['forward-days'] ? String(args['forward-days']) : undefined,
+    };
+  } else if (command === 'xiaoyu-etf') {
+    toolArgs = {
+      mode: args.mode ? String(args.mode) : undefined,
+      ticker: args.ticker ? String(args.ticker).toUpperCase() : undefined,
+      etf: args.etf ? String(args.etf).toUpperCase() : undefined,
+      scope: args.scope ? String(args.scope) : undefined,
+      window: args.window ? String(args.window) : undefined,
+      direction: args.direction ? String(args.direction) : undefined,
+      limit: common.limit,
+      includeDetail: args['include-detail'] === true || args['include-detail'] === 'true',
+      baseUrl: args['base-url'] ? String(args['base-url']) : undefined,
+    };
+  } else if (command === 'taiwan-agent-team') {
+    toolArgs = parseTaiwanAgentTeamCliArgs(args, optionalInt);
+  } else if (command === 'memory-sync') {
+    toolArgs = {
+      memoryDir: args['memory-dir'] ? String(args['memory-dir']) : undefined,
+      entryFile: args['entry-file'] ? String(args['entry-file']) : undefined,
+      entry: args.entry ? String(args.entry) : undefined,
+      date: args.date ? String(args.date) : undefined,
+      category: args.category ? String(args.category) : undefined,
+      source: args.source ? String(args.source) : undefined,
+      reason: args.reason ? String(args.reason) : undefined,
+      obsolete: args.obsolete === true || args.obsolete === 'true',
+      now: args.now ? String(args.now) : undefined,
+      maxHotEntries: optionalInt(args, 'max-hot-entries', undefined),
     };
   } else if (TAIWAN_COMMANDS.has(command)) {
     toolArgs = taiwanArgs(command, args, common.limit);

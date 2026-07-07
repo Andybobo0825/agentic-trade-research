@@ -131,7 +131,6 @@ async function stopLineBridge(cwd, port) {
   return { status: killed.length ? 'stopped' : 'not-running', pids: killed, port, wasHealthy: health?.service === 'line-bridge' };
 }
 
-
 async function stopAgentSession(agent = {}) {
   const sessionName = resolveManagedAgentSessionName(agent);
   let panes = [];

@@ -11,6 +11,7 @@ This repo now exposes Taiwan stock research tools through free/open data first.
 | TPEx OpenAPI | `tw-price`, `tw-company`, `tw-valuation`, `tw-announcements`, `tw-institutional --provider tpex`, `tw-financials --provider tpex`, `tw-raw` | Official OTC/emerging-market snapshots. |
 | MOPS-backed open data | `tw-announcements`, `tw-financials --provider twse|tpex` | MOPS company disclosures exposed through TWSE/TPEx OpenAPI datasets. |
 | Fugle MarketData | `fugle-quote`, `fugle-candles`, `fugle-trades`, `fugle-volumes`, `fugle-snapshot`, `fugle-technical`, `fugle-raw` | Optional realtime/intraday provider. Requires `FUGLE_API_KEY`; some endpoints require paid Fugle plans. |
+| Xiaoyu ETF | `xiaoyu-etf` | Public ETF holding / active ETF inferred-flow lens from <https://xiaoyu-etf.pages.dev/>. Auxiliary chip/ETF evidence only; Shioaji remains primary for price/volume. |
 
 ## Examples
 

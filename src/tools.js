@@ -25,6 +25,10 @@ import { getShioajiContract, getShioajiContracts, getShioajiDailyQuotes, getShio
 import { cacheShioajiDailyQuotes, cacheShioajiKbars } from './shioaji-pipeline.js';
 import { getIcTpexCategory, getIcTpexCompanyChain } from './ic-tpex.js';
 import { buildSectorFlow } from './sector-flow.js';
+import { buildPreopenBrief, renderPreopenBriefMarkdown } from './preopen-brief.js';
+import { loadMemoryEntryFile, renderMemorySyncMarkdown, syncDynamicMemory } from './dynamic-memory.js';
+import { buildXiaoyuEtfLens, renderXiaoyuEtfMarkdown } from './xiaoyu-etf.js';
+import { buildTaiwanAgentTeam, renderTaiwanAgentTeamMarkdown } from './taiwan-agent-team.js';
 import { compactJson, compactNumber, shapeForTokenBudget, toMarkdownTable } from './format.js';
 import { detectHmaSignals, evaluateHmaTrendSignal, normalizeCandleRows } from './indicators.js';
 
@@ -516,6 +520,15 @@ export const tools = {
       return renderSectorFlowMarkdown(result);
     },
   },
+  'preopen-brief': {
+    description: 'Run the article-bounded Taiwan pre-open 30-minute workflow: FX, TX futures basis, US-vs-Taiwan relative strength, broker branch flow, auction checks, and no-chase constraints.',
+    async run(args) {
+      return buildPreopenBrief(args || {});
+    },
+    toMarkdown(result) {
+      return renderPreopenBriefMarkdown(result);
+    },
+  },
   'hma-signal': {
     description: 'Fetch OHLCV candles and evaluate the Pine-compatible Hull MA trend signal with buy/sell watch suggestions.',
     async run(args) {
@@ -561,6 +574,42 @@ export const tools = {
       return renderResearchPackMarkdown(result);
     },
   },
+  'xiaoyu-etf': {
+    description: 'Fetch Xiaoyu ETF public ETF-holding lens: active ETF flows, ETF holdings, stock-to-ETF reverse lookup, and inferred ETF buy/sell ranks. Auxiliary only; Shioaji remains primary for price/volume.',
+    async run(args) {
+      return buildXiaoyuEtfLens(args || {});
+    },
+    toMarkdown(result) {
+      return renderXiaoyuEtfMarkdown(result);
+    },
+  },
+  'taiwan-agent-team': {
+    description: 'Run a Dexter-inspired Taiwan investment research agent team: planner, data integration, scratchpad audit, backtest evidence, Shioaji/ETF/sector tools, scenario synthesis, and verification. Adds a harness without replacing existing Taiwan workflows.',
+    async run(args) {
+      return buildTaiwanAgentTeam(args || {}, { runTool });
+    },
+    toMarkdown(result) {
+      return renderTaiwanAgentTeamMarkdown(result);
+    },
+  },
+  'memory-sync': {
+    description: 'Synchronize repo-local dynamic memory layers under .omx/memory from selective JSON entries.',
+    async run(args) {
+      const entries = [
+        ...(args.entryFile ? loadMemoryEntryFile(args.entryFile) : []),
+        ...(args.entry ? [{ date: args.date, category: args.category, text: args.entry, source: args.source, reason: args.reason, obsolete: args.obsolete }] : []),
+      ];
+      return syncDynamicMemory({
+        memoryDir: args.memoryDir,
+        now: args.now,
+        maxHotEntries: args.maxHotEntries,
+        entries,
+      });
+    },
+    toMarkdown(result) {
+      return renderMemorySyncMarkdown(result);
+    },
+  },
 };
 
 export async function runTool(name, args) {
@@ -581,6 +630,7 @@ async function buildResearchPack(args) {
   const include = normalizeInclude(args.include, market === 'tw' || market === 'taiwan' ? [
     'tw-company',
     'tw-price',
+    'xiaoyu-etf',
     'chip-study',
     'signal-study',
     'tw-revenue',
@@ -717,6 +767,14 @@ function argsForResearchTool(toolName, args, common) {
       institutionalProvider: args.institutionalProvider,
       institutionalLimit: args.institutionalLimit,
       holdingLimit: args.holdingLimit,
+    };
+  }
+  if (toolName === 'xiaoyu-etf') {
+    return {
+      mode: 'stock',
+      ticker: args.ticker,
+      limit: args.xiaoyuLimit || args.limit || 10,
+      baseUrl: args.xiaoyuBaseUrl,
     };
   }
   if (toolName === 'statement') {

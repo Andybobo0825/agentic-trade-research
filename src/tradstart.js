@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { loadDotEnv } from './dotenv.js';
 import { cleanupResponseFiles, LineApi, readLineBridgeConfig, STARTUP_MESSAGE } from './line-bridge.js';
-import { chooseTmuxTarget, findLineBridgePids, paneExists, parseTmuxPaneList } from './line-bridge-auto.js';
+import { chooseTmuxTarget, findLineBridgePids, lineBridgeHealthMatchesConfig, paneExists, parseTmuxPaneList } from './line-bridge-auto.js';
 import { tradeRuntimeStatePath, writeTradeRuntimeState } from './trade-runtime.js';
 
 export function expandHome(path) {
@@ -360,7 +360,7 @@ async function lineBridgeProcessPids(cwd, port, { includePortListeners = false }
 
 async function ensureLineBridge(cwd, config) {
   const health = await fetchLineBridgeHealth(config.port);
-  if (health?.service === 'line-bridge' && health.tmuxTarget === config.tmuxTarget) {
+  if (lineBridgeHealthMatchesConfig(health, config)) {
     return { status: 'already-running', pids: await lineBridgeProcessPids(cwd, config.port, { includePortListeners: true }), target: config.tmuxTarget, health: true };
   }
 

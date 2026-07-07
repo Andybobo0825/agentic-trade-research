@@ -52,7 +52,10 @@
     "shioaji:quote": "node src/cli.js shioaji-quote",
     "shioaji:orderbook": "node src/cli.js shioaji-orderbook",
     "shioaji:ticks": "node src/cli.js shioaji-ticks",
-    "shioaji:server": "node src/shioaji-server.js"
+    "shioaji:server": "node src/shioaji-server.js",
+    "memory:sync": "node src/cli.js memory-sync --format markdown",
+    "tw:preopen": "node src/cli.js preopen-brief --format markdown",
+    "tw:xiaoyu-etf": "node src/cli.js xiaoyu-etf"
   },
   "engines": {
     "node": ">=20"

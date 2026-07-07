@@ -394,6 +394,8 @@ test('line bridge health reports unhealthy when tmux target is dead', async () =
       port: 0,
       path: '/line/webhook',
       tmuxTarget: '%0',
+      injectHandoff: false,
+      handoffMode: 'once',
       responseDir: '/tmp/trade-line-bridge-test-responses-does-not-exist',
       responseRetentionDays: 7,
       responseMaxFiles: 200,
@@ -410,6 +412,8 @@ test('line bridge health reports unhealthy when tmux target is dead', async () =
     assert.equal(json.ok, false);
     assert.equal(json.service, 'line-bridge');
     assert.equal(json.tmuxTarget, '%0');
+    assert.equal(json.injectHandoff, false);
+    assert.equal(json.handoffMode, 'once');
     assert.equal(json.tmuxTargetAlive, false);
   } finally {
     await new Promise((resolve) => server.close(resolve));

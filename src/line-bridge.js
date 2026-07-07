@@ -735,6 +735,8 @@ export function createLineWebhookServer({ api, config, tmux, logger = console } 
           busy: state.busy,
           queued: state.queue.length,
           tmuxTarget: config.tmuxTarget,
+          injectHandoff: Boolean(config.injectHandoff),
+          handoffMode: config.handoffMode || 'once',
           tmuxTargetAlive: health.alive,
           error: health.alive ? undefined : health.error?.message,
         }));

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseTmuxTarget, findLineBridgePids, getLineBridgeHealth, isLineBridgeHealthy, paneExists, parseTmuxPaneList } from '../src/line-bridge-auto.js';
+import { chooseTmuxTarget, findLineBridgePids, getLineBridgeHealth, isLineBridgeHealthy, lineBridgeHealthMatchesConfig, paneExists, parseTmuxPaneList, resolveAutoLineBridgeHandoffEnv } from '../src/line-bridge-auto.js';
 
 test('parseTmuxPaneList parses tab-separated tmux pane metadata', () => {
   const panes = parseTmuxPaneList('%0\t/repo\tzsh\t1\ts\t0\t0\n%1\t/tmp\tnode\t0\ts\t0\t1');
@@ -52,4 +52,17 @@ test('getLineBridgeHealth returns target so auto-start can reject stale panes', 
   });
 
   assert.deepEqual(await getLineBridgeHealth(8787, fetchImpl), { service: 'line-bridge', tmuxTarget: '%2' });
+});
+
+test('resolveAutoLineBridgeHandoffEnv disables handoff when attaching to existing resume pane by default', () => {
+  assert.equal(resolveAutoLineBridgeHandoffEnv({ env: {} }), '0');
+  assert.equal(resolveAutoLineBridgeHandoffEnv({ env: { LINE_BRIDGE_HANDOFF: '1' } }), '1');
+  assert.equal(resolveAutoLineBridgeHandoffEnv({ env: { LINE_BRIDGE_HANDOFF: '0' } }), '0');
+});
+
+test('lineBridgeHealthMatchesConfig rejects stale bridge handoff config', () => {
+  const config = { tmuxTarget: '%1', injectHandoff: false, handoffMode: 'once' };
+  assert.equal(lineBridgeHealthMatchesConfig({ service: 'line-bridge', tmuxTarget: '%1', injectHandoff: false, handoffMode: 'once' }, config), true);
+  assert.equal(lineBridgeHealthMatchesConfig({ service: 'line-bridge', tmuxTarget: '%1', injectHandoff: true, handoffMode: 'once' }, config), false);
+  assert.equal(lineBridgeHealthMatchesConfig({ service: 'line-bridge', tmuxTarget: '%1' }, config), false);
 });

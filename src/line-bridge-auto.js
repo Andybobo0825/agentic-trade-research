@@ -54,6 +54,20 @@ export async function isLineBridgeHealthy(port = 8787, fetchImpl = globalThis.fe
   return json?.service === 'line-bridge';
 }
 
+export function resolveAutoLineBridgeHandoffEnv({ env = process.env } = {}) {
+  if (env.LINE_BRIDGE_HANDOFF !== undefined && env.LINE_BRIDGE_HANDOFF !== '') return env.LINE_BRIDGE_HANDOFF;
+  return '0';
+}
+
+export function lineBridgeHealthMatchesConfig(health, config) {
+  return Boolean(
+    health?.service === 'line-bridge'
+    && health.tmuxTarget === config.tmuxTarget
+    && health.injectHandoff === Boolean(config.injectHandoff)
+    && (health.handoffMode || '') === (config.handoffMode || 'once'),
+  );
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -89,10 +103,11 @@ async function main() {
   const target = discoveredTarget || envTarget || '';
   if (!target) throw new Error('Could not find a live tmux target pane. Run inside the OMX/tmux pane or set LINE_BRIDGE_TMUX_TARGET to an existing pane id.');
   process.env.LINE_BRIDGE_TMUX_TARGET = target;
+  process.env.LINE_BRIDGE_HANDOFF = resolveAutoLineBridgeHandoffEnv({ env: process.env });
 
   const config = readLineBridgeConfig();
   const health = await getLineBridgeHealth(config.port);
-  if (health?.service === 'line-bridge' && health.tmuxTarget === target) {
+  if (lineBridgeHealthMatchesConfig(health, config)) {
     console.log(STARTUP_MESSAGE);
     return;
   }

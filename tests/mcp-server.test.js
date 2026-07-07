@@ -109,3 +109,25 @@ test('MCP tools/list exposes sector-flow input schema', async () => {
   assert.ok(tool.inputSchema.properties.tickers);
   assert.ok(tool.inputSchema.properties.rankBy);
 });
+
+test('MCP tools/list exposes xiaoyu-etf input schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 9, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'xiaoyu-etf');
+  assert.ok(tool);
+  assert.ok(tool.inputSchema.properties.mode);
+  assert.ok(tool.inputSchema.properties.ticker);
+  assert.ok(tool.inputSchema.properties.etf);
+  assert.ok(tool.inputSchema.properties.scope);
+  assert.ok(tool.inputSchema.properties.direction);
+});
+
+
+test('MCP tools/list exposes taiwan-agent-team input schema', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 10, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'taiwan-agent-team');
+  assert.ok(tool);
+  assert.ok(tool.inputSchema.properties.query);
+  assert.ok(tool.inputSchema.properties.tickers);
+  assert.ok(tool.inputSchema.properties.offline);
+  assert.ok(tool.inputSchema.properties.capital);
+});

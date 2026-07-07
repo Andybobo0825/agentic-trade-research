@@ -30,3 +30,25 @@ test('hot-stock filter accepts liquid high-volume momentum stocks and scores hea
   assert.equal(decision.score, hotStockScore({ row, ind }));
   assert.ok(decision.score > 200);
 });
+
+
+test('hot-stock filter rejects attempts to exclude electronic components industry 28', () => {
+  const meta = { code: '2478', name: '大毅', industry: '28' };
+  const row = { close: 234, amount: 8_470_000_000 };
+  const ind = { volRatio: 3.2, turnoverRatio: 4.45, dayReturnPct: 2.86, closePos: 0.94, atrPct: 4.2 };
+
+  assert.throws(
+    () => isHotStockCandidate({ meta, row, ind }, { excludedIndustries: new Set(['17', '28']) }),
+    /Protected Taiwan industry code 28.*電子零組件/
+  );
+});
+
+test('hot-stock filter normalizes electronic components code 28 as a protected tradable industry', () => {
+  const meta = { code: '2327', name: '國巨', industry: 28 };
+  const row = { close: 1080, amount: 97_896_000_000 };
+  const ind = { volRatio: 1.93, turnoverRatio: 2.51, dayReturnPct: 9.76, closePos: 1, atrPct: 4.8 };
+
+  const decision = isHotStockCandidate({ meta, row, ind });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.reason, 'hot');
+});

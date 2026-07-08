@@ -48,3 +48,5 @@ Thumbs.db
 junit.xml
 test-results/
 playwright-report/
+
+.worktrees/

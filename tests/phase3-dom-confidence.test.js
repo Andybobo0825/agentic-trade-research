@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 
 import {
   PHASE3_DOM_CONFIG,
+  assertPhase3DomArgs,
   evaluateDomConfidence,
   evaluateDomSnapshot,
+  renderPhase3DomConfidenceMarkdown,
+  runPhase3DomConfidence,
 } from '../src/phase3-dom-confidence.js';
 
 function book(overrides = {}) {
@@ -210,4 +213,115 @@ test('uses lowest visible support with low stop reliability instead of inventing
   assert.equal(result.referencePrices.stopReliability, 'low');
   assert.equal(result.referencePriceSources.bidWallLevelIndex, 2);
   assert.equal(result.referencePriceSources.stopLossLevelIndex, 2);
+});
+
+test('samples DOM three times with two fixed waits and keeps read-only audit rows', async () => {
+  const orderCalls = [];
+  const waits = [];
+  const snapshots = [book(), book(), book()];
+  let timeIndex = 0;
+  const times = [
+    '2026-07-13T02:00:00.000Z',
+    '2026-07-13T02:00:05.000Z',
+    '2026-07-13T02:00:10.000Z',
+  ];
+
+  const result = await runPhase3DomConfidence({ ticker: '2330' }, {
+    getOrderBook: async (args) => {
+      orderCalls.push(args);
+      return { readOnly: true, data: snapshots[orderCalls.length - 1] };
+    },
+    sleep: async (milliseconds) => waits.push(milliseconds),
+    now: () => new Date(times[timeIndex++]),
+  });
+
+  assert.equal(orderCalls.length, 3);
+  assert.deepEqual(waits, [5000, 5000]);
+  assert.equal(result.requestedSampleCount, 3);
+  assert.equal(result.validSampleCount, 3);
+  assert.equal(result.readOnly, true);
+  assert.equal(result.executionMode, 'read_only');
+  assert.equal(result.samples.length, 3);
+  assert.equal(result.resultHash.length, 64);
+  assert.deepEqual(result.referencePrices, {
+    activeEntryLimit: 100.5,
+    patientEntryPrice: 100,
+    takeProfitPrice: 100.5,
+    stopLossPrice: 99.5,
+    stopReliability: 'normal',
+  });
+});
+
+test('keeps two valid samples when one Shioaji read times out', async () => {
+  let call = 0;
+  const result = await runPhase3DomConfidence({ ticker: '2330' }, {
+    getOrderBook: async () => {
+      call += 1;
+      if (call === 2) throw new Error('stream timeout');
+      return { readOnly: true, data: book() };
+    },
+    sleep: async () => undefined,
+    now: () => new Date('2026-07-13T02:00:00.000Z'),
+  });
+
+  assert.equal(result.validSampleCount, 2);
+  assert.equal(result.reliability, 'medium');
+  assert.equal(result.samples[1].valid, false);
+  assert.equal(result.samples[1].error, 'order_book_error');
+  assert.match(result.samples[1].message, /timeout/);
+  assert.notEqual(result.referencePrices.activeEntryLimit, null);
+});
+
+test('returns unavailable with null prices when every DOM sample fails', async () => {
+  const result = await runPhase3DomConfidence({ ticker: '2330' }, {
+    getOrderBook: async () => { throw new Error('offline'); },
+    sleep: async () => undefined,
+    now: () => new Date('2026-07-13T02:00:00.000Z'),
+  });
+
+  assert.equal(result.domConfidenceScore, null);
+  assert.equal(result.pressureLabel, 'unavailable');
+  assert.deepEqual(result.referencePrices, {
+    activeEntryLimit: null,
+    patientEntryPrice: null,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    stopReliability: 'unavailable',
+  });
+  assert.equal(result.samples.every((sample) => sample.error === 'order_book_error'), true);
+});
+
+test('rejects unknown or order-capable arguments before reading Shioaji', async () => {
+  let calls = 0;
+  const dependencies = {
+    getOrderBook: async () => {
+      calls += 1;
+      return { readOnly: true, data: book() };
+    },
+  };
+
+  for (const args of [
+    { ticker: '2330', live: true },
+    { ticker: '2330', order: 'buy' },
+    { ticker: '2330', quantity: 1000 },
+  ]) {
+    await assert.rejects(runPhase3DomConfidence(args, dependencies), /forbids/);
+  }
+  assert.equal(calls, 0);
+  assert.throws(() => assertPhase3DomArgs({}), /ticker is required/);
+});
+
+test('renders every mandatory DOM price and the read-only status', async () => {
+  const result = await runPhase3DomConfidence({ ticker: '2330' }, {
+    getOrderBook: async () => ({ readOnly: true, data: book() }),
+    sleep: async () => undefined,
+    now: () => new Date('2026-07-13T02:00:00.000Z'),
+  });
+  const markdown = renderPhase3DomConfidenceMarkdown(result);
+
+  assert.match(markdown, /Read only: true/);
+  assert.match(markdown, /Active entry limit: 100\.5/);
+  assert.match(markdown, /Patient entry price: 100/);
+  assert.match(markdown, /Take-profit price: 100\.5/);
+  assert.match(markdown, /Stop-loss price: 99\.5/);
 });

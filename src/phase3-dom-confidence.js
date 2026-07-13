@@ -1,3 +1,9 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+import { getShioajiOrderBook } from './shioaji-market.js';
+
 const CONFIG = {
   samples: 3,
   intervalMs: 5000,
@@ -7,6 +13,16 @@ const CONFIG = {
 };
 
 export const PHASE3_DOM_CONFIG = Object.freeze(CONFIG);
+
+export const PHASE3_DOM_INPUTS = Object.freeze([
+  'ticker',
+  'exchange',
+  'samples',
+  'intervalMs',
+  'timeoutMs',
+  'reportJson',
+  'reportMarkdown',
+]);
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -19,6 +35,47 @@ function round(value, digits = 8) {
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256(value) {
+  return createHash('sha256').update(stableJson(value)).digest('hex');
+}
+
+function boundedInteger(value, name, fallback, minimum, maximum) {
+  if (value === undefined) return fallback;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw new TypeError(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return number;
+}
+
+export function assertPhase3DomArgs(args = {}) {
+  const allowed = new Set(PHASE3_DOM_INPUTS);
+  for (const key of Object.keys(args)) {
+    if (!allowed.has(key)) throw new Error(`phase3-dom-confidence forbids ${key}`);
+  }
+  if (!String(args.ticker || '').trim()) throw new TypeError('ticker is required');
+  boundedInteger(args.samples, 'samples', PHASE3_DOM_CONFIG.samples, 1, 5);
+  boundedInteger(args.intervalMs, 'intervalMs', PHASE3_DOM_CONFIG.intervalMs, 0, 60_000);
+  boundedInteger(args.timeoutMs, 'timeoutMs', PHASE3_DOM_CONFIG.timeoutMs, 1, 30_000);
+  return args;
+}
+
+async function writeAtomic(file, content) {
+  await mkdir(dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporary, content, { flag: 'wx' });
+  await rename(temporary, file);
 }
 
 function isValidLevel(level) {
@@ -200,4 +257,125 @@ export function evaluateDomConfidence(samples) {
     reliability: reliability(validSampleCount),
     ...deriveReferencePrices(latestValidSnapshot, domConfidenceScore),
   };
+}
+
+function unavailableReferencePrices() {
+  return {
+    activeEntryLimit: null,
+    patientEntryPrice: null,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    stopReliability: 'unavailable',
+  };
+}
+
+function defaultSleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export async function runPhase3DomConfidence(args = {}, dependencies = {}) {
+  assertPhase3DomArgs(args);
+  const ticker = String(args.ticker).trim();
+  const exchange = String(args.exchange || 'TSE').trim().toUpperCase();
+  const requestedSampleCount = boundedInteger(
+    args.samples,
+    'samples',
+    PHASE3_DOM_CONFIG.samples,
+    1,
+    5,
+  );
+  const intervalMs = boundedInteger(
+    args.intervalMs,
+    'intervalMs',
+    PHASE3_DOM_CONFIG.intervalMs,
+    0,
+    60_000,
+  );
+  const timeoutMs = boundedInteger(
+    args.timeoutMs,
+    'timeoutMs',
+    PHASE3_DOM_CONFIG.timeoutMs,
+    1,
+    30_000,
+  );
+  const getOrderBook = dependencies.getOrderBook || getShioajiOrderBook;
+  const sleep = dependencies.sleep || defaultSleep;
+  const now = dependencies.now || (() => new Date());
+  const samples = [];
+
+  for (let index = 0; index < requestedSampleCount; index += 1) {
+    try {
+      const response = await getOrderBook({ ticker, exchange, timeoutMs });
+      if (response?.readOnly !== true) throw new Error('Shioaji response is not read-only');
+      const capturedAt = now().toISOString();
+      samples.push(evaluateDomSnapshot(response.data, { ticker, capturedAt }));
+    } catch (error) {
+      samples.push({
+        valid: false,
+        error: 'order_book_error',
+        message: error instanceof Error ? error.message : String(error),
+        capturedAt: now().toISOString(),
+      });
+    }
+    if (index < requestedSampleCount - 1) await sleep(intervalMs);
+  }
+
+  const confidence = evaluateDomConfidence(samples);
+  const core = {
+    strategy: 'phase3_stability',
+    command: 'phase3-dom-confidence',
+    overlay: 'post_research_dom_confidence',
+    executionMode: 'read_only',
+    readOnly: true,
+    ticker,
+    exchange,
+    requestedSampleCount,
+    intervalMs,
+    timeoutMs,
+    samples,
+    ...confidence,
+    referencePrices: confidence.referencePrices || unavailableReferencePrices(),
+    referencePriceSources: confidence.referencePriceSources || null,
+  };
+  const result = { ...core, resultHash: sha256(core) };
+
+  if (args.reportJson) await writeAtomic(args.reportJson, `${JSON.stringify(result, null, 2)}\n`);
+  if (args.reportMarkdown) {
+    await writeAtomic(args.reportMarkdown, renderPhase3DomConfidenceMarkdown(result));
+  }
+  return result;
+}
+
+function printablePrice(value) {
+  return value === null || value === undefined ? 'unavailable' : value;
+}
+
+export function renderPhase3DomConfidenceMarkdown(result) {
+  const prices = result.referencePrices || unavailableReferencePrices();
+  const lines = [
+    '# Phase 3 DOM Confidence',
+    '',
+    `- Strategy: ${result.strategy}`,
+    `- Ticker: ${result.ticker}`,
+    `- Execution mode: ${result.executionMode}`,
+    `- Read only: ${result.readOnly}`,
+    `- Valid samples: ${result.validSampleCount}/${result.requestedSampleCount}`,
+    `- Reliability: ${result.reliability}`,
+    `- DOM confidence score: ${result.domConfidenceScore ?? 'unavailable'}`,
+    `- DOM confidence adjustment: ${result.domConfidenceAdjustment}`,
+    `- Pressure: ${result.pressureLabel}`,
+    '',
+    '## Reference prices',
+    '',
+    `- Active entry limit: ${printablePrice(prices.activeEntryLimit)}`,
+    `- Patient entry price: ${printablePrice(prices.patientEntryPrice)}`,
+    `- Take-profit price: ${printablePrice(prices.takeProfitPrice)}`,
+    `- Stop-loss price: ${printablePrice(prices.stopLossPrice)}`,
+    `- Stop reliability: ${prices.stopReliability}`,
+    '',
+    'These are read-only visible-book references for manual decision-making, not orders.',
+    '',
+    `Result hash: ${result.resultHash}`,
+  ];
+  return `${lines.join('\n')}\n`;
 }

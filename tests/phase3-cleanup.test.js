@@ -41,6 +41,7 @@ test('the retained Phase 3 entry graph contains no order API vocabulary', async 
     'phase3-candidates.js',
     'phase3-filter.js',
     'phase3-screen.js',
+    'phase3-dom-confidence.js',
   ];
   const forbidden = /placeOrder|updateOrder|cancelOrder|broker-orders|order api/i;
   const hits = [];

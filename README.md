@@ -20,7 +20,17 @@
 - 唯一技術決策入口：read-only `phase3-screen`
 - 凍結門檻：HMA9 上升、HMA20 非負、收盤不低於 HMA9、距離不超過 6%、20 日平均成交額至少 2,000 萬、五日動能不超過 18%、收盤位置不超過 0.72
 - 外部新聞、法說、財報、股癌與 ETF 籌碼只在技術候選成立後作信心加權
+- 外部研究後才執行 read-only `phase3-dom-confidence`；DOM 不進入 Phase 3 資料或候選資格
+- DOM 有有效樣本時固定交付 `activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`；即使等待仍交付全部四個價格
 - 不含預測模型、promotion workflow 或自動下單；使用者手動交易
+
+```text
+phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
+```
+
+```sh
+node src/cli.js phase3-dom-confidence --ticker 2330 --format markdown
+```
 
 - 架構流程圖 source：[`docs/diagrams/standard-workflow-v1.drawio`](docs/diagrams/standard-workflow-v1.drawio)
 - 架構流程圖 SVG：[`docs/diagrams/standard-workflow-v1.svg`](docs/diagrams/standard-workflow-v1.svg)

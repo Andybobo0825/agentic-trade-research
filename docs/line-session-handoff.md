@@ -37,9 +37,18 @@ Notes:
 
 `phase3_stability` 是唯一主策略，`phase3-screen` 是唯一技術決策入口。先確認 point-in-time evidence 已更新，再執行篩選；只有 ticker 成為合格技術候選，才查新聞、法說、財報、股癌與 ETF 籌碼。外部資訊只作信心加權，不得把不合格技術訊號硬推成買進。
 
+固定完整順序：
+
+```text
+phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
+```
+
+DOM 是外部研究之後的獨立信心層，不進入 Phase 3 資料、soft score 或候選資格，也不得覆蓋 `phase3-screen`。只要三次取樣中至少一筆有效，回覆必須包含 `activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`；即使判斷為等待或不追價，仍需交付全部四個價格。全部取樣失敗時才回傳 `null` 並說明資料錯誤，禁止自行估價。
+
 ```sh
 node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
 node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
+node src/cli.js phase3-dom-confidence --ticker <TICKER> --format markdown
 node src/cli.js fugle-quote --ticker <TICKER> --format markdown
 ```
 
@@ -65,9 +74,10 @@ Use this answer structure for LINE:
 1. **今日資料摘要** — latest quote/date, change %, intraday high/low when available.
 2. **Phase 3 技術結論** — 只引用 `phase3-screen` 的 eligible / rejection reasons 與 decision date；它是唯一決策入口。
 3. **外部信心加權 / ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
-4. **進場判斷** — can enter / wait / avoid chasing; include conditions.
-5. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
-6. **限制** — market-data timing, insufficient rows, ETF-newness caveats, or auxiliary-source caveats.
+4. **DOM 獨立信心與價格** — 列出信心分數、可靠度、買賣壓力與四個必交價格。
+5. **進場判斷** — can enter / wait / avoid chasing; include conditions，但不得因判斷等待而隱藏價格。
+6. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
+7. **限制** — market-data timing, insufficient rows, ETF-newness caveats, or auxiliary-source caveats.
 
 Preferred wording:
 
@@ -89,4 +99,5 @@ node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format mark
 ```sh
 node src/cli.js fugle-quote --ticker 2330 --format markdown
 node src/cli.js xiaoyu-etf --mode stock --ticker 2330 --format markdown
+node src/cli.js phase3-dom-confidence --ticker 2330 --format markdown
 ```

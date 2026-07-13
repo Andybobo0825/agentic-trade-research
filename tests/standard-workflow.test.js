@@ -47,6 +47,30 @@ test('line handoff includes phase3 as the main strategy step', () => {
   assert.doesNotMatch(handoff, /phase3-demo-promotion|logistic|walk-forward/i);
 });
 
+test('active guidance places independent DOM confidence after external research', () => {
+  const workflow = read('docs/standard-workflow-v1.md');
+  const handoff = read('docs/line-session-handoff.md');
+  const readme = read('README.md');
+  const combined = `${workflow}\n${handoff}\n${readme}`;
+
+  for (const document of [workflow, handoff]) {
+    assert.match(
+      document,
+      /phase3-dataset\s*(?:→|->).*phase3-screen\s*(?:→|->).*news\/earnings\/financial confidence\s*(?:→|->).*phase3-dom-confidence\s*(?:→|->).*manual decision/is,
+    );
+  }
+  assert.match(combined, /DOM.*(?:不進入|不得進入).*Phase 3.*(?:資料|候選資格|eligibility)/is);
+  for (const field of [
+    'activeEntryLimit',
+    'patientEntryPrice',
+    'takeProfitPrice',
+    'stopLossPrice',
+  ]) {
+    assert.match(combined, new RegExp(field));
+  }
+  assert.match(combined, /(?:等待|wait).*仍.*(?:四個|全部).*價格/is);
+});
+
 test('top-level guidance converges on Standard Workflow 1.3 and Phase 3', () => {
   const publicGuidance = [
     read('README.md'),

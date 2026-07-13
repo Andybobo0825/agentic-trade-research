@@ -33,6 +33,16 @@ node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format mark
 5. 歷史收益、成本、回撤與命中率必須在訊號凍結後另行評估，不能回寫訊號。
 6. 主流程沒有自動下單功能；使用者仍手動決定是否交易。
 
+候選成立後的完整執行順序固定為：
+
+```text
+phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
+```
+
+`phase3-dom-confidence` 是外部研究完成後才執行的獨立信心層。DOM 不進入 Phase 3 資料、soft score 或候選資格（eligibility），也不能把 rejected ticker 改成 eligible。它只讀取永豐 Shioaji 五檔委買賣，預設在約 10 秒內取樣三次（0、5、10 秒），提供當下買賣壓力與人工決策參考。
+
+只要至少一筆 DOM 樣本有效，就必須交付：`activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`。即使結論是等待或不追價，仍須交付全部四個價格；若全部取樣失敗，欄位保留但值為 `null`，不得捏造價位。此工具完全 read-only，不包含下單 API。
+
 Frozen Phase 3 hard gates：
 
 ```text
@@ -93,14 +103,16 @@ Shioaji failure gate 標準處理：
 
 1. 更新 point-in-time evidence。
 2. 執行 `phase3-screen`；它是唯一技術決策入口。
-3. 只對 eligible 候選補即時 quote、產業鏈與外部信心因子。
-4. `daily-decision-study`、`signal-study`、`chip-study` 僅供歷史診斷，不得覆蓋 Phase 3 或形成第二套策略。
+3. 只對 eligible 候選補即時 quote、產業鏈與新聞 / 法說 / 財報等外部信心因子。
+4. 外部信心研究完成後才執行 `phase3-dom-confidence --ticker <TICKER>`，取得獨立 DOM 信心分數及四個價格參考。
+5. `daily-decision-study`、`signal-study`、`chip-study` 僅供歷史診斷，不得覆蓋 Phase 3 或形成第二套策略。
 
 資料建置 / 候選池工具：
 
 ```bash
 node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
 node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
+node src/cli.js phase3-dom-confidence --ticker <TICKER> --format markdown
 ```
 
 `phase3-dataset` 只建立與稽核 point-in-time 證據；`phase3-screen` 是唯一策略入口。

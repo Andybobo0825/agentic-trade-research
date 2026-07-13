@@ -14,6 +14,23 @@ test('dataset rejects malformed and reversed collection dates', () => {
   ]) assert.throws(() => assertPhase3DatasetArgs(args), message);
 });
 
+test('dataset rejects a reversed effective default range before touching data sources', async () => {
+  let dataSourceCalls = 0;
+  const touched = async () => {
+    dataSourceCalls += 1;
+    throw new Error('data source must not be touched');
+  };
+  await assert.rejects(
+    () => runPhase3Dataset({ endDate: '2023-12-31' }, {
+      getContracts: touched,
+      collect: touched,
+      ensureCandidates: touched,
+    }),
+    /startDate must not be after endDate/,
+  );
+  assert.equal(dataSourceCalls, 0);
+});
+
 test('dataset freezes a read-only normal-equity universe and reports incomplete quality', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'phase3-dataset-'));
   const universeFile = join(dir, 'evidence', 'universe.json');

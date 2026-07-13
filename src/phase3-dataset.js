@@ -171,16 +171,18 @@ async function auditSourceTiming(evidenceRoot, manifest, seed = 3005) {
 
 export async function runPhase3Dataset(args = {}, dependencies = {}) {
   assertPhase3DatasetArgs(args);
-  const now = dependencies.now ? dependencies.now() : new Date();
   const config = {
     universeFile: args.universeFile || '.omx/evidence/phase3/universe.json',
     startDate: args.startDate || '2024-01-01',
-    endDate: args.endDate || latestCompletedTaiwanEvidenceDate(now),
+    endDate: args.endDate || latestCompletedTaiwanEvidenceDate(
+      dependencies.now ? dependencies.now() : new Date(),
+    ),
     evidenceRoot: args.evidenceRoot || '.omx/evidence/phase3',
     reportJson: args.reportJson || '.omx/reports/phase3-dataset-quality.json',
     reportMarkdown: args.reportMarkdown || '.omx/reports/phase3-dataset-quality.md',
     refreshUniverse: args.refreshUniverse === true,
   };
+  assertPhase3DatasetArgs({ startDate: config.startDate, endDate: config.endDate });
   const universe = await loadUniverse(
     config.universeFile,
     config.refreshUniverse,

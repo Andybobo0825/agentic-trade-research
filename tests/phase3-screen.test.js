@@ -14,6 +14,7 @@ const FEATURES = Object.freeze({
   hma9SlopePct: 0.8,
   hma20SlopePct: 0.2,
   closeToHma9Pct: 2,
+  averageTurnover: 50_000_000,
   averageTurnoverLog10: Math.log10(50_000_000),
   momentum5Pct: 8,
   closePosition: 0.6,
@@ -55,6 +56,22 @@ test('rejects execution and unknown arguments', () => {
   for (const key of ['live', 'order', 'placeOrder']) {
     assert.throws(() => assertPhase3ScreenArgs({ [key]: true }), new RegExp(`forbids ${key}`));
   }
+});
+
+test('fails clearly when no point-in-time evidence produced candidates', async () => {
+  await assert.rejects(
+    () => runPhase3Screen({}, dependencies([])),
+    /no Phase 3 candidates.*phase3-dataset/i,
+  );
+});
+
+test('fails clearly when the requested window has no candidate observations', async () => {
+  await assert.rejects(
+    () => runPhase3Screen({ startDate: '2026-07-01' }, dependencies([
+      candidate('2330', '2026-06-30'),
+    ])),
+    /no Phase 3 observations.*requested window/i,
+  );
 });
 
 test('screens only the latest date by default and ranks eligible candidates deterministically', async () => {

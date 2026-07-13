@@ -13,7 +13,7 @@ This change is intentionally limited to Phase 3 strategy selection and its publi
 1. Phase 3 becomes a deterministic screen, not a probability model.
 2. A signal may use only information available at its decision time.
 3. Historical outcomes are evaluated after signal generation and must not be required to create a signal.
-4. Market breadth, peer context, foreign-flow continuity, and similar context may rank or softly penalize candidates; they do not silently become new hard gates.
+4. Market breadth, foreign-flow continuity, and similar point-in-time context may rank or softly penalize candidates; they do not silently become new hard gates. IC.TPEX classification is post-candidate context only until a point-in-time numeric peer feature is explicitly implemented.
 5. The fixed anti-chase controls remain `maximumMomentum5Pct = 18` and `maximumClosePosition = 0.72`.
 6. The base technical screen retains HMA9 trigger, HMA20 regime, maximum 6% distance above HMA9, and minimum average turnover of TWD 20 million.
 7. The strategy is read-only. No Phase 3 module or command may import or call a broker order API.
@@ -72,7 +72,7 @@ Generic point-in-time storage, market readers, peer mapping, cost functions, and
 ## Data Flow
 
 1. Read market and institutional records whose `availableAt` is not later than the decision time.
-2. Compute HMA9, HMA20, turnover, volume, momentum, close position, foreign-flow continuity, and context diagnostics.
+2. Compute HMA9, HMA20, raw turnover, volume, momentum, close position, foreign-flow continuity, and context diagnostics.
 3. Create an immutable decision-time candidate without outcome fields.
 4. Apply the Phase 3 hard gates.
 5. Apply bounded context adjustments only to ranking.
@@ -81,7 +81,9 @@ Generic point-in-time storage, market readers, peer mapping, cost functions, and
 
 ## Error Handling and Safety
 
-- Invalid dates, non-finite required values, missing HMA history, or missing liquidity evidence fail closed with explicit reason codes.
+- Invalid dates, non-numeric or non-finite required values, missing HMA history, invalid daily high-low range, or missing raw liquidity evidence fail closed with explicit reason codes.
+- An empty candidate artifact is a data-readiness error, not a successful screen with zero stocks.
+- The default collection end date is derived at runtime from the latest completed Taiwan evidence day rather than frozen in source.
 - Optional context absence produces a neutral adjustment and a diagnostic, not fabricated data.
 - CLI and MCP schemas reject `live`, `order`, `placeOrder`, and equivalent execution arguments.
 - A static dependency test scans the Phase 3 entry graph for order-API imports and calls.

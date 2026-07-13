@@ -18,7 +18,7 @@
 
 - [ ] **Step 1: Write failing tests for the frozen hard gates**
 
-Create fixtures whose `featureNames` and `features` include `hma9SlopePct`, `hma20SlopePct`, `closeToHma9Pct`, `averageTurnoverLog10`, `momentum5Pct`, `closePosition`, `volumeRatio`, `relativeMomentum3Pct`, `marketBreadth1d`, `foreignBuyStreak`, and `foreignThreeDayIntensity`. Assert that the baseline passes and each boundary fails with a stable code:
+Create fixtures whose `featureNames` and `features` include `hma9SlopePct`, `hma20SlopePct`, `closeToHma9Pct`, raw `averageTurnover`, `momentum5Pct`, `closePosition`, `volumeRatio`, `relativeMomentum3Pct`, `marketBreadth1d`, `foreignBuyStreak`, and `foreignThreeDayIntensity`. `averageTurnoverLog10` may remain diagnostic-only and must never be reconstructed into the hard liquidity gate. Assert that the baseline passes and each boundary fails with a stable code:
 
 ```js
 assert.equal(evaluatePhase3Filter(baseline).eligible, true);
@@ -56,7 +56,7 @@ export function evaluatePhase3Filter(candidate, config = PHASE3_FILTER_CONFIG) {
 }
 ```
 
-Required data that is missing or non-finite must produce a stable `missing_<feature>` reason. Soft adjustments must be individually bounded, deterministic, and unable to change `eligible`.
+Required data that is missing, non-numeric, or non-finite must produce a stable `missing_<feature>` reason. Candidate construction must omit sessions with no valid daily high-low range instead of fabricating `closePosition`. Soft adjustments must be individually bounded, deterministic, and unable to change `eligible`.
 
 - [ ] **Step 4: Run the test and verify GREEN**
 
@@ -80,7 +80,7 @@ Update candidate fixtures to assert the latest eligible market session can produ
 
 ```js
 const latest = candidates.at(-1);
-assert.equal(latest.decisionDate, '2026-06-30');
+assert.equal(latest.decisionDate, finalFixtureSession.date);
 for (const field of ['label', 'outcomeTime', 'outcomePath', 'entryPrice', 'exitPrice',
   'leadDays', 'falseSignal', 'maximumThreeSessionReturnPct']) {
   assert.equal(Object.hasOwn(latest, field), false);

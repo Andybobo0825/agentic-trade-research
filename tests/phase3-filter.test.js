@@ -10,6 +10,7 @@ const BASE_FEATURES = Object.freeze({
   hma9SlopePct: 0.8,
   hma20SlopePct: 0.2,
   closeToHma9Pct: 2,
+  averageTurnover: 50_000_000,
   averageTurnoverLog10: Math.log10(50_000_000),
   momentum5Pct: 8,
   closePosition: 0.6,
@@ -60,7 +61,7 @@ test('fails each approved technical boundary with stable reason codes', () => {
     ['hma20SlopePct', -0.001, 'hma20_regime_not_bullish'],
     ['closeToHma9Pct', -0.001, 'close_below_hma9'],
     ['closeToHma9Pct', 6.001, 'close_too_far_above_hma9'],
-    ['averageTurnoverLog10', Math.log10(19_999_999), 'average_turnover_below_minimum'],
+    ['averageTurnover', 19_999_999, 'average_turnover_below_minimum'],
     ['momentum5Pct', 18.001, 'momentum_5d_above_maximum'],
     ['closePosition', 0.721, 'close_position_above_maximum'],
   ];
@@ -74,7 +75,7 @@ test('fails each approved technical boundary with stable reason codes', () => {
 
 test('accepts exact inclusive upper boundaries', () => {
   const result = evaluatePhase3Filter(candidate({
-    averageTurnoverLog10: Math.log10(20_000_000),
+    averageTurnover: 20_000_000,
     hma20SlopePct: 0,
     closeToHma9Pct: 6,
     momentum5Pct: 18,
@@ -92,6 +93,14 @@ test('fails closed when a required decision-time feature is missing', () => {
   const result = evaluatePhase3Filter(row);
   assert.equal(result.eligible, false);
   assert.deepEqual(result.reasons, ['missing_momentum5Pct']);
+});
+
+test('fails closed when required values are not JSON numbers', () => {
+  for (const value of [null, '', true, false, '0.5']) {
+    const result = evaluatePhase3Filter(candidate({ closePosition: value }));
+    assert.equal(result.eligible, false, String(value));
+    assert.deepEqual(result.reasons, ['missing_closePosition'], String(value));
+  }
 });
 
 test('keeps optional context soft and unable to override a hard failure', () => {

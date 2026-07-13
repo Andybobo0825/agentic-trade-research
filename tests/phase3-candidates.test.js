@@ -111,7 +111,7 @@ test('candidate generation is deterministic and contains only technical decision
   assert.ok(first.length > 0);
   for (const name of [
     'hma9AccelerationPct', 'relativeMomentum3Pct', 'marketBreadth1d',
-    'foreignBuyStreak', 'momentum5Pct', 'closePosition',
+    'foreignBuyStreak', 'momentum5Pct', 'averageTurnover', 'closePosition',
   ]) assert.ok(PHASE3_CANDIDATE_FEATURE_NAMES.includes(name), name);
   for (const row of first) {
     assert.deepEqual(row.featureNames, [...PHASE3_CANDIDATE_FEATURE_NAMES]);
@@ -121,6 +121,16 @@ test('candidate generation is deterministic and contains only technical decision
     assert.ok(row.decisionPrice > 0);
     assert.ok(row.technicalEvidenceHashes.length > 0);
   }
+});
+
+test('does not fabricate close position when the daily range is unavailable', () => {
+  const records = technicalFixture();
+  const latestMarket = records.filter((record) => record.source === 'finmind:market').at(-1);
+  delete latestMarket.payload.max;
+  delete latestMarket.payload.min;
+
+  const candidates = buildPhase3Candidates(records);
+  assert.equal(candidates.some((row) => row.decisionDate === latestMarket.payload.date), false);
 });
 
 test('future commentary cannot affect an earlier candidate', () => {
@@ -234,5 +244,5 @@ test('rebuilds a candidate artifact when the evidence manifest changes', async (
 });
 
 test('candidate metadata uses the outcome-free schema version', () => {
-  assert.equal(PHASE3_CANDIDATE_SCHEMA_VERSION, 3);
+  assert.equal(PHASE3_CANDIDATE_SCHEMA_VERSION, 4);
 });

@@ -49,6 +49,7 @@ test('collector persists accepted evidence and reports partial provider gaps', a
   assert.equal(result.recordsWritten, 1);
   assert.equal(result.coverage.market, 1);
   assert.equal(result.coverage.institutional, 0);
+  assert.equal(result.executionMode, 'read_only');
   assert.equal(result.orderApiSafe, true);
   assert.deepEqual(result.excluded.map((row) => row.reason), ['provider_error']);
   assert.equal((await readEvidenceManifest(root)).length, 1);

@@ -10,23 +10,22 @@
 - **Repo-native dynamic memory**：`memory-sync` 會把可長期保存的決策、驗證修復、失誤復盤與里程碑分層寫入 `.omx/memory/hot.md`、`warm.md`、`archive.md`、`obsolete.md`，避免每次 session 載入過期脈絡。
 
 
-## Standard Workflow 1.01
+## Standard Workflow 1.3
 
-目前 repo 的標準流程來源是 [`docs/standard-workflow-v1.md`](docs/standard-workflow-v1.md)。若舊對話、舊 backtest、舊策略名稱與該文件衝突，以 Standard Workflow 1.01 為準。
+目前 repo 的標準流程來源是 [`docs/standard-workflow-v1.md`](docs/standard-workflow-v1.md)。若舊對話、舊 backtest 或舊策略名稱與該文件衝突，以 Standard Workflow 1.3 為準。
 
 標準版只保留：
 
-- MVP：`R18H6_VOL_exit_only_WR3`
-- WR3：買進當天若最高價達買價 +2%，但收盤未站回買價，視為假突破並以 +2% 目標價先收小利。
-- 台股資料：Shioaji primary，其他來源只作 fallback
-- ETF 籌碼：`xiaoyu-etf` 只作 ETF 持股 / 主動式 ETF 推估買賣輔助，不取代 Shioaji 價量
-- 股癌題材：whatmkreallysaid 完整逐字稿優先；只有明確要求最新資訊才走 SoundOn RSS -> 本機 worker -> S3 manifest
-- LINE bridge：response-file contract first；新 session 才讀 handoff
+- 唯一主策略：`phase3_stability`
+- 唯一技術決策入口：read-only `phase3-screen`
+- 凍結門檻：HMA9 上升、HMA20 非負、收盤不低於 HMA9、距離不超過 6%、20 日平均成交額至少 2,000 萬、五日動能不超過 18%、收盤位置不超過 0.72
+- 外部新聞、法說、財報、股癌與 ETF 籌碼只在技術候選成立後作信心加權
+- 不含預測模型、promotion workflow 或自動下單；使用者手動交易
 
 - 架構流程圖 source：[`docs/diagrams/standard-workflow-v1.drawio`](docs/diagrams/standard-workflow-v1.drawio)
 - 架構流程圖 SVG：[`docs/diagrams/standard-workflow-v1.svg`](docs/diagrams/standard-workflow-v1.svg)
 
-![Trade Repo Standard Workflow 1.01 Architecture](docs/diagrams/standard-workflow-v1.svg)
+![Trade Repo Standard Workflow 1.3 Architecture](docs/diagrams/standard-workflow-v1.svg)
 
 ## 作品集版架構總覽：Repo-native Agent Harness
 
@@ -147,15 +146,15 @@ npm run shioaji:ticks -- --ticker 2330 --date 2026-06-18 --last 10 --format mark
 
 Shioaji 工具只接官方 server 的行情端點：`/api/v1/data/snapshots`、`/api/v1/data/ticks`、`/api/v1/stream/subscribe` + `/api/v1/stream/data/bidask_stk`。本 repo 另外提供 `src/order-guard.js`，未來若新增下單路徑，必須同時設定 `TRADE_ORDER_ENABLED=1` 與 `TRADE_ORDER_CONFIRM=I_UNDERSTAND_LIVE_ORDER_RISK` 才能通過 guard；目前新增工具皆為 `readOnly: true`，不會送單。
 
-LINE/trad session handoff：[`docs/line-session-handoff.md`](docs/line-session-handoff.md) 是新 LINE session 的交接 runbook；LINE bridge 預設只在同一個 bridge/agent session 的第一個一般 prompt 注入一次「讀檔 reference」，讓 agent 從 repo 讀取 handoff，而不是把整份文件塞進 context window。它要求 agent 先用已接好的 API、必要時抓 Fugle 即時報價，並在給進場建議前跑 `daily-decision-study` 與 `signal-study`，同時降低每次啟動服務的 token 消耗。
+LINE/trad session handoff：[`docs/line-session-handoff.md`](docs/line-session-handoff.md) 是新 LINE session 的交接 runbook；LINE bridge 預設只在同一個 bridge/agent session 的第一個一般 prompt 注入一次「讀檔 reference」，讓 agent 從 repo 讀取 handoff，而不是把整份文件塞進 context window。它要求 agent 先用已接好的 API 更新 point-in-time evidence，再以 `phase3-screen` 作唯一技術決策入口；其他 study 只供歷史診斷。
 
-台股近期訊號研究範例：
+台股歷史診斷研究範例（不取代 Phase 3）：
 
 ```sh
 node src/cli.js signal-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
 ```
 
-`signal-study` 把 HMA 訊號、成交量確認、**流動性確認**、法人確認、買訊後 3/5/10 日表現、假突破次數、最近一次訊號可信度，以及「追 / 等回測 / 避開」建議包成同一份 CLI/MCP 輸出。台股 `research-pack` 預設會使用 `signal-study` 作為技術與籌碼確認層。
+`signal-study` 是歷史診斷工具，把 HMA 訊號、成交量確認、**流動性確認**、法人確認、買訊後 3/5/10 日表現、假突破次數、最近一次訊號可信度，以及「追 / 等回測 / 避開」建議包成同一份 CLI/MCP 輸出。它不得作為當下主策略 gate 或覆蓋 `phase3-screen`。
 
 籌碼篩選回測範例：
 

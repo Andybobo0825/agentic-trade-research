@@ -35,24 +35,19 @@ Notes:
 
 ## Required stock / ETF analysis flow
 
-For every Taiwan ticker or ETF the user asks about, run the quote plus both studies before giving entry advice. Use `phase3_stability` as the main strategy lens: 技術候選先成立，再把新聞、法說、財報、股癌等外部資訊作信心加權；外部資訊不得把不合格技術訊號硬推成買進。
-
-```sh
-node src/cli.js fugle-quote --ticker <TICKER> --format markdown
-node src/cli.js daily-decision-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
-```
-
-When the question is workflow status or candidate generation rather than a single ticker, use the Phase 3 read-only commands:
+`phase3_stability` 是唯一主策略，`phase3-screen` 是唯一技術決策入口。先確認 point-in-time evidence 已更新，再執行篩選；只有 ticker 成為合格技術候選，才查新聞、法說、財報、股癌與 ETF 籌碼。外部資訊只作信心加權，不得把不合格技術訊號硬推成買進。
 
 ```sh
 node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
 node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
+node src/cli.js fugle-quote --ticker <TICKER> --format markdown
 ```
 
-`phase3-screen` is a deterministic technical filter. It is read-only, does not train a model, and must never trigger real order APIs.
+`phase3-screen` 是 read-only deterministic technical filter，不訓練模型、不使用未來 outcome，也不得觸發真實下單 API。若 evidence 不存在或沒有候選 artifact，先修復 `phase3-dataset`；不得把空結果解讀為市場沒有標的。
 
-Add the ETF holding lens when the question involves ETF, 投信/主動式 ETF, or whether institutions/ETFs are adding a stock:
+`daily-decision-study`、`signal-study`、`chip-study` 只屬歷史診斷 / 回測工具，可用來研究失敗案例，但不得成為當下 Phase 3 合格條件、覆蓋篩選結果或產生第二套交易策略。
+
+ETF / 籌碼輔助只在 Phase 3 候選成立後使用：
 
 ```sh
 node src/cli.js xiaoyu-etf --mode stock --ticker <TICKER> --format markdown
@@ -61,26 +56,14 @@ node src/cli.js xiaoyu-etf --mode etf --etf <ETF_CODE> --format markdown
 
 Treat `xiaoyu-etf` as auxiliary ETF-holding / inferred ETF-flow evidence only. It does not replace Shioaji price/volume and is not official 投信買賣超.
 
-Also fetch the latest quote when today's price/action matters:
-
-```sh
-node src/cli.js fugle-quote --ticker <TICKER> --format markdown
-```
-
-If multiple tickers are mentioned, repeat the quote and both studies for each ticker unless the question is only a broad market question.
-
-If a study cannot run because the product is too new, data rows are insufficient, the market is closed, or the provider lacks that symbol:
-
-1. Say exactly which command/data source failed or was insufficient.
-2. Still use whatever quote / official snapshot / available history is available.
-3. Lower confidence and avoid heavy-position recommendations.
+若同時詢問多檔股票，只需對相同 evidence 執行一次 `phase3-screen`，再逐檔查即時 quote 與外部信心因子。若 Phase 3 資料不足，必須明示缺口並停止進場判斷，不能改用歷史 study 代替主策略。
 
 ## Synthesis template
 
 Use this answer structure for LINE:
 
 1. **今日資料摘要** — latest quote/date, change %, intraday high/low when available.
-2. **Phase 3 技術結論** — `daily-decision-study` + `signal-study` interpreted through `phase3_stability`; separate direct tool output from inference.
+2. **Phase 3 技術結論** — 只引用 `phase3-screen` 的 eligible / rejection reasons 與 decision date；它是唯一決策入口。
 3. **外部信心加權 / ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
 4. **進場判斷** — can enter / wait / avoid chasing; include conditions.
 5. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
@@ -94,22 +77,16 @@ Preferred wording:
 
 ## Quick examples
 
-Single ticker:
+先更新資料並執行唯一篩選：
+
+```sh
+node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
+node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
+```
+
+再對合格候選逐檔補即時價與外部信心資料：
 
 ```sh
 node src/cli.js fugle-quote --ticker 2330 --format markdown
-node src/cli.js daily-decision-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
-```
-
-ETF pair such as 0050 and 00981A:
-
-```sh
-node src/cli.js fugle-quote --ticker 0050 --format markdown
-node src/cli.js daily-decision-study --ticker 0050 --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker 0050 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
-
-node src/cli.js fugle-quote --ticker 00981A --format markdown
-node src/cli.js daily-decision-study --ticker 00981A --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker 00981A --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
+node src/cli.js xiaoyu-etf --mode stock --ticker 2330 --format markdown
 ```

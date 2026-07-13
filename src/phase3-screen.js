@@ -110,6 +110,9 @@ export async function runPhase3Screen(args = {}, dependencies = {}) {
   });
   const candidates = await readCandidates(artifact.candidateArtifact || candidateArtifact);
   if (!Array.isArray(candidates)) throw new TypeError('Phase 3 candidate artifact must be an array');
+  if (candidates.length === 0) {
+    throw new Error('No Phase 3 candidates are available; run phase3-dataset with valid point-in-time evidence first');
+  }
 
   const startDate = exactDate(args.startDate, 'startDate');
   const endDate = exactDate(args.endDate, 'endDate');
@@ -121,6 +124,9 @@ export async function runPhase3Screen(args = {}, dependencies = {}) {
     if (!startDate && !endDate) return date === latestDate;
     return (!startDate || date >= startDate) && (!endDate || date <= endDate);
   });
+  if (observations.length === 0) {
+    throw new Error('No Phase 3 observations are available in the requested window');
+  }
   const evaluated = observations.map((row) => publicCandidate(row, evaluatePhase3Filter(row)));
   const eligible = evaluated.filter((row) => row.eligible).sort(compareEligible);
   const rejected = evaluated.filter((row) => !row.eligible).sort(compareRejected);

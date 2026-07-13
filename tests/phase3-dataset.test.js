@@ -32,7 +32,7 @@ test('dataset freezes a read-only normal-equity universe and reports incomplete 
       };
     },
     collect: async ({ tickers }) => ({
-      executionMode: 'demo_replay',
+      executionMode: 'read_only',
       orderApiSafe: true,
       tickers,
       recordsWritten: 0,
@@ -67,12 +67,35 @@ test('dataset reuses the frozen universe unless refresh is explicit', async () =
       maxPage: 1,
       data: [{ securityType: 'STK', exchange: 'TSE', code: '2330', name: '台積電', unit: 1000 }],
     }),
-    collect: async () => ({ executionMode: 'demo_replay', recordsWritten: 0, excluded: [] }),
+    collect: async () => ({ executionMode: 'read_only', recordsWritten: 0, excluded: [] }),
   };
   await runPhase3Dataset(args, dependencies);
   dependencies.getContracts = async () => { throw new Error('must reuse frozen universe'); };
   const second = await runPhase3Dataset(args, dependencies);
   assert.equal(second.universe.tickerCount, 1);
+});
+
+test('dataset defaults to the latest completed Taiwan evidence date instead of a frozen date', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'phase3-dataset-current-date-'));
+  let collectedEndDate;
+  await runPhase3Dataset({
+    universeFile: join(dir, 'universe.json'),
+    evidenceRoot: join(dir, 'evidence'),
+    reportJson: join(dir, 'report.json'),
+    reportMarkdown: join(dir, 'report.md'),
+  }, {
+    now: () => new Date('2026-07-13T12:00:00.000Z'),
+    getContracts: async () => ({
+      readOnly: true,
+      maxPage: 1,
+      data: [{ securityType: 'STK', exchange: 'TSE', code: '2330', name: '台積電', unit: 1000 }],
+    }),
+    collect: async ({ endDate }) => {
+      collectedEndDate = endDate;
+      return { executionMode: 'read_only', recordsWritten: 0, excluded: [] };
+    },
+  });
+  assert.equal(collectedEndDate, '2026-07-13');
 });
 
 test('dataset reproduction reuses frozen evidence without provider collection', async () => {
@@ -145,7 +168,7 @@ test('dataset saves a deterministic publication-time audit sample for every sour
           payload: { source },
         });
       }
-      return { executionMode: 'demo_replay', recordsWritten: 2, excluded: [] };
+      return { executionMode: 'read_only', recordsWritten: 2, excluded: [] };
     },
   });
 
@@ -180,7 +203,7 @@ test('dataset quality metrics describe decision-time observations without model 
       readOnly: true, maxPage: 1,
       data: [{ securityType: 'STK', exchange: 'TSE', code: '2330', name: '台積電', unit: 1000 }],
     }),
-    collect: async () => ({ executionMode: 'demo_replay', recordsWritten: 0, excluded: [] }),
+    collect: async () => ({ executionMode: 'read_only', recordsWritten: 0, excluded: [] }),
     ensureCandidates: async ({ candidateArtifact, evidenceManifestHash }) => ({
       candidateArtifact,
       candidateCount: candidates.length,
@@ -212,7 +235,7 @@ test('dataset generates the technical candidate artifact before evaluating quali
       maxPage: 1,
       data: [{ securityType: 'STK', exchange: 'TSE', code: '2330', name: '台積電', unit: 1000 }],
     }),
-    collect: async () => ({ executionMode: 'demo_replay', recordsWritten: 0, excluded: [] }),
+    collect: async () => ({ executionMode: 'read_only', recordsWritten: 0, excluded: [] }),
     ensureCandidates: async ({ candidateArtifact }) => {
       generationCalls += 1;
       await mkdir(evidenceRoot, { recursive: true });

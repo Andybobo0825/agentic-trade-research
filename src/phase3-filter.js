@@ -20,7 +20,7 @@ const REQUIRED_FEATURES = Object.freeze([
   'hma9SlopePct',
   'hma20SlopePct',
   'closeToHma9Pct',
-  'averageTurnoverLog10',
+  'averageTurnover',
   'momentum5Pct',
   'closePosition',
 ]);
@@ -40,7 +40,10 @@ function featureMap(candidate) {
   if (!Array.isArray(names) || !Array.isArray(values) || names.length !== values.length) {
     return new Map();
   }
-  return new Map(names.map((name, index) => [String(name), Number(values[index])]));
+  return new Map(names.map((name, index) => {
+    const value = values[index];
+    return [String(name), typeof value === 'number' && Number.isFinite(value) ? value : Number.NaN];
+  }));
 }
 
 function optionalFeature(features, name, fallback = 0) {
@@ -68,12 +71,9 @@ export function evaluatePhase3Filter(candidate, config = PHASE3_FILTER_CONFIG) {
   const hma9SlopePct = features.get('hma9SlopePct');
   const hma20SlopePct = features.get('hma20SlopePct');
   const closeToHma9Pct = features.get('closeToHma9Pct');
-  const averageTurnoverLog10 = features.get('averageTurnoverLog10');
+  const averageTurnover = features.get('averageTurnover');
   const momentum5Pct = features.get('momentum5Pct');
   const closePosition = features.get('closePosition');
-  const averageTurnover = Number.isFinite(averageTurnoverLog10)
-    ? Math.round(10 ** averageTurnoverLog10)
-    : null;
 
   if (Number.isFinite(hma9SlopePct) && !(hma9SlopePct > config.minimumHma9SlopePct)) {
     reasons.push('hma9_not_rising');

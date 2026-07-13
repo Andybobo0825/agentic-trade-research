@@ -146,7 +146,7 @@ export async function collectPhase3PointInTimeData(args = {}, dependencies = {})
 
   return {
     schemaVersion: 1,
-    executionMode: 'demo_replay',
+    executionMode: 'read_only',
     recordsWritten,
     excluded,
     coverage: Object.fromEntries(adapters.map(({ key }) => [

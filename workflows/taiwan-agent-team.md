@@ -1,6 +1,6 @@
 # Taiwan Agent Team Workflow
 
-A Dexter-inspired Taiwan investment research harness that **adds** an agent-team layer on top of the existing repo tools. It does not delete, replace, or weaken Standard Workflow 1.01, Shioaji, preopen, Xiaoyu ETF, or MVP backtest flows.
+A Dexter-inspired Taiwan investment research harness that **adds** an agent-team layer on top of the existing repo tools. It does not delete, replace, or weaken Standard Workflow 1.3, `phase3_stability`, Shioaji, preopen, or Xiaoyu ETF. `phase3-screen` remains the sole technical decision path.
 
 ## Command
 
@@ -25,7 +25,7 @@ This is a **Dexter-inspired deterministic orchestration layer**, not a separate 
 - planner: decomposes the research question into reproducible tasks.
 - data-agent: inventories `.omx` caches, reports, backtests, and repo workflows.
 - market-agent: calls Shioaji snapshots, preopen, and sector flow when online.
-- strategy-agent: reads MVP/backtest artifacts and runs per-ticker research packs.
+- strategy-agent: reads `phase3-screen` output; historical studies remain diagnostics and cannot override eligibility.
 - etf-agent: integrates Xiaoyu ETF lens.
 - scenario-agent: produces bull/base/bear scenario triggers.
 - verifier: writes JSONL scratchpad and records data gaps.

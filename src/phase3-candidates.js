@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { readEvidenceManifest } from './point-in-time-store.js';
 import { calculateHullMovingAverage } from './indicators.js';
 
-export const PHASE3_CANDIDATE_SCHEMA_VERSION = 3;
+export const PHASE3_CANDIDATE_SCHEMA_VERSION = 4;
 
 export const PHASE3_CANDIDATE_FEATURE_NAMES = Object.freeze([
   'hma9SlopePct',
@@ -13,6 +13,7 @@ export const PHASE3_CANDIDATE_FEATURE_NAMES = Object.freeze([
   'closeToHma9Pct',
   'volumeRatio',
   'volumeThreeDayAcceleration',
+  'averageTurnover',
   'averageTurnoverLog10',
   'momentum1Pct',
   'momentum3Pct',
@@ -231,8 +232,11 @@ function candidateFor(market, foreignByDate, index, options) {
     (sum, record) => sum + finite(record.payload?.Trading_Volume),
     0,
   ) / volumeWindow.length;
-  const high = finite(current.max ?? current.high, close);
-  const low = finite(current.min ?? current.low, close);
+  const rawHigh = current.max ?? current.high;
+  const rawLow = current.min ?? current.low;
+  const high = typeof rawHigh === 'number' && Number.isFinite(rawHigh) ? rawHigh : null;
+  const low = typeof rawLow === 'number' && Number.isFinite(rawLow) ? rawLow : null;
+  if (!Number.isFinite(high) || !Number.isFinite(low) || !(high > low)) return null;
   const range = high - low;
   const foreign = foreignFeatures(foreignByDate, market, index);
   const momentum3Pct = pctChange(close, finite(market[index - 3]?.payload?.close));
@@ -263,6 +267,7 @@ function candidateFor(market, foreignByDate, index, options) {
     volumeThreeDayAcceleration: priorThreeVolume > 0
       ? finite(current.Trading_Volume) / priorThreeVolume
       : 0,
+    averageTurnover,
     averageTurnoverLog10: Math.log10(Math.max(1, averageTurnover)),
     momentum1Pct: pctChange(close, finite(market[index - 1]?.payload?.close)),
     momentum3Pct,
@@ -271,7 +276,7 @@ function candidateFor(market, foreignByDate, index, options) {
     marketMedianMomentum3Pct: marketRegime.values.medianMomentum3Pct,
     relativeMomentum3Pct: momentum3Pct - marketRegime.values.medianMomentum3Pct,
     intradayRangePct: close > 0 ? range / close * 100 : 0,
-    closePosition: range > 0 ? (close - low) / range : 0.5,
+    closePosition: (close - low) / range,
     ...foreign.values,
   };
   const featureValues = PHASE3_CANDIDATE_FEATURE_NAMES.map((name) => round(rawFeatures[name]));

@@ -34,6 +34,9 @@ Git history was not rewritten. Removed research remains auditable through histor
 - Phase 3 uses only information available by `decisionTime`.
 - Future sessions are not required or emitted when generating a signal.
 - Optional context can rank but cannot override a hard technical failure.
+- Hard liquidity eligibility uses raw `averageTurnover`; logarithmic turnover is diagnostic only.
+- Missing or malformed required numbers, invalid daily ranges, and empty candidate artifacts fail closed.
+- Dataset collection derives its default end date at runtime from the latest completed Taiwan evidence day.
 - `phase3-screen` rejects execution-shaped arguments.
 - Static tests verify the retained Phase 3 entry graph contains no order API vocabulary.
 

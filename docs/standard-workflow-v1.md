@@ -29,7 +29,7 @@ node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format mark
 1. Phase 3 是確定性技術篩選器，不訓練模型、不輸出機率，也不用未來行情產生當下訊號。
 2. 候選只使用 decision time 當時已公開的市場與法人資料。
 3. 外部資訊只在技術候選出現後加權投資信心；新聞、法說、財報、股癌及產業敘事不得把不合格技術訊號硬推成買進。
-4. 市場 breadth、IC.TPEX peer context、外資連續性及量能只作有上限的排序加減分，不能覆蓋硬性技術失敗。
+4. 市場 breadth、外資連續性及量能只作有上限的排序加減分，不能覆蓋硬性技術失敗；IC.TPEX 目前只在候選成立後提供產業分類與外部信心背景，不進入 Phase 3 soft score。
 5. 歷史收益、成本、回撤與命中率必須在訊號凍結後另行評估，不能回寫訊號。
 6. 主流程沒有自動下單功能；使用者仍手動決定是否交易。
 
@@ -91,12 +91,10 @@ Shioaji failure gate 標準處理：
 
 單一股票分析主流程：
 
-```bash
-node src/cli.js fugle-quote --ticker <TICKER> --format markdown
-node src/cli.js daily-decision-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
-node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
-```
+1. 更新 point-in-time evidence。
+2. 執行 `phase3-screen`；它是唯一技術決策入口。
+3. 只對 eligible 候選補即時 quote、產業鏈與外部信心因子。
+4. `daily-decision-study`、`signal-study`、`chip-study` 僅供歷史診斷，不得覆蓋 Phase 3 或形成第二套策略。
 
 資料建置 / 候選池工具：
 
@@ -115,7 +113,7 @@ Source order:
 
 1. 新聞 / 法說 / 財報 / 股癌只在技術候選成立後使用。
 2. 股癌預設優先查 `https://whatmkreallysaid.com/`；只有「最新一集 / 最新資訊 / 最近股癌」才先讀官方 SoundOn RSS。
-3. 若網站尚未更新到最新 EP，才執行 `../stock-data/scripts/run_gooaye_worker.sh` 並讀 S3 manifest。
+3. 若需要股癌逐字稿，依 `docs/gooaye-transcript-agent-handoff.md` 的獨立研究流程取得；主策略文件不啟動外部 sidecar。
 4. 題材結論必須回到 Shioaji 量價、IC.TPEX 產業鏈、同族群同步性與 Phase 3 技術訊號。
 
 ## 4. IC.TPEX 產業鏈 Mapping Workflow

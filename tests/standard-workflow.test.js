@@ -15,6 +15,8 @@ test('standard workflow promotes phase3_stability as the sole main strategy', ()
   assert.match(workflow, /read_only/);
   assert.match(workflow, /不得觸發真實下單 API/);
   assert.doesNotMatch(workflow, /phase3-demo-promotion|logistic|prediction threshold|walk-forward promotion/i);
+  assert.doesNotMatch(workflow, /run_gooaye_worker\.sh/);
+  assert.doesNotMatch(workflow, /IC\.TPEX peer context.*排序/);
   assert.doesNotMatch(workflow, /唯一有效 MVP：`R18H6_VOL_exit_only_WR3`/);
 });
 
@@ -39,5 +41,15 @@ test('line handoff includes phase3 as the main strategy step', () => {
   assert.match(handoff, /phase3-screen/);
   assert.match(handoff, /技術候選/);
   assert.match(handoff, /外部資訊.*信心加權/);
+  assert.match(handoff, /唯一.*決策.*phase3-screen|phase3-screen.*唯一.*決策/);
+  assert.match(handoff, /daily-decision-study.*歷史|歷史.*daily-decision-study/);
+  assert.doesNotMatch(handoff, /Phase 3 技術結論.*daily-decision-study/);
   assert.doesNotMatch(handoff, /phase3-demo-promotion|logistic|walk-forward/i);
+});
+
+test('top-level guidance converges on Standard Workflow 1.3 and Phase 3', () => {
+  const publicGuidance = `${read('README.md')}\n${read('workflows/taiwan-agent-team.md')}`;
+  assert.match(publicGuidance, /Standard Workflow 1\.3/);
+  assert.match(publicGuidance, /phase3_stability/);
+  assert.doesNotMatch(publicGuidance, /Standard Workflow 1\.01|R18H6_VOL_exit_only_WR3|MVP backtest flows/i);
 });

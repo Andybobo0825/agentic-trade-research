@@ -33,6 +33,12 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+function latestCompletedTaiwanEvidenceDate(now = new Date()) {
+  const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  if (taipei.getUTCHours() < 18) taipei.setUTCDate(taipei.getUTCDate() - 1);
+  return taipei.toISOString().slice(0, 10);
+}
+
 async function writeAtomic(file, content) {
   await mkdir(dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
@@ -150,10 +156,11 @@ async function auditSourceTiming(evidenceRoot, manifest, seed = 3005) {
 
 export async function runPhase3Dataset(args = {}, dependencies = {}) {
   assertPhase3DatasetArgs(args);
+  const now = dependencies.now ? dependencies.now() : new Date();
   const config = {
     universeFile: args.universeFile || '.omx/evidence/phase3/universe.json',
     startDate: args.startDate || '2024-01-01',
-    endDate: args.endDate || '2026-06-30',
+    endDate: args.endDate || latestCompletedTaiwanEvidenceDate(now),
     evidenceRoot: args.evidenceRoot || '.omx/evidence/phase3',
     reportJson: args.reportJson || '.omx/reports/phase3-dataset-quality.json',
     reportMarkdown: args.reportMarkdown || '.omx/reports/phase3-dataset-quality.md',

@@ -32,7 +32,7 @@ US / global commands:
   phase3-screen [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--top 20] [--include-rejected] [--format markdown]
   phase3-dom-confidence --ticker 2330 [--exchange TSE|OTC] [--samples 3] [--interval-ms 5000] [--timeout-ms 3000] [--format markdown]
   xiaoyu-etf    [--mode stock|etf|rank|overview] [--ticker 2330] [--etf 00981A] [--scope active|market] [--window d1|d5|d10|d20|d60] [--direction buy|sell] [--limit 10] [--format markdown]
-  taiwan-agent-team [--query "盤前+回測+推測"] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--capital 500000] [--offline] [--format markdown]
+  taiwan-agent-team [--query "選股或分析指定股票"] [--mode auto|screen|analyze] [--detail brief|full] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--capital 500000] [--offline] [--format markdown]
   memory-sync   [--memory-dir .omx/memory] [--entry-file entries.json] [--entry "text" --date YYYY-MM-DD --category decision|verified-fix|failure-case|milestone] [--now YYYY-MM-DD] [--format markdown]
 
 Taiwan free-data commands:

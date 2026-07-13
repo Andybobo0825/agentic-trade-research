@@ -614,7 +614,7 @@ export const tools = {
     },
   },
   'taiwan-agent-team': {
-    description: 'Run a Dexter-inspired Taiwan investment research agent team: planner, data integration, scratchpad audit, backtest evidence, Shioaji/ETF/sector tools, scenario synthesis, and verification. Adds a harness without replacing existing Taiwan workflows.',
+    description: 'Run the official Standard Workflow 1.4 Taiwan agent team: conditional Phase 3 screening, external confidence research, read-only DOM, four reference prices, and verification across seven auditable lanes.',
     async run(args) {
       return buildTaiwanAgentTeam(args || {}, { runTool });
     },

@@ -21,6 +21,14 @@ test('CLI exposes Phase 3 dataset, screen, and post-research DOM confidence comm
   );
 });
 
+test('CLI exposes the official Taiwan agent-team screen/analyze workflow controls', async () => {
+  const help = await main(['help']);
+  assert.match(help, /taiwan-agent-team/);
+  assert.match(help, /--mode auto\|screen\|analyze/);
+  assert.match(help, /--detail brief\|full/);
+  assert.match(help, /--evidence-root/);
+});
+
 test('CLI hma-signal passes ticker and period into the tool', async () => {
   const originalFetch = globalThis.fetch;
   try {

@@ -130,6 +130,10 @@ test('MCP tools/list exposes taiwan-agent-team input schema', async () => {
   assert.ok(tool.inputSchema.properties.tickers);
   assert.ok(tool.inputSchema.properties.offline);
   assert.ok(tool.inputSchema.properties.capital);
+  assert.deepEqual(tool.inputSchema.properties.mode.enum, ['auto', 'screen', 'analyze', 'brief', 'full']);
+  assert.deepEqual(tool.inputSchema.properties.detail.enum, ['brief', 'full']);
+  assert.ok(tool.inputSchema.properties.evidenceRoot);
+  assert.match(tool.description, /official Standard Workflow 1\.4/i);
 });
 
 test('MCP exposes closed read-only Phase 3 schemas without promotion', async () => {

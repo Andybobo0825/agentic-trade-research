@@ -3,8 +3,16 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runPhase3Dataset } from '../src/phase3-dataset.js';
+import { assertPhase3DatasetArgs, runPhase3Dataset } from '../src/phase3-dataset.js';
 import { writeEvidenceRecord } from '../src/point-in-time-store.js';
+
+test('dataset rejects malformed and reversed collection dates', () => {
+  for (const [args, message] of [
+    [{ startDate: 'bad-date' }, /startDate must be YYYY-MM-DD/],
+    [{ endDate: '2026-02-30' }, /endDate must be YYYY-MM-DD/],
+    [{ startDate: '2026-02-01', endDate: '2026-01-01' }, /startDate must not be after endDate/],
+  ]) assert.throws(() => assertPhase3DatasetArgs(args), message);
+});
 
 test('dataset freezes a read-only normal-equity universe and reports incomplete quality', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'phase3-dataset-'));

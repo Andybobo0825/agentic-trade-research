@@ -16,10 +16,25 @@ export const PHASE3_DATASET_INPUTS = Object.freeze([
   'refreshUniverse',
 ]);
 
+function exactDate(value, name) {
+  if (value === undefined) return undefined;
+  const text = String(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new TypeError(`${name} must be YYYY-MM-DD`);
+  const [year, month, day] = text.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.toISOString().slice(0, 10) !== text) throw new TypeError(`${name} must be YYYY-MM-DD`);
+  return text;
+}
+
 export function assertPhase3DatasetArgs(args = {}) {
   const allowed = new Set(PHASE3_DATASET_INPUTS);
   for (const key of Object.keys(args)) {
     if (!allowed.has(key)) throw new Error(`phase3-dataset forbids ${key}`);
+  }
+  const startDate = exactDate(args.startDate, 'startDate');
+  const endDate = exactDate(args.endDate, 'endDate');
+  if (startDate && endDate && startDate > endDate) {
+    throw new TypeError('startDate must not be after endDate');
   }
   return args;
 }

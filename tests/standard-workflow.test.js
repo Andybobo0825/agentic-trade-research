@@ -48,8 +48,17 @@ test('line handoff includes phase3 as the main strategy step', () => {
 });
 
 test('top-level guidance converges on Standard Workflow 1.3 and Phase 3', () => {
-  const publicGuidance = `${read('README.md')}\n${read('workflows/taiwan-agent-team.md')}`;
+  const publicGuidance = [
+    read('README.md'),
+    read('workflows/taiwan-agent-team.md'),
+    read('docs/line-bridge.md'),
+    read('docs/diagrams/standard-workflow-v1.drawio'),
+    read('docs/diagrams/standard-workflow-v1.svg'),
+  ].join('\n');
   assert.match(publicGuidance, /Standard Workflow 1\.3/);
   assert.match(publicGuidance, /phase3_stability/);
-  assert.doesNotMatch(publicGuidance, /Standard Workflow 1\.01|R18H6_VOL_exit_only_WR3|MVP backtest flows/i);
+  assert.doesNotMatch(publicGuidance, /Standard Workflow 1\.01|R18H6_VOL_exit_only_WR3|MVP backtest flows|MVP strategy/i);
+  assert.doesNotMatch(publicGuidance, /runs both `daily-decision-study` plus `signal-study` before entry advice|daily-decision \+ signal/i);
+  assert.match(publicGuidance, /phase3-dataset/);
+  assert.match(publicGuidance, /phase3-screen/);
 });

@@ -118,6 +118,51 @@ function reliability(validSampleCount) {
   return 'unavailable';
 }
 
+function indexOfStrongestWall(levels) {
+  let strongestIndex = 0;
+  let strongestWeightedVolume = -Infinity;
+  levels.forEach((level, index) => {
+    const weightedVolume = level.volume * PHASE3_DOM_CONFIG.levelWeights[index];
+    if (weightedVolume > strongestWeightedVolume) {
+      strongestWeightedVolume = weightedVolume;
+      strongestIndex = index;
+    }
+  });
+  return strongestIndex;
+}
+
+function deriveReferencePrices(snapshot, score) {
+  const bidWallLevelIndex = indexOfStrongestWall(snapshot.bids);
+  const askWallLevelIndex = indexOfStrongestWall(snapshot.asks);
+  const takeProfitLevelIndex = Math.max(0, askWallLevelIndex - 1);
+  const hasLowerVisibleBid = bidWallLevelIndex < snapshot.bids.length - 1;
+  const stopLossLevelIndex = hasLowerVisibleBid
+    ? bidWallLevelIndex + 1
+    : snapshot.bids.length - 1;
+  const activeEntryOnAsk = score >= PHASE3_DOM_CONFIG.activeEntryMinimumScore;
+
+  return {
+    referencePrices: {
+      activeEntryLimit: activeEntryOnAsk ? snapshot.asks[0].price : snapshot.bids[0].price,
+      patientEntryPrice: snapshot.bids[bidWallLevelIndex].price,
+      takeProfitPrice: snapshot.asks[takeProfitLevelIndex].price,
+      stopLossPrice: snapshot.bids[stopLossLevelIndex].price,
+      stopReliability: hasLowerVisibleBid ? 'normal' : 'low',
+    },
+    referencePriceSources: {
+      activeEntrySide: activeEntryOnAsk ? 'ask' : 'bid',
+      activeEntryLevelIndex: 0,
+      bidWallLevelIndex,
+      bidWallVolume: snapshot.bids[bidWallLevelIndex].volume,
+      askWallLevelIndex,
+      askWallVolume: snapshot.asks[askWallLevelIndex].volume,
+      takeProfitLevelIndex,
+      stopLossLevelIndex,
+      snapshotCapturedAt: snapshot.capturedAt,
+    },
+  };
+}
+
 export function evaluateDomConfidence(samples) {
   const validSamples = (Array.isArray(samples) ? samples : [])
     .filter((sample) => sample?.valid === true && isFiniteNumber(sample.pressure));
@@ -143,6 +188,8 @@ export function evaluateDomConfidence(samples) {
       : 0;
   const domConfidenceScore = clamp(Math.round(50 + 40 * meanPressure + 10 * persistence), 0, 100);
 
+  const latestValidSnapshot = validSamples.at(-1);
+
   return {
     validSampleCount,
     meanPressure: round(meanPressure),
@@ -151,5 +198,6 @@ export function evaluateDomConfidence(samples) {
     domConfidenceAdjustment: confidenceAdjustment(domConfidenceScore),
     pressureLabel: confidenceLabel(domConfidenceScore),
     reliability: reliability(validSampleCount),
+    ...deriveReferencePrices(latestValidSnapshot, domConfidenceScore),
   };
 }

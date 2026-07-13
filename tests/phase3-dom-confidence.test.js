@@ -138,3 +138,76 @@ test('reports low reliability for one valid sample and unavailable for none', ()
     reliability: 'unavailable',
   });
 });
+
+test('always derives all reference prices from the latest valid DOM snapshot', () => {
+  const wallBook = book({
+    bids: [
+      { price: 100, volume: 10, diffVolume: 5 },
+      { price: 99.5, volume: 100, diffVolume: 10 },
+      { price: 99, volume: 5, diffVolume: 0 },
+    ],
+    asks: [
+      { price: 100.5, volume: 10, diffVolume: -5 },
+      { price: 101, volume: 20, diffVolume: 0 },
+      { price: 101.5, volume: 100, diffVolume: 0 },
+    ],
+  });
+  const result = evaluateDomConfidence([
+    evaluated(wallBook, '2026-07-13T02:00:00.000Z'),
+    evaluated(wallBook, '2026-07-13T02:00:05.000Z'),
+    evaluated(wallBook, '2026-07-13T02:00:10.000Z'),
+  ]);
+
+  assert.deepEqual(result.referencePrices, {
+    activeEntryLimit: 100.5,
+    patientEntryPrice: 99.5,
+    takeProfitPrice: 101,
+    stopLossPrice: 99,
+    stopReliability: 'normal',
+  });
+  assert.deepEqual(result.referencePriceSources, {
+    activeEntrySide: 'ask',
+    activeEntryLevelIndex: 0,
+    bidWallLevelIndex: 1,
+    bidWallVolume: 100,
+    askWallLevelIndex: 2,
+    askWallVolume: 100,
+    takeProfitLevelIndex: 1,
+    stopLossLevelIndex: 2,
+    snapshotCapturedAt: '2026-07-13T02:00:10.000Z',
+  });
+});
+
+test('weak DOM uses best bid for active entry without withholding other prices', () => {
+  const result = evaluateDomConfidence([
+    evaluated(bearishBook()),
+    evaluated(bearishBook()),
+    evaluated(bearishBook()),
+  ]);
+
+  assert.equal(result.domConfidenceScore < PHASE3_DOM_CONFIG.activeEntryMinimumScore, true);
+  assert.deepEqual(result.referencePrices, {
+    activeEntryLimit: 100,
+    patientEntryPrice: 100,
+    takeProfitPrice: 100.5,
+    stopLossPrice: 99.5,
+    stopReliability: 'normal',
+  });
+});
+
+test('uses lowest visible support with low stop reliability instead of inventing a price', () => {
+  const finalBook = book({
+    bids: [
+      { price: 100, volume: 10, diffVolume: 0 },
+      { price: 99.5, volume: 20, diffVolume: 0 },
+      { price: 99, volume: 100, diffVolume: 0 },
+    ],
+  });
+  const result = evaluateDomConfidence([evaluated(finalBook)]);
+
+  assert.equal(result.referencePrices.patientEntryPrice, 99);
+  assert.equal(result.referencePrices.stopLossPrice, 99);
+  assert.equal(result.referencePrices.stopReliability, 'low');
+  assert.equal(result.referencePriceSources.bidWallLevelIndex, 2);
+  assert.equal(result.referencePriceSources.stopLossLevelIndex, 2);
+});

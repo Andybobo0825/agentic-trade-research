@@ -52,11 +52,13 @@ function sha256(value) {
 
 function boundedInteger(value, name, fallback, minimum, maximum) {
   if (value === undefined) return fallback;
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+  if (typeof value !== 'number'
+    || !Number.isInteger(value)
+    || value < minimum
+    || value > maximum) {
     throw new TypeError(`${name} must be an integer from ${minimum} to ${maximum}`);
   }
-  return number;
+  return value;
 }
 
 export function assertPhase3DomArgs(args = {}) {
@@ -64,10 +66,23 @@ export function assertPhase3DomArgs(args = {}) {
   for (const key of Object.keys(args)) {
     if (!allowed.has(key)) throw new Error(`phase3-dom-confidence forbids ${key}`);
   }
-  if (!String(args.ticker || '').trim()) throw new TypeError('ticker is required');
+  if (args.ticker === undefined || args.ticker === '') throw new TypeError('ticker is required');
+  if (typeof args.ticker !== 'string') throw new TypeError('ticker must be a string');
+  if (!args.ticker.trim()) throw new TypeError('ticker is required');
+  if (args.exchange !== undefined) {
+    if (typeof args.exchange !== 'string'
+      || !['TSE', 'OTC'].includes(args.exchange.trim().toUpperCase())) {
+      throw new TypeError('exchange must be TSE or OTC');
+    }
+  }
   boundedInteger(args.samples, 'samples', PHASE3_DOM_CONFIG.samples, 1, 5);
   boundedInteger(args.intervalMs, 'intervalMs', PHASE3_DOM_CONFIG.intervalMs, 0, 60_000);
   boundedInteger(args.timeoutMs, 'timeoutMs', PHASE3_DOM_CONFIG.timeoutMs, 1, 30_000);
+  for (const name of ['reportJson', 'reportMarkdown']) {
+    if (args[name] !== undefined && typeof args[name] !== 'string') {
+      throw new TypeError(`${name} must be a string`);
+    }
+  }
   return args;
 }
 
@@ -106,10 +121,14 @@ export function evaluateDomSnapshot(orderBook, { ticker, capturedAt } = {}) {
     return invalid('missing_bid_depth', capturedAt);
   }
 
-  const bids = orderBook.bids.slice(0, PHASE3_DOM_CONFIG.levelWeights.length);
-  const asks = orderBook.asks.slice(0, PHASE3_DOM_CONFIG.levelWeights.length);
-  if (!bids.every(isValidLevel)) return invalid('invalid_bid_level', capturedAt);
-  if (!asks.every(isValidLevel)) return invalid('invalid_ask_level', capturedAt);
+  const rawBids = orderBook.bids.slice(0, PHASE3_DOM_CONFIG.levelWeights.length);
+  const rawAsks = orderBook.asks.slice(0, PHASE3_DOM_CONFIG.levelWeights.length);
+  if (!rawBids.every(isValidLevel)) return invalid('invalid_bid_level', capturedAt);
+  if (!rawAsks.every(isValidLevel)) return invalid('invalid_ask_level', capturedAt);
+  const bids = rawBids.filter((level) => level.volume > 0);
+  const asks = rawAsks.filter((level) => level.volume > 0);
+  if (bids.length === 0) return invalid('missing_positive_bid_depth', capturedAt);
+  if (asks.length === 0) return invalid('missing_positive_ask_depth', capturedAt);
   if (bids[0].price >= asks[0].price) {
     return invalid('crossed_or_locked_book', capturedAt);
   }
@@ -273,6 +292,27 @@ function defaultSleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function interpretationFor(score) {
+  if (score === null) return 'unavailable';
+  if (score >= PHASE3_DOM_CONFIG.activeEntryMinimumScore) return 'active_entry_supported';
+  if (score >= 58) return 'patient_entry_preferred';
+  if (score > 42) return 'wait_near_support';
+  return 'selling_pressure_wait';
+}
+
+function risksFor(confidence, requestedSampleCount) {
+  const risks = [
+    'visible_depth_can_change_before_manual_entry',
+    'reference_prices_are_not_guaranteed_fills',
+  ];
+  if (confidence.validSampleCount < requestedSampleCount) risks.push('partial_sample_coverage');
+  if (confidence.validSampleCount === 0) risks.push('no_valid_dom_sample');
+  if (confidence.referencePrices?.stopReliability === 'low') {
+    risks.push('stop_uses_lowest_visible_bid');
+  }
+  return risks;
+}
+
 export async function runPhase3DomConfidence(args = {}, dependencies = {}) {
   assertPhase3DomArgs(args);
   const ticker = String(args.ticker).trim();
@@ -301,9 +341,16 @@ export async function runPhase3DomConfidence(args = {}, dependencies = {}) {
   const getOrderBook = dependencies.getOrderBook || getShioajiOrderBook;
   const sleep = dependencies.sleep || defaultSleep;
   const now = dependencies.now || (() => new Date());
+  const clockMs = dependencies.clockMs || Date.now;
   const samples = [];
+  const samplingStartedAtMs = clockMs();
 
   for (let index = 0; index < requestedSampleCount; index += 1) {
+    if (index > 0) {
+      const targetStartMs = samplingStartedAtMs + index * intervalMs;
+      const waitMs = Math.max(0, targetStartMs - clockMs());
+      if (waitMs > 0) await sleep(waitMs);
+    }
     try {
       const response = await getOrderBook({ ticker, exchange, timeoutMs });
       if (response?.readOnly !== true) throw new Error('Shioaji response is not read-only');
@@ -317,7 +364,6 @@ export async function runPhase3DomConfidence(args = {}, dependencies = {}) {
         capturedAt: now().toISOString(),
       });
     }
-    if (index < requestedSampleCount - 1) await sleep(intervalMs);
   }
 
   const confidence = evaluateDomConfidence(samples);
@@ -325,6 +371,8 @@ export async function runPhase3DomConfidence(args = {}, dependencies = {}) {
     strategy: 'phase3_stability',
     command: 'phase3-dom-confidence',
     overlay: 'post_research_dom_confidence',
+    source: 'shioaji',
+    endpoint: '/api/v1/stream/data/bidask_stk',
     executionMode: 'read_only',
     readOnly: true,
     ticker,
@@ -336,6 +384,8 @@ export async function runPhase3DomConfidence(args = {}, dependencies = {}) {
     ...confidence,
     referencePrices: confidence.referencePrices || unavailableReferencePrices(),
     referencePriceSources: confidence.referencePriceSources || null,
+    interpretation: interpretationFor(confidence.domConfidenceScore),
+    risks: risksFor(confidence, requestedSampleCount),
   };
   const result = { ...core, resultHash: sha256(core) };
 
@@ -357,6 +407,8 @@ export function renderPhase3DomConfidenceMarkdown(result) {
     '',
     `- Strategy: ${result.strategy}`,
     `- Ticker: ${result.ticker}`,
+    `- Source: ${result.source}`,
+    `- Endpoint: ${result.endpoint}`,
     `- Execution mode: ${result.executionMode}`,
     `- Read only: ${result.readOnly}`,
     `- Valid samples: ${result.validSampleCount}/${result.requestedSampleCount}`,
@@ -364,6 +416,8 @@ export function renderPhase3DomConfidenceMarkdown(result) {
     `- DOM confidence score: ${result.domConfidenceScore ?? 'unavailable'}`,
     `- DOM confidence adjustment: ${result.domConfidenceAdjustment}`,
     `- Pressure: ${result.pressureLabel}`,
+    `- Interpretation: ${result.interpretation}`,
+    `- Risks: ${(result.risks || []).join(', ') || 'none'}`,
     '',
     '## Reference prices',
     '',

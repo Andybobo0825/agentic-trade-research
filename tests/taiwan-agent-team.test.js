@@ -228,6 +228,9 @@ test('external research failure does not suppress DOM, while DOM failure returns
   });
   assert.equal(failedDom.dom.reliability, 'unavailable');
   assert.ok(result.synthesis.dataGaps.some((gap) => /news unavailable|DOM unavailable/.test(gap)));
+  const markdown = renderTaiwanAgentTeamMarkdown(result);
+  assert.match(markdown, /2303 price references[\s\S]*Active entry limit: null[\s\S]*Stop-loss price: null/);
+  assert.match(markdown, /DOM gap: no valid sample; all four price fields are null/);
 });
 
 test('dataset failure prevents screening and all target research', async () => {

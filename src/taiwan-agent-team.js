@@ -383,6 +383,9 @@ export function renderTaiwanAgentTeamMarkdown(result) {
       `- Patient entry price: ${printable(row.prices?.patientEntryPrice)}`,
       `- Take-profit price: ${printable(row.prices?.takeProfitPrice)}`,
       `- Stop-loss price: ${printable(row.prices?.stopLossPrice)}`,
+      ...(row.dom?.reliability === 'unavailable'
+        ? ['- DOM gap: no valid sample; all four price fields are null']
+        : []),
     ]),
     '',
     '## Market synthesis',
@@ -658,7 +661,7 @@ function numericChange(row) {
 }
 
 function printable(value) {
-  return value === null || value === undefined ? 'unavailable' : value;
+  return value === null || value === undefined ? 'null' : value;
 }
 
 function safeJson(value) {

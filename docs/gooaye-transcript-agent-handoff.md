@@ -404,4 +404,4 @@ A run is considered successful only when all are true:
 4. 再用 Shioaji 量價、成交量、產業同步性驗證。
 5. 只有「題材熱度 + 台股量價確認」同時成立，才進入 主策略評分。
 
-目前 `trade` repo 的主策略是：`phase3_stability`（Standard Workflow 1.3）。逐字稿 worker 不需要理解或實作這套策略，只要提供乾淨、可追溯、即時的題材資料。
+目前 `trade` repo 的主策略是：`phase3_stability`（Standard Workflow 1.4）。逐字稿 worker 不需要理解或實作這套策略，只要提供乾淨、可追溯、即時的題材資料。

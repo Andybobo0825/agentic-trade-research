@@ -1,6 +1,6 @@
-# Trade Repo Standard Workflow 1.3
+# Trade Repo Standard Workflow 1.4
 
-本文件是目前 repo 的標準執行流程來源。若舊對話、舊 backtest、舊策略名稱、臨時 LINE 對話結論或研究 sidecar 與本文件衝突，以 Standard Workflow 1.3 為準。
+本文件是目前 repo 的標準執行流程來源。若舊對話、舊 backtest、舊策略名稱、臨時 LINE 對話結論或研究 sidecar 與本文件衝突，以 Standard Workflow 1.4 為準。
 
 ## 0. Version Lock / Change Control
 
@@ -8,21 +8,26 @@
 
 硬性規則：
 
-1. 一般互動只能套用 Standard Workflow 1.3。
+1. 一般互動只能套用 Standard Workflow 1.4。
 2. 單次選股失誤只能先記為 `failure_case`，不得直接覆蓋標準流程。
 3. 外部新聞、法說、財報、股癌逐字稿只作信心加權與題材背景，不作技術合格條件。
 4. 所有 Phase 3 流程都是 `read_only`；不得觸發真實下單 API。
-5. 後續回答若提到流程，必須引用 Standard Workflow 1.3。
+5. 後續回答若提到流程，必須引用 Standard Workflow 1.4。
 
 ## 1. Active Main Strategy
 
 唯一有效主策略：`phase3_stability`
 
-唯一公開策略入口：
+唯一正式主流程入口：
 
 ```bash
-node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
+node src/cli.js taiwan-agent-team --mode auto --format markdown
 ```
+
+`taiwan-agent-team` 是確定性 orchestrator，不是第二套策略或預測模型。它有兩種公開模式：
+
+- `screen`：使用者要求選股、篩選或候選名單時，才執行 `phase3-dataset` 與唯一技術篩選入口 `phase3-screen`。只有 eligible 候選可以進入外部研究與 DOM；零 eligible 候選就停止後續逐檔研究。
+- `analyze`：使用者指定 ticker 要求分析時，不執行 Phase 3，必須標示 `phase3Eligibility: not_evaluated`，再執行市場 context、外部信心、DOM 與四個價格。
 
 主策略定位：
 
@@ -33,7 +38,7 @@ node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format mark
 5. 歷史收益、成本、回撤與命中率必須在訊號凍結後另行評估，不能回寫訊號。
 6. 主流程沒有自動下單功能；使用者仍手動決定是否交易。
 
-候選成立後的完整執行順序固定為：
+`screen` 候選成立後的完整執行順序固定為：
 
 ```text
 phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
@@ -99,13 +104,19 @@ Shioaji failure gate 標準處理：
 4. 修復後驗證：health endpoint healthy；必要時跑 `shioaji-quote` 或目標 ticker quote / snapshot。
 5. fallback 後若 Shioaji 恢復，後續研究必須回到 Shioaji 第一順位。
 
-單一股票分析主流程：
+指定股票分析主流程（`analyze`）：
 
-1. 更新 point-in-time evidence。
-2. 執行 `phase3-screen`；它是唯一技術決策入口。
-3. 只對 eligible 候選補即時 quote、產業鏈與新聞 / 法說 / 財報等外部信心因子。
+1. 執行 `taiwan-agent-team --mode analyze --tickers <TICKER>`；不執行 Phase 3，也不宣稱 ticker 通過技術篩選。
+2. 讀取大盤、個股 snapshot、盤前與產業鏈 context，並標示 `phase3Eligibility: not_evaluated`。
+3. 補公司、新聞 / 法說 / 財報、營收、估值及 ETF 等外部信心因子。
 4. 外部信心研究完成後才執行 `phase3-dom-confidence --ticker <TICKER>`，取得獨立 DOM 信心分數及四個價格參考。
-5. `daily-decision-study`、`signal-study`、`chip-study` 僅供歷史診斷，不得覆蓋 Phase 3 或形成第二套策略。
+5. `daily-decision-study`、`signal-study`、`chip-study` 僅供歷史診斷，不得形成第二套策略。
+
+選股主流程（`screen`）：
+
+1. 更新 point-in-time evidence，再執行唯一技術篩選入口 `phase3-screen`。
+2. 只對 eligible 候選補即時 quote、產業鏈與外部信心因子；rejected ticker 不得進入 downstream research 或 DOM。
+3. 零 eligible 候選時停止外部研究與 DOM，不得製造替代候選。
 
 資料建置 / 候選池工具：
 
@@ -190,5 +201,5 @@ LINE bridge 回覆流程：
 
 1. 不保留舊策略實驗 artifacts 作為記憶來源。
 2. 舊短線 MVP 只能作歷史稽核紀錄，不得作 baseline layer 或與 Phase 3 重疊交易。
-3. 任何新策略實驗必須另存為臨時研究，不得覆蓋 Standard Workflow 1.3，除非使用者明確要求升版並完成可驗證修正。
+3. 任何新策略實驗必須另存為臨時研究，不得覆蓋 Standard Workflow 1.4，除非使用者明確要求升版並完成可驗證修正。
 4. 對外回答不得引用 raw secrets、完整 token、或不必要工具原始輸出。

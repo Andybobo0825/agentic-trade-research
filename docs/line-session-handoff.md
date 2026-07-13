@@ -35,7 +35,12 @@ Notes:
 
 ## Required stock / ETF analysis flow
 
-`phase3_stability` 是唯一主策略，`phase3-screen` 是唯一技術決策入口。先確認 point-in-time evidence 已更新，再執行篩選；只有 ticker 成為合格技術候選，才查新聞、法說、財報、股癌與 ETF 籌碼。外部資訊只作信心加權，不得把不合格技術訊號硬推成買進。
+Standard Workflow 1.4 的正式入口是 `taiwan-agent-team`，由七個 logical agent lane 調用 repo CLI/MCP tools。`phase3_stability` 是唯一主策略，`phase3-screen` 是唯一技術篩選入口。
+
+- 使用者要求選股、篩選股票或候選名單：使用 `screen`；先更新 point-in-time evidence，再執行 Phase 3，只有 eligible 技術候選才查新聞、法說、財報、股癌、ETF 籌碼與 DOM。零 eligible 候選時停止外部研究與 DOM。
+- 使用者指定 ticker 要求分析：使用 `analyze`，不執行 Phase 3，標示 `phase3Eligibility: not_evaluated`，直接完成市場 context、外部信心、DOM 與四個價格。
+
+外部資訊只作信心加權，不得把不合格技術訊號硬推成買進。
 
 固定完整順序：
 
@@ -46,6 +51,8 @@ phase3-dataset → phase3-screen → news/earnings/financial confidence → phas
 DOM 是外部研究之後的獨立信心層，不進入 Phase 3 資料、soft score 或候選資格，也不得覆蓋 `phase3-screen`。只要三次取樣中至少一筆有效，回覆必須包含 `activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`；即使判斷為等待或不追價，仍需交付全部四個價格。全部取樣失敗時才回傳 `null` 並說明資料錯誤，禁止自行估價。
 
 ```sh
+node src/cli.js taiwan-agent-team --query "篩選股票" --mode screen --format markdown
+node src/cli.js taiwan-agent-team --query "分析 2330" --mode analyze --tickers 2330 --format markdown
 node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
 node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
 node src/cli.js phase3-dom-confidence --ticker <TICKER> --format markdown
@@ -56,7 +63,7 @@ node src/cli.js fugle-quote --ticker <TICKER> --format markdown
 
 `daily-decision-study`、`signal-study`、`chip-study` 只屬歷史診斷 / 回測工具，可用來研究失敗案例，但不得成為當下 Phase 3 合格條件、覆蓋篩選結果或產生第二套交易策略。
 
-ETF / 籌碼輔助只在 Phase 3 候選成立後使用：
+ETF / 籌碼輔助只在 screen 模式的 Phase 3 候選成立後，或 analyze 模式已由使用者指定 ticker 時使用：
 
 ```sh
 node src/cli.js xiaoyu-etf --mode stock --ticker <TICKER> --format markdown
@@ -65,14 +72,14 @@ node src/cli.js xiaoyu-etf --mode etf --etf <ETF_CODE> --format markdown
 
 Treat `xiaoyu-etf` as auxiliary ETF-holding / inferred ETF-flow evidence only. It does not replace Shioaji price/volume and is not official 投信買賣超.
 
-若同時詢問多檔股票，只需對相同 evidence 執行一次 `phase3-screen`，再逐檔查即時 quote 與外部信心因子。若 Phase 3 資料不足，必須明示缺口並停止進場判斷，不能改用歷史 study 代替主策略。
+若使用者要求從多檔中篩選，只需對相同 evidence 執行一次 `phase3-screen`，再逐檔查 eligible candidates 的即時 quote 與外部信心因子。若 Phase 3 資料不足，必須明示缺口並停止 screen 流程，不能改用歷史 study 代替主策略。
 
 ## Synthesis template
 
 Use this answer structure for LINE:
 
 1. **今日資料摘要** — latest quote/date, change %, intraday high/low when available.
-2. **Phase 3 技術結論** — 只引用 `phase3-screen` 的 eligible / rejection reasons 與 decision date；它是唯一決策入口。
+2. **Phase 3 技術結論** — screen 模式只引用 `phase3-screen` 的 eligible / rejection reasons 與 decision date；analyze 模式寫 `not_evaluated`，不得暗示通過篩選。
 3. **外部信心加權 / ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
 4. **DOM 獨立信心與價格** — 列出信心分數、可靠度、買賣壓力與四個必交價格。
 5. **進場判斷** — can enter / wait / avoid chasing; include conditions，但不得因判斷等待而隱藏價格。

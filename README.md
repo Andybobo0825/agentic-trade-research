@@ -10,14 +10,14 @@
 - **Repo-native dynamic memory**：`memory-sync` 會把可長期保存的決策、驗證修復、失誤復盤與里程碑分層寫入 `.omx/memory/hot.md`、`warm.md`、`archive.md`、`obsolete.md`，避免每次 session 載入過期脈絡。
 
 
-## Standard Workflow 1.3
+## Standard Workflow 1.4
 
-目前 repo 的標準流程來源是 [`docs/standard-workflow-v1.md`](docs/standard-workflow-v1.md)。若舊對話、舊 backtest 或舊策略名稱與該文件衝突，以 Standard Workflow 1.3 為準。
+目前 repo 的標準流程來源是 [`docs/standard-workflow-v1.md`](docs/standard-workflow-v1.md)。若舊對話、舊 backtest 或舊策略名稱與該文件衝突，以 Standard Workflow 1.4 為準。正式主流程入口是 `taiwan-agent-team`，由同一個可稽核 orchestrator 依使用者意圖切換篩選或指定股票分析。
 
 標準版只保留：
 
 - 唯一主策略：`phase3_stability`
-- 唯一技術決策入口：read-only `phase3-screen`
+- 唯一技術篩選入口：read-only `phase3-screen`
 - 凍結門檻：HMA9 上升、HMA20 非負、收盤不低於 HMA9、距離不超過 6%、20 日平均成交額至少 2,000 萬、五日動能不超過 18%、收盤位置不超過 0.72
 - 外部新聞、法說、財報、股癌與 ETF 籌碼只在技術候選成立後作信心加權
 - 外部研究後才執行 read-only `phase3-dom-confidence`；DOM 不進入 Phase 3 資料或候選資格
@@ -28,6 +28,28 @@
 phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
 ```
 
+只有使用者要求選股、股票篩選或候選名單時才執行 Phase 3；`screen` 模式只允許 eligible 候選進入外部研究與 DOM，零 eligible 候選會停止後續逐檔工具。指定股票的 `analyze` 模式不執行 Phase 3，並明確標示 `phase3Eligibility: not_evaluated`，直接完成市場情境、外部信心、DOM 與四個價格。
+
+```sh
+# 選股：Phase 3 → eligible-only 外部信心 → DOM → 四個價格
+node src/cli.js taiwan-agent-team --query "篩選台股候選" --mode screen --format markdown
+
+# 指定股票：不執行 Phase 3，直接研究 2330
+node src/cli.js taiwan-agent-team --query "分析台積電" --mode analyze --tickers 2330 --format markdown
+```
+
+### 主策略的七個 Agent lane
+
+| Agent | 責任 |
+| --- | --- |
+| `planner` | 判斷 `screen` / `analyze` 意圖、參數、階段順序與停止條件。 |
+| `data-agent` | 盤點 repo 證據；只有 screen 模式才更新 point-in-time Phase 3 資料。 |
+| `strategy-agent` | 只有 screen 模式呼叫 `phase3-dataset`、`phase3-screen`，並只交付 eligible 候選。 |
+| `market-agent` | 讀取 Shioaji 指數/個股快照、盤前、類股資金流與 IC.TPEX peer context。 |
+| `external-confidence-agent` | 整合公司、新聞、公告、財報、營收、估值與 ETF 信心證據。 |
+| `dom-agent` | 外部研究後讀取永豐 DOM，交付買賣壓力與四個人工參考價格。 |
+| `verifier` | 稽核工具順序、錯誤、資料缺口、eligibility 邊界、redaction 與 read-only 安全。 |
+
 ```sh
 node src/cli.js phase3-dom-confidence --ticker 2330 --format markdown
 ```
@@ -35,7 +57,7 @@ node src/cli.js phase3-dom-confidence --ticker 2330 --format markdown
 - 架構流程圖 source：[`docs/diagrams/standard-workflow-v1.drawio`](docs/diagrams/standard-workflow-v1.drawio)
 - 架構流程圖 SVG：[`docs/diagrams/standard-workflow-v1.svg`](docs/diagrams/standard-workflow-v1.svg)
 
-![Trade Repo Standard Workflow 1.3 Architecture](docs/diagrams/standard-workflow-v1.svg)
+![Trade Repo Standard Workflow 1.4 Architecture](docs/diagrams/standard-workflow-v1.svg)
 
 ## 作品集版架構總覽：Repo-native Agent Harness
 

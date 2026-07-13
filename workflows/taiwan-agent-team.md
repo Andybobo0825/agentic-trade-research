@@ -1,44 +1,56 @@
-# Taiwan Agent Team Workflow
+# Taiwan Agent Team — Standard Workflow 1.4
 
-A Dexter-inspired Taiwan investment research harness that **adds** an agent-team layer on top of the existing repo tools. It does not delete, replace, or weaken Standard Workflow 1.3, `phase3_stability`, Shioaji, preopen, or Xiaoyu ETF. `phase3-screen` remains the sole technical decision path.
+`taiwan-agent-team` 是目前正式台股主流程的確定性 orchestration layer。它不新增預測模型，也不建立重疊策略；`phase3_stability` 仍是唯一主策略，`phase3-screen` 仍是唯一技術篩選機制。
 
-## Command
+## Public modes
 
-```bash
-node src/cli.js taiwan-agent-team \
-  --query "盤前、回測、量價、ETF 籌碼與明日情境" \
-  --tickers 2330,00981A,00991A,4915 \
-  --capital 500000 \
-  --format markdown
-```
+### Screen
 
-Offline artifact-only mode:
+只有使用者要求選股、篩選股票、候選股票或全市場掃描時才執行 Phase 3：
 
 ```bash
-node src/cli.js taiwan-agent-team --query "整合既有資料" --offline --format markdown
+node src/cli.js taiwan-agent-team --query "篩選台股候選" --mode screen --format markdown
 ```
 
-## Dexter mapping
+固定順序：
 
-This is a **Dexter-inspired deterministic orchestration layer**, not a separate autonomous multi-agent runtime. The repo keeps one auditable process that labels each responsibility as an agent lane, calls existing tools, persists a scratchpad, then renders a report.
+```text
+phase3-dataset → phase3-screen → eligible only external research → phase3-dom-confidence → four prices → manual decision
+```
 
-- planner: decomposes the research question into reproducible tasks.
-- data-agent: inventories `.omx` caches, reports, backtests, and repo workflows.
-- market-agent: calls Shioaji snapshots, preopen, and sector flow when online.
-- strategy-agent: reads `phase3-screen` output; historical studies remain diagnostics and cannot override eligibility.
-- etf-agent: integrates Xiaoyu ETF lens.
-- scenario-agent: produces bull/base/bear scenario triggers.
-- verifier: writes JSONL scratchpad and records data gaps.
+只有 eligible candidates 進入 downstream research 與 DOM。Rejected ticker 不會被外部資訊翻成 eligible；零 eligible 候選時停止逐檔 research 與 DOM。
 
-## Artifacts
+### Analyze
+
+指定 ticker 分析不執行 Phase 3，不宣稱已通過技術篩選：
+
+```bash
+node src/cli.js taiwan-agent-team --query "分析台積電" --mode analyze --tickers 2330 --format markdown
+```
+
+每檔標示 `phase3Eligibility: not_evaluated`，再執行市場 context、外部信心、DOM 與四個價格。
+
+## Seven agent lanes
+
+1. `planner` — 判斷模式、參數、階段與停止條件。
+2. `data-agent` — 盤點 repo 證據；screen 模式準備 point-in-time Phase 3 資料。
+3. `strategy-agent` — screen 模式執行 `phase3-dataset`、`phase3-screen` 並只傳遞 eligible candidates。
+4. `market-agent` — 讀取 Shioaji 指數/個股、盤前、sector flow 與 IC.TPEX peers。
+5. `external-confidence-agent` — 整合公司、新聞、公告、財報、營收、估值與 ETF 證據。
+6. `dom-agent` — 研究完成後讀取 read-only Shioaji DOM 並保存四個價格。
+7. `verifier` — 稽核順序、錯誤、缺口、eligibility 邊界與無下單安全性。
+
+## Output contract
+
+- `workflowVersion: "1.4"`、resolved `workflowMode`、七 agent lanes 與 ordered audit。
+- Screen 模式保留 Phase 3 dataset/screen 摘要與 eligible targets。
+- 每檔保留外部資料 availability、DOM score/pressure/reliability/risks。
+- 有效 DOM 樣本交付 `activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`。
+- DOM 不可用時四欄仍存在且為 `null`，不得自行估價或隱藏資訊。
+
+## Artifacts and safety
 
 - Scratchpad: `.omx/agent-team/scratchpad/*.jsonl`
 - Markdown report: `.omx/agent-team/reports/*-taiwan-agent-team.md`
-
-Generated artifacts are audit logs. Keep recent runs for review, but rotate or archive old scratchpads/reports if `.omx/agent-team` grows too large.
-
-## Boundaries
-
-- Shioaji remains primary for Taiwan price/volume.
-- Forecasts are scenario branches, not guaranteed predictions.
-- Existing workflows are called/read; this harness does not overwrite them.
+- Offline mode 不執行 Phase 3、市場、外部研究或 DOM tools。
+- 所有 Shioaji/DOM 操作為 read-only；沒有 order API，使用者手動決策與下單。

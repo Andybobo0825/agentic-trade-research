@@ -8,6 +8,8 @@ import {
   PHASE3_CANDIDATE_FEATURE_NAMES,
   buildPhase3Candidates,
   ensurePhase3CandidateArtifact,
+  finiteOr,
+  finiteOrNull,
 } from '../src/phase3-candidates.js';
 import { writeEvidenceRecord } from '../src/point-in-time-store.js';
 
@@ -123,6 +125,117 @@ test('candidate generation is deterministic and contains only technical decision
   }
 });
 
+test('distinguishes missing numeric values from real zero values', () => {
+  assert.equal(finiteOrNull(null), null);
+  assert.equal(finiteOrNull(undefined), null);
+  assert.equal(finiteOrNull(''), null);
+  assert.equal(finiteOrNull('   '), null);
+  assert.equal(finiteOrNull('123.5'), 123.5);
+  assert.equal(finiteOr(null, 7), 7);
+  assert.equal(finiteOr(0, 7), 0);
+});
+
+test('uses close times volume fallback when Trading_money is null or blank', () => {
+  for (const missing of [null, '']) {
+    const records = technicalFixture().map((record) => record.source === 'finmind:market'
+      ? { ...record, payload: { ...record.payload, Trading_money: missing } }
+      : record);
+    const latest = buildPhase3Candidates(records).at(-1);
+
+    assert.ok(latest);
+    assert.ok(featureValue(latest, 'averageTurnover') > 20_000_000);
+  }
+});
+
+test('distinguishes missing foreign data from zero net buy', () => {
+  const records = technicalFixture().filter((record) =>
+    !(record.source === 'finmind:institutional' && record.payload.date >= '2025-02-09'));
+  const latest = buildPhase3Candidates(records).at(-1);
+
+  assert.equal(latest.foreignContext.available, false);
+  assert.equal(latest.foreignContext.coverage3d, 0);
+  assert.ok(latest.foreignContext.coverage20d < 1);
+  assert.equal(featureValue(latest, 'foreignBuyStreak'), null);
+  assert.equal(featureValue(latest, 'foreignThreeDayIntensity'), null);
+});
+
+test('foreign buy streak stops at a missing foreign row', () => {
+  const records = technicalFixture();
+  const latestDate = records.filter((record) => record.source === 'finmind:market').at(-1).payload.date;
+  const changed = records.filter((record) =>
+    !(record.source === 'finmind:institutional' && record.payload.date === latestDate));
+  const latest = buildPhase3Candidates(changed).at(-1);
+
+  assert.equal(featureValue(latest, 'foreignBuyStreak'), null);
+  assert.equal(latest.foreignContext.coverage3d, 2 / 3);
+});
+
+test('same decision date shares one fixed market breadth snapshot across tickers', () => {
+  const first = technicalFixture().map((record) => ({
+    ...record,
+    ticker: '2330',
+    sourceHash: `first-${record.sourceHash}`,
+    ...(record.source === 'finmind:institutional'
+      ? { availableAt: record.availableAt.replace('18:00:00', '14:00:00') }
+      : {}),
+  }));
+  const second = technicalFixture().map((record) => ({
+    ...record,
+    ticker: '2317',
+    sourceHash: `second-${record.sourceHash}`,
+  }));
+  const latePeer = peerMarketFixture().map((record) => ({
+    ...record,
+    availableAt: record.availableAt.replace('13:00:00', '16:00:00'),
+  }));
+  const decisionDate = first.filter((record) => record.source === 'finmind:market').at(-1).payload.date;
+  const rows = buildPhase3Candidates([...first, ...second, ...latePeer])
+    .filter((row) => row.decisionDate === decisionDate && ['2330', '2317'].includes(row.ticker));
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0].marketContext, rows[1].marketContext);
+  for (const name of ['marketBreadth1d', 'marketMedianMomentum3Pct', 'relativeMomentum3Pct']) {
+    assert.equal(featureValue(rows[0], name), featureValue(rows[1], name));
+  }
+});
+
+test('reports unavailable market context when daily universe coverage is insufficient', () => {
+  const primary = technicalFixture();
+  const incompletePeer = peerMarketFixture().filter((record) => record.payload.date < '2025-02-11');
+  const latest = buildPhase3Candidates([...primary, ...incompletePeer])
+    .filter((row) => row.ticker === '2330').at(-1);
+
+  assert.equal(latest.marketContext.universeCount, 2);
+  assert.equal(latest.marketContext.availableCount, 1);
+  assert.equal(latest.marketContext.coveragePct, 50);
+  assert.equal(latest.marketContext.available, false);
+  assert.equal(featureValue(latest, 'marketBreadth1d'), null);
+  assert.equal(featureValue(latest, 'marketMedianMomentum3Pct'), null);
+});
+
+test('historical market universe excludes tickers that were not observable yet', () => {
+  const primary = technicalFixture();
+  const futurePeer = peerMarketFixture().map((record) => {
+    const shiftedDate = new Date(`${record.payload.date}T00:00:00.000Z`);
+    shiftedDate.setUTCDate(shiftedDate.getUTCDate() + 90);
+    const date = shiftedDate.toISOString().slice(0, 10);
+    return {
+      ...record,
+      eventTime: `${date}T13:30:00+08:00`,
+      publishedAt: `${date}T13:00:00+08:00`,
+      availableAt: `${date}T13:00:00+08:00`,
+      payload: { ...record.payload, date },
+    };
+  });
+  const decisionDate = '2025-01-24';
+  const base = buildPhase3Candidates(primary).find((row) => row.decisionDate === decisionDate);
+  const withFutureTicker = buildPhase3Candidates([...primary, ...futurePeer])
+    .find((row) => row.ticker === '2330' && row.decisionDate === decisionDate);
+
+  assert.deepEqual(withFutureTicker.marketContext, base.marketContext);
+  assert.equal(withFutureTicker.marketContext.universeCount, 1);
+});
+
 test('does not fabricate close position when the daily range is unavailable', () => {
   const records = technicalFixture();
   const latestMarket = records.filter((record) => record.source === 'finmind:market').at(-1);
@@ -131,6 +244,22 @@ test('does not fabricate close position when the daily range is unavailable', ()
 
   const candidates = buildPhase3Candidates(records);
   assert.equal(candidates.some((row) => row.decisionDate === latestMarket.payload.date), false);
+});
+
+test('rejects a candidate when close is missing or the daily range is zero', () => {
+  for (const mutate of [
+    (payload) => ({ ...payload, close: null }),
+    (payload) => ({ ...payload, min: payload.max }),
+  ]) {
+    const records = technicalFixture();
+    const latestMarket = records.filter((record) => record.source === 'finmind:market').at(-1);
+    latestMarket.payload = mutate(latestMarket.payload);
+
+    assert.equal(
+      buildPhase3Candidates(records).some((row) => row.decisionDate === latestMarket.payload.date),
+      false,
+    );
+  }
 });
 
 test('future commentary cannot affect an earlier candidate', () => {
@@ -153,7 +282,7 @@ test('future commentary cannot affect an earlier candidate', () => {
   );
 });
 
-test('market context uses only same-date peer observations available by decision time', () => {
+test('market context excludes peer observations published after the fixed daily cutoff', () => {
   const records = technicalFixture();
   const decisionDate = '2025-01-24';
   const base = buildPhase3Candidates(records).find((row) => row.decisionDate === decisionDate);
@@ -166,15 +295,21 @@ test('market context uses only same-date peer observations available by decision
     ...peerMarketFixture(),
   ]).find((row) => row.ticker === '2330' && row.decisionDate === decisionDate);
 
-  for (const name of ['marketBreadth1d', 'marketMedianMomentum3Pct', 'relativeMomentum3Pct']) {
-    assert.equal(featureValue(latePeer, name), featureValue(base, name));
-    assert.notEqual(featureValue(timelyPeer, name), featureValue(base, name));
-  }
+  assert.equal(base.marketContext.available, true);
+  assert.equal(latePeer.marketContext.available, false);
+  assert.equal(latePeer.marketContext.availableCount, 1);
+  assert.equal(featureValue(latePeer, 'marketBreadth1d'), null);
+  assert.equal(timelyPeer.marketContext.available, true);
+  assert.notEqual(
+    featureValue(timelyPeer, 'marketMedianMomentum3Pct'),
+    featureValue(base, 'marketMedianMomentum3Pct'),
+  );
   assert.equal(latePeer.technicalEvidenceHashes.includes('peer-market-23'), false);
-  assert.equal(timelyPeer.technicalEvidenceHashes.includes('peer-market-23'), true);
+  assert.equal(timelyPeer.marketContext.snapshotHash.length, 64);
+  assert.equal(timelyPeer.technicalEvidenceHashes.includes(timelyPeer.marketContext.snapshotHash), true);
 });
 
-test('all own history used by HMA and volume features remains auditable', () => {
+test('all own lookback history used by HMA and volume features remains auditable', () => {
   const records = technicalFixture();
   const base = buildPhase3Candidates(records)[0];
   const changed = buildPhase3Candidates(records.map((record) => {
@@ -190,6 +325,17 @@ test('all own history used by HMA and volume features remains auditable', () => 
   assert.equal(changed.technicalEvidenceHashes.includes('market-1-revised'), true);
   assert.equal(changed.technicalEvidenceHashes.includes('market-1'), false);
   assert.ok(base.technicalEvidenceHashes.filter((hash) => hash.startsWith('foreign-')).length >= 20);
+});
+
+test('candidate audit hashes exclude own market rows outside the maximum technical lookback', () => {
+  const records = technicalFixture();
+  const base = buildPhase3Candidates(records).at(-1);
+  const changed = buildPhase3Candidates(records.map((record) => record.sourceHash === 'market-1'
+    ? { ...record, sourceHash: 'market-1-revised' }
+    : record)).at(-1);
+
+  assert.deepEqual(changed, base);
+  assert.equal(base.technicalEvidenceHashes.includes('market-1'), false);
 });
 
 test('market changes after a frozen decision do not affect that earlier observation', () => {
@@ -244,5 +390,5 @@ test('rebuilds a candidate artifact when the evidence manifest changes', async (
 });
 
 test('candidate metadata uses the outcome-free schema version', () => {
-  assert.equal(PHASE3_CANDIDATE_SCHEMA_VERSION, 4);
+  assert.equal(PHASE3_CANDIDATE_SCHEMA_VERSION, 5);
 });

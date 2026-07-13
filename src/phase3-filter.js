@@ -25,6 +25,14 @@ const REQUIRED_FEATURES = Object.freeze([
   'closePosition',
 ]);
 
+const SOFT_FEATURES = Object.freeze([
+  'volumeRatio',
+  'relativeMomentum3Pct',
+  'marketBreadth1d',
+  'foreignBuyStreak',
+  'foreignThreeDayIntensity',
+]);
+
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -46,19 +54,57 @@ function featureMap(candidate) {
   }));
 }
 
-function optionalFeature(features, name, fallback = 0) {
+function adjustment(features, name, calculate) {
   const value = features.get(name);
-  return Number.isFinite(value) ? value : fallback;
+  return Number.isFinite(value) ? round(calculate(value)) : 0;
 }
 
 function scoreAdjustments(features) {
   return {
-    volume: round(clamp((optionalFeature(features, 'volumeRatio', 1) - 1) * 5, -5, 5)),
-    relativeMomentum: round(clamp(optionalFeature(features, 'relativeMomentum3Pct') * 0.75, -5, 5)),
-    marketBreadth: round(clamp((optionalFeature(features, 'marketBreadth1d', 0.5) - 0.5) * 10, -5, 5)),
-    foreignStreak: round(clamp(optionalFeature(features, 'foreignBuyStreak') * 1.5, 0, 6)),
-    foreignIntensity: round(clamp(optionalFeature(features, 'foreignThreeDayIntensity') * 20, -4, 4)),
+    volume: adjustment(features, 'volumeRatio', (value) => clamp((value - 1) * 5, -5, 5)),
+    relativeMomentum: adjustment(
+      features,
+      'relativeMomentum3Pct',
+      (value) => clamp(value * 0.75, -5, 5),
+    ),
+    marketBreadth: adjustment(
+      features,
+      'marketBreadth1d',
+      (value) => clamp((value - 0.5) * 10, -5, 5),
+    ),
+    foreignStreak: adjustment(
+      features,
+      'foreignBuyStreak',
+      (value) => clamp(value * 1.5, 0, 6),
+    ),
+    foreignIntensity: adjustment(
+      features,
+      'foreignThreeDayIntensity',
+      (value) => clamp(value * 20, -4, 4),
+    ),
   };
+}
+
+function softFeatureCoverage(features) {
+  const missing = SOFT_FEATURES.filter((name) => !Number.isFinite(features.get(name)));
+  const available = SOFT_FEATURES.length - missing.length;
+  return {
+    available,
+    expected: SOFT_FEATURES.length,
+    coveragePct: round(available / SOFT_FEATURES.length * 100),
+    missing,
+  };
+}
+
+function volumeConfirmation(features) {
+  const ratio = features.get('volumeRatio');
+  if (!Number.isFinite(ratio)) {
+    return { volumeConfirmed: false, volumeConfirmationLevel: 'unavailable' };
+  }
+  if (ratio < 0.8) return { volumeConfirmed: false, volumeConfirmationLevel: 'weak' };
+  if (ratio < 1) return { volumeConfirmed: false, volumeConfirmationLevel: 'below_average' };
+  if (ratio < 1.5) return { volumeConfirmed: true, volumeConfirmationLevel: 'confirmed' };
+  return { volumeConfirmed: true, volumeConfirmationLevel: 'strong' };
 }
 
 export function evaluatePhase3Filter(candidate, config = PHASE3_FILTER_CONFIG) {
@@ -87,8 +133,7 @@ export function evaluatePhase3Filter(candidate, config = PHASE3_FILTER_CONFIG) {
   if (Number.isFinite(closeToHma9Pct) && closeToHma9Pct > config.maximumHmaDistancePct) {
     reasons.push('close_too_far_above_hma9');
   }
-  if (Number.isFinite(averageTurnover)
-    && averageTurnover < config.minimumAverageTurnover) {
+  if (Number.isFinite(averageTurnover) && averageTurnover < config.minimumAverageTurnover) {
     reasons.push('average_turnover_below_minimum');
   }
   if (Number.isFinite(momentum5Pct) && momentum5Pct > config.maximumMomentum5Pct) {
@@ -98,24 +143,28 @@ export function evaluatePhase3Filter(candidate, config = PHASE3_FILTER_CONFIG) {
     reasons.push('close_position_above_maximum');
   }
 
-  const softAdjustments = scoreAdjustments(features);
-  const softScore = round(clamp(
-    50 + Object.values(softAdjustments).reduce((sum, value) => sum + value, 0),
-    0,
-    100,
-  ));
+  const adjustments = scoreAdjustments(features);
+  const technicalEligible = reasons.length === 0;
   return {
-    eligible: reasons.length === 0,
+    technicalEligible,
+    executionEligible: technicalEligible,
     reasons,
-    diagnostics: {
+    warnings: [],
+    hardGateDiagnostics: {
       hma9SlopePct: Number.isFinite(hma9SlopePct) ? hma9SlopePct : null,
       hma20SlopePct: Number.isFinite(hma20SlopePct) ? hma20SlopePct : null,
       closeToHma9Pct: Number.isFinite(closeToHma9Pct) ? closeToHma9Pct : null,
-      averageTurnover,
+      averageTurnover: Number.isFinite(averageTurnover) ? averageTurnover : null,
       momentum5Pct: Number.isFinite(momentum5Pct) ? momentum5Pct : null,
       closePosition: Number.isFinite(closePosition) ? closePosition : null,
     },
-    softScore,
-    softAdjustments,
+    phase3RankScore: round(clamp(
+      50 + Object.values(adjustments).reduce((sum, value) => sum + value, 0),
+      0,
+      100,
+    )),
+    softAdjustments: adjustments,
+    softFeatureCoverage: softFeatureCoverage(features),
+    ...volumeConfirmation(features),
   };
 }

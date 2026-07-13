@@ -136,8 +136,10 @@ test('MCP exposes closed read-only Phase 3 schemas without promotion', async () 
   const response = await callMcp({ jsonrpc: '2.0', id: 11, method: 'tools/list' });
   const dataset = response.result.tools.find((entry) => entry.name === 'phase3-dataset');
   const screen = response.result.tools.find((entry) => entry.name === 'phase3-screen');
+  const dom = response.result.tools.find((entry) => entry.name === 'phase3-dom-confidence');
   assert.ok(dataset);
   assert.ok(screen);
+  assert.ok(dom);
   assert.equal(dataset.inputSchema.additionalProperties, false);
   assert.equal(screen.inputSchema.additionalProperties, false);
   assert.deepEqual(screen.inputSchema.required, []);
@@ -145,10 +147,29 @@ test('MCP exposes closed read-only Phase 3 schemas without promotion', async () 
   assert.ok(screen.inputSchema.properties.candidateArtifact);
   assert.ok(screen.inputSchema.properties.top);
   assert.ok(screen.inputSchema.properties.includeRejected);
+  assert.equal(dom.inputSchema.additionalProperties, false);
+  assert.deepEqual(dom.inputSchema.required, ['ticker']);
+  assert.deepEqual(
+    Object.keys(dom.inputSchema.properties)
+      .filter((key) => !['format', 'outputFields', 'maxRows'].includes(key))
+      .sort(),
+    ['exchange', 'intervalMs', 'reportJson', 'reportMarkdown', 'samples', 'ticker', 'timeoutMs'],
+  );
   for (const key of ['live', 'account', 'credential', 'certificate', 'placeOrder']) {
     assert.equal(screen.inputSchema.properties[key], undefined);
+    assert.equal(dom.inputSchema.properties[key], undefined);
   }
   assert.equal(response.result.tools.some((entry) => entry.name === 'phase3-demo-promotion'), false);
+});
+
+test('MCP rejects unsafe Phase 3 DOM arguments before opening market depth', async () => {
+  const response = await callMcp({
+    jsonrpc: '2.0',
+    id: 13,
+    method: 'tools/call',
+    params: { name: 'phase3-dom-confidence', arguments: { ticker: '2330', order: 'buy' } },
+  });
+  assert.match(response.error.message, /forbids order|unsupported.*order/i);
 });
 
 test('MCP rejects unsafe Phase 3 screen arguments before reading evidence', async () => {

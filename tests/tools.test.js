@@ -5,9 +5,11 @@ import { renderToolResult, tools } from '../src/tools.js';
 test('Phase 3 exposes dataset collection and one deterministic screen', () => {
   assert.ok(tools['phase3-dataset']);
   assert.ok(tools['phase3-screen']);
+  assert.ok(tools['phase3-dom-confidence']);
   assert.equal(tools['phase3-demo-promotion'], undefined);
   assert.match(tools['phase3-dataset'].description, /read-only|immutable/i);
   assert.match(tools['phase3-screen'].description, /read-only|deterministic/i);
+  assert.match(tools['phase3-dom-confidence'].description, /read-only|post-research/i);
 });
 
 test('statement markdown renderer gives Codex-friendly table', () => {

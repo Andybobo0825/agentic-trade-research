@@ -136,6 +136,18 @@ function toolSchema(name, tool) {
       reportMarkdown: { type: 'string' },
     };
     base.inputSchema.required = [];
+  } else if (name === 'phase3-dom-confidence') {
+    base.inputSchema.additionalProperties = false;
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      exchange: { type: 'string', enum: ['TSE', 'OTC'] },
+      samples: { type: 'number', minimum: 1, maximum: 5 },
+      intervalMs: { type: 'number', minimum: 0, maximum: 60000 },
+      timeoutMs: { type: 'number', minimum: 1, maximum: 30000 },
+      reportJson: { type: 'string' },
+      reportMarkdown: { type: 'string' },
+    };
+    base.inputSchema.required = ['ticker'];
   } else if (name === 'sector-flow') {
     base.inputSchema.properties = {
       mode: { type: 'string', enum: ['realtime', 'close'] },

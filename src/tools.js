@@ -31,6 +31,7 @@ import { buildXiaoyuEtfLens, renderXiaoyuEtfMarkdown } from './xiaoyu-etf.js';
 import { buildTaiwanAgentTeam, renderTaiwanAgentTeamMarkdown } from './taiwan-agent-team.js';
 import { renderPhase3DatasetMarkdown, runPhase3Dataset } from './phase3-dataset.js';
 import { renderPhase3ScreenMarkdown, runPhase3Screen } from './phase3-screen.js';
+import { renderPhase3DomConfidenceMarkdown, runPhase3DomConfidence } from './phase3-dom-confidence.js';
 import { compactJson, compactNumber, shapeForTokenBudget, toMarkdownTable } from './format.js';
 import { detectHmaSignals, evaluateHmaTrendSignal, normalizeCandleRows } from './indicators.js';
 
@@ -583,6 +584,15 @@ export const tools = {
     },
     toMarkdown(result) {
       return renderPhase3ScreenMarkdown(result);
+    },
+  },
+  'phase3-dom-confidence': {
+    description: 'Read-only post-research Shioaji DOM confidence overlay with mandatory visible-book entry, take-profit, and stop-loss references.',
+    async run(args) {
+      return runPhase3DomConfidence(args || {});
+    },
+    toMarkdown(result) {
+      return renderPhase3DomConfidenceMarkdown(result);
     },
   },
   'research-pack': {

@@ -7,6 +7,7 @@ import { renderToolResult, runTool, tools } from './tools.js';
 import { parseTaiwanAgentTeamCliArgs } from './taiwan-agent-team.js';
 import { assertPhase3DatasetArgs } from './phase3-dataset.js';
 import { assertPhase3ScreenArgs } from './phase3-screen.js';
+import { assertPhase3DomArgs } from './phase3-dom-confidence.js';
 
 const HELP = `trade-finance: Codex-friendly finance data CLI
 
@@ -29,6 +30,7 @@ US / global commands:
   chip-study    --ticker 2330 [--market tw] [--foreign-days 3] [--holder-weeks 3] [--min-holder-lots 1000] [--format markdown]
   phase3-dataset [--universe-file .omx/evidence/phase3/universe.json] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--format markdown]
   phase3-screen [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--top 20] [--include-rejected] [--format markdown]
+  phase3-dom-confidence --ticker 2330 [--exchange TSE|OTC] [--samples 3] [--interval-ms 5000] [--timeout-ms 3000] [--format markdown]
   xiaoyu-etf    [--mode stock|etf|rank|overview] [--ticker 2330] [--etf 00981A] [--scope active|market] [--window d1|d5|d10|d20|d60] [--direction buy|sell] [--limit 10] [--format markdown]
   taiwan-agent-team [--query "盤前+回測+推測"] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--capital 500000] [--offline] [--format markdown]
   memory-sync   [--memory-dir .omx/memory] [--entry-file entries.json] [--entry "text" --date YYYY-MM-DD --category decision|verified-fix|failure-case|milestone] [--now YYYY-MM-DD] [--format markdown]
@@ -279,6 +281,26 @@ export async function main(argv = process.argv.slice(2)) {
       if (key === 'top') return [keyMap[key], optionalInt(args, key, 20)];
       if (['include-rejected', 'rebuild'].includes(key)) {
         return [keyMap[key], args[key] === true || args[key] === 'true'];
+      }
+      return [keyMap[key], String(args[key])];
+    })));
+  } else if (command === 'phase3-dom-confidence') {
+    const rawKeys = Object.keys(args).filter((key) => !['_', 'format'].includes(key));
+    const keyMap = {
+      ticker: 'ticker',
+      exchange: 'exchange',
+      samples: 'samples',
+      'interval-ms': 'intervalMs',
+      'timeout-ms': 'timeoutMs',
+      'report-json': 'reportJson',
+      'report-markdown': 'reportMarkdown',
+    };
+    for (const key of rawKeys) {
+      if (!keyMap[key]) throw new UsageError(`phase3-dom-confidence forbids --${key}`);
+    }
+    toolArgs = assertPhase3DomArgs(Object.fromEntries(rawKeys.map((key) => {
+      if (['samples', 'interval-ms', 'timeout-ms'].includes(key)) {
+        return [keyMap[key], optionalInt(args, key, undefined)];
       }
       return [keyMap[key], String(args[key])];
     })));

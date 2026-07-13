@@ -13,10 +13,11 @@ Purpose: every new LINE/trad Codex session must inherit this operating flow befo
 
 ## Source priority
 
-1. Realtime / intraday Taiwan quote: Fugle commands.
-2. Official Taiwan market snapshots: TWSE / TPEx commands.
-3. Historical Taiwan data and studies: FinMind / `tw-price` based tools.
-4. Web search: only for missing context, source discovery, product facts, news, or official announcements not already covered by repo tools.
+1. Primary Taiwan price/volume/replay data: Shioaji local server / repo Shioaji commands.
+2. Realtime / intraday fallback quote: Fugle commands when Shioaji does not provide the needed dataset or is externally unavailable after repair attempt.
+3. Official Taiwan market snapshots: TWSE / TPEx commands.
+4. Historical Taiwan data and studies: FinMind / `tw-price` based tools when Shioaji lacks coverage.
+5. Web search: only for missing context, source discovery, product facts, news, or official announcements not already covered by repo tools.
 
 Useful commands:
 
@@ -28,18 +29,28 @@ node src/cli.js tw-price --ticker <TICKER> --provider auto --format markdown
 
 Notes:
 
-- Use `fugle-quote` for same-day / intraday evidence.
+- Use Shioaji first for price/volume/replay evidence; use `fugle-quote` as realtime fallback or supplementary same-day evidence.
 - `tw-price --provider twse` may lag to the latest official snapshot and is not the primary realtime source.
 - If a ticker is typed without a suffix but the Taiwan listing uses a suffix, normalize only when evidence supports it. Example: `00981` is usually the user's shorthand for `00981A`; state the normalization clearly.
 
 ## Required stock / ETF analysis flow
 
-For every Taiwan ticker or ETF the user asks about, run both studies before giving entry advice:
+For every Taiwan ticker or ETF the user asks about, run the quote plus both studies before giving entry advice. Use `phase3_stability` as the main strategy lens: 技術候選先成立，再把新聞、法說、財報、股癌等外部資訊作信心加權；外部資訊不得把不合格技術訊號硬推成買進。
 
 ```sh
+node src/cli.js fugle-quote --ticker <TICKER> --format markdown
 node src/cli.js daily-decision-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
+node src/cli.js signal-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
 ```
+
+When the question is workflow status or candidate generation rather than a single ticker, use the Phase 3 read-only commands:
+
+```sh
+node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
+node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
+```
+
+`phase3-screen` is a deterministic technical filter. It is read-only, does not train a model, and must never trigger real order APIs.
 
 Add the ETF holding lens when the question involves ETF, 投信/主動式 ETF, or whether institutions/ETFs are adding a stock:
 
@@ -69,8 +80,8 @@ If a study cannot run because the product is too new, data rows are insufficient
 Use this answer structure for LINE:
 
 1. **今日資料摘要** — latest quote/date, change %, intraday high/low when available.
-2. **兩個 study 結論** — `daily-decision-study` and `signal-study`; separate direct tool output from inference.
-3. **ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
+2. **Phase 3 技術結論** — `daily-decision-study` + `signal-study` interpreted through `phase3_stability`; separate direct tool output from inference.
+3. **外部信心加權 / ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
 4. **進場判斷** — can enter / wait / avoid chasing; include conditions.
 5. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
 6. **限制** — market-data timing, insufficient rows, ETF-newness caveats, or auxiliary-source caveats.
@@ -88,7 +99,7 @@ Single ticker:
 ```sh
 node src/cli.js fugle-quote --ticker 2330 --format markdown
 node src/cli.js daily-decision-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
+node src/cli.js signal-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
 ```
 
 ETF pair such as 0050 and 00981A:
@@ -96,9 +107,9 @@ ETF pair such as 0050 and 00981A:
 ```sh
 node src/cli.js fugle-quote --ticker 0050 --format markdown
 node src/cli.js daily-decision-study --ticker 0050 --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker 0050 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
+node src/cli.js signal-study --ticker 0050 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
 
 node src/cli.js fugle-quote --ticker 00981A --format markdown
 node src/cli.js daily-decision-study --ticker 00981A --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
-node src/cli.js signal-study --ticker 00981A --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
+node src/cli.js signal-study --ticker 00981A --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 1,2,3,5 --format markdown
 ```

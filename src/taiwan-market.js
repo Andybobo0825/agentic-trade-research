@@ -75,6 +75,16 @@ export function listTaiwanEndpoints() {
   };
 }
 
+export function taiwanProviderEnvelope(result = {}, fetchedAt = new Date().toISOString()) {
+  const data = result?.data ?? result;
+  return {
+    source: String(result?.source || 'unknown'),
+    sourceUrl: result?.url || null,
+    fetchedAt: String(fetchedAt),
+    rows: Array.isArray(data) ? data : Array.isArray(data?.rows) ? data.rows : [],
+  };
+}
+
 export function getFugleConfig(env = process.env, options = {}) {
   const apiKey = options.apiKey ?? env.FUGLE_API_KEY;
   if (!apiKey) {

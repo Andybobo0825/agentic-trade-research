@@ -131,3 +131,32 @@ test('MCP tools/list exposes taiwan-agent-team input schema', async () => {
   assert.ok(tool.inputSchema.properties.offline);
   assert.ok(tool.inputSchema.properties.capital);
 });
+
+test('MCP exposes closed read-only Phase 3 schemas without promotion', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 11, method: 'tools/list' });
+  const dataset = response.result.tools.find((entry) => entry.name === 'phase3-dataset');
+  const screen = response.result.tools.find((entry) => entry.name === 'phase3-screen');
+  assert.ok(dataset);
+  assert.ok(screen);
+  assert.equal(dataset.inputSchema.additionalProperties, false);
+  assert.equal(screen.inputSchema.additionalProperties, false);
+  assert.deepEqual(screen.inputSchema.required, []);
+  assert.ok(screen.inputSchema.properties.evidenceRoot);
+  assert.ok(screen.inputSchema.properties.candidateArtifact);
+  assert.ok(screen.inputSchema.properties.top);
+  assert.ok(screen.inputSchema.properties.includeRejected);
+  for (const key of ['live', 'account', 'credential', 'certificate', 'placeOrder']) {
+    assert.equal(screen.inputSchema.properties[key], undefined);
+  }
+  assert.equal(response.result.tools.some((entry) => entry.name === 'phase3-demo-promotion'), false);
+});
+
+test('MCP rejects unsafe Phase 3 screen arguments before reading evidence', async () => {
+  const response = await callMcp({
+    jsonrpc: '2.0',
+    id: 12,
+    method: 'tools/call',
+    params: { name: 'phase3-screen', arguments: { live: true } },
+  });
+  assert.match(response.error.message, /forbids live|unsupported.*live/i);
+});

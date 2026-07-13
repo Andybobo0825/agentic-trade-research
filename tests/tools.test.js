@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderToolResult } from '../src/tools.js';
+import { renderToolResult, tools } from '../src/tools.js';
+
+test('Phase 3 exposes dataset collection and one deterministic screen', () => {
+  assert.ok(tools['phase3-dataset']);
+  assert.ok(tools['phase3-screen']);
+  assert.equal(tools['phase3-demo-promotion'], undefined);
+  assert.match(tools['phase3-dataset'].description, /read-only|immutable/i);
+  assert.match(tools['phase3-screen'].description, /read-only|deterministic/i);
+});
 
 test('statement markdown renderer gives Codex-friendly table', () => {
   const result = { data: { income_statements: [{ report_period: '2025', revenue: 1234567890, net_income: 1000000 }] } };

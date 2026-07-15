@@ -39,8 +39,13 @@ class BarAggregator:
         states: tuple[OneSecondState, ...],
         *,
         session_start: datetime,
+        session_end: datetime | None = None,
     ) -> tuple[Bar, ...]:
         _require_aware(session_start)
+        if session_end is not None:
+            _require_aware(session_end)
+            if session_end <= session_start:
+                raise ValueError("session_end must follow session_start")
         if not states:
             return ()
         ordered = tuple(sorted(states, key=lambda state: state.second))
@@ -51,13 +56,20 @@ class BarAggregator:
         for state in ordered:
             if state.second < session_start:
                 raise ValueError("state precedes the session anchor")
+            if session_end is not None and state.second >= session_end:
+                raise ValueError("state is outside the resolved session")
             offset = int((state.second - session_start).total_seconds())
             start = session_start + timedelta(
                 seconds=(offset // interval_seconds) * interval_seconds
             )
             grouped.setdefault(start, []).append(state)
         return tuple(
-            self._bar(start, tuple(grouped[start])) for start in sorted(grouped)
+            self._bar(
+                start,
+                tuple(grouped[start]),
+                session_end=session_end,
+            )
+            for start in sorted(grouped)
         )
 
     def research_bars(
@@ -65,16 +77,28 @@ class BarAggregator:
         states: tuple[OneSecondState, ...],
         *,
         session_start: datetime,
+        session_end: datetime | None = None,
     ) -> tuple[Bar, ...]:
         return tuple(
             bar
-            for bar in self.aggregate(states, session_start=session_start)
+            for bar in self.aggregate(
+                states,
+                session_start=session_start,
+                session_end=session_end,
+            )
             if bar.is_complete
         )
 
-    def _bar(self, start: datetime, states: tuple[OneSecondState, ...]) -> Bar:
-        expected = self._interval_minutes * 60
-        end = start + timedelta(seconds=expected)
+    def _bar(
+        self,
+        start: datetime,
+        states: tuple[OneSecondState, ...],
+        *,
+        session_end: datetime | None,
+    ) -> Bar:
+        full_end = start + timedelta(minutes=self._interval_minutes)
+        end = min(full_end, session_end) if session_end is not None else full_end
+        expected = int((end - start).total_seconds())
         prices = tuple(
             price
             for state in states
@@ -120,7 +144,7 @@ class BarAggregator:
             / expected,
             tick_coverage_ratio=sum(state.trade_count > 0 for state in states)
             / expected,
-            is_complete=actual_seconds == expected_seconds,
+            is_complete=(end == full_end and actual_seconds == expected_seconds),
         )
 
 

@@ -43,19 +43,37 @@ class ProcessingPipeline:
         end_second: datetime,
         source_manifests: tuple[SegmentManifest, ...],
         intervals: tuple[int, ...] = (1, 5, 15, 60),
+        rejection_reasons: tuple[str, ...] = (),
+        queue_drop_count: int = 0,
+        connection_drop_count: int = 0,
     ) -> ProcessingResult:
         if (
             resolution.session not in ("DAY", "NIGHT")
             or resolution.trading_date is None
             or resolution.session_start is None
+            or resolution.session_end is None
         ):
             raise ValueError("processing requires an open resolved session")
         if end_second < start_second:
             raise ValueError("end_second cannot precede start_second")
+        requested_end = end_second + timedelta(seconds=1)
+        window_end = min(requested_end, resolution.session_end)
+        if start_second < resolution.session_start or start_second >= window_end:
+            raise ValueError("processing range is outside the resolved session")
+        window_ticks = tuple(
+            event
+            for event in ticks
+            if start_second <= event.exchange_datetime < window_end
+        )
+        window_bidasks = tuple(
+            event
+            for event in bidasks
+            if start_second <= event.exchange_datetime < window_end
+        )
         quote_joins = tuple(
-            self._quote_joiner.join(tick, bidasks)
+            self._quote_joiner.join(tick, window_bidasks)
             for tick in sorted(
-                ticks,
+                window_ticks,
                 key=lambda event: (event.exchange_datetime, event.event_id),
             )
         )
@@ -63,16 +81,16 @@ class ProcessingPipeline:
         states: list[OneSecondState] = []
         previous: OneSecondState | None = None
         second = start_second
-        while second <= end_second:
+        while second < window_end:
             next_second = second + timedelta(seconds=1)
             second_ticks = tuple(
                 event
-                for event in ticks
+                for event in window_ticks
                 if second <= event.exchange_datetime < next_second
             )
             second_quotes = tuple(
                 event
-                for event in bidasks
+                for event in window_bidasks
                 if second <= event.exchange_datetime < next_second
             )
             previous = aggregator.aggregate(
@@ -90,6 +108,7 @@ class ProcessingPipeline:
                 bars=BarAggregator(interval_minutes=interval).aggregate(
                     frozen_states,
                     session_start=resolution.session_start,
+                    session_end=resolution.session_end,
                 ),
             )
             for interval in intervals
@@ -98,8 +117,11 @@ class ProcessingPipeline:
         quality = QualityReportBuilder().build(
             trading_date=resolution.trading_date,
             session=resolution.session,
-            ticks=ticks,
-            bidasks=bidasks,
+            ticks=window_ticks,
+            bidasks=window_bidasks,
+            rejection_reasons=rejection_reasons,
+            queue_drop_count=queue_drop_count,
+            connection_drop_count=connection_drop_count,
             expected_seconds=expected_seconds,
         )
         return ProcessingResult(

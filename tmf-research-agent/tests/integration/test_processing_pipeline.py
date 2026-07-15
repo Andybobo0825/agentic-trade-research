@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -131,17 +132,15 @@ class ProcessingPipelineTests(unittest.TestCase):
             ),
         )
         resolution = SessionResolver(calendar).resolve(START)
-        future_tick = tick()
-        object.__setattr__(
-            future_tick,
-            "exchange_datetime",
-            START + timedelta(seconds=2),
+        future_tick = replace(
+            tick(),
+            exchange_datetime=START + timedelta(seconds=2),
+            received_at=START + timedelta(seconds=2),
         )
-        future_quote = quote()
-        object.__setattr__(
-            future_quote,
-            "exchange_datetime",
-            START + timedelta(seconds=2),
+        future_quote = replace(
+            quote(),
+            exchange_datetime=START + timedelta(seconds=2),
+            received_at=START + timedelta(seconds=2),
         )
 
         result = ProcessingPipeline(

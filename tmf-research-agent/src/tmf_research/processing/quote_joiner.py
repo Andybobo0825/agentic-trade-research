@@ -33,7 +33,9 @@ class QuoteJoiner:
             (index, bidask)
             for index, bidask in enumerate(bidasks)
             if bidask.target_code == tick.target_code
+            and bidask.delivery_month == tick.delivery_month
             and bidask.exchange_datetime <= tick.exchange_datetime
+            and bidask.received_at <= tick.received_at
         )
         matched = max(
             candidates,
@@ -69,4 +71,3 @@ class QuoteJoiner:
             bidask_available=True,
             unavailable_reason=None,
         )
-

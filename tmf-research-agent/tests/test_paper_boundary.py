@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tmf_research.domain.paper_trades import PaperIntent
+from tmf_research.domain.paper_trades import PaperIntent, PaperRecord
 from tmf_research.paper.broker import DuplicatePaperIntentError, PaperBroker
 from tmf_research.security.readonly_verifier import verify_readonly
 
@@ -55,6 +55,16 @@ class PaperBoundaryTests(unittest.TestCase):
         parameters = inspect.signature(PaperBroker.__init__).parameters
 
         self.assertEqual(tuple(parameters), ("self",))
+
+    def test_paper_record_execution_mode_cannot_be_overridden(self) -> None:
+        with self.assertRaisesRegex(TypeError, "execution_mode"):
+            PaperRecord(
+                intent_id="paper-1",
+                direction="LONG",
+                quantity=1,
+                recorded_at=NOW,
+                execution_mode="LIVE",  # type: ignore[call-arg]
+            )
 
     def test_paper_source_passes_readonly_network_boundary(self) -> None:
         source_root = Path(inspect.getfile(PaperBroker)).parents[2]

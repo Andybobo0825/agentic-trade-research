@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tmf_research.security.readonly_verifier import verify_readonly
+from tmf_research.security.readonly_verifier import ReadonlyReport, verify_readonly
 
 
 SIDECAR_ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +72,18 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertIn("raw-adapter-dependency", self._rules(report))
 
+    def test_detects_relative_raw_adapter_import(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "from ..infrastructure.shioaji_market_data "
+                    "import ShioajiMarketDataGateway\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-adapter-dependency", self._rules(report))
+
     def test_detects_raw_api_attribute_access_outside_adapter(self) -> None:
         report = self._verify(
             {
@@ -90,12 +102,67 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertIn("raw-api-access", self._rules(report))
 
+    def test_detects_constant_folded_getattr_capability_bypass(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "def leak(gateway, contract):\n"
+                    "    raw = getattr(gateway, '_' + 'api')\n"
+                    "    return getattr(raw, 'place' + '_order')(contract)\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-api-access", self._rules(report))
+        self.assertIn("forbidden-symbol", self._rules(report))
+
     def test_detects_network_import_inside_paper_package(self) -> None:
         report = self._verify(
             {"tmf_research/paper/broker.py": "import socket\n"}
         )
 
         self.assertIn("paper-network-boundary", self._rules(report))
+
+    def test_detects_process_capability_inside_paper_package(self) -> None:
+        report = self._verify(
+            {"tmf_research/paper/broker.py": "import subprocess\n"}
+        )
+
+        self.assertIn("paper-process-boundary", self._rules(report))
+
+    def test_paper_import_allowlist_blocks_os_and_asyncio(self) -> None:
+        os_report = self._verify(
+            {
+                "tmf_research/paper/broker.py": (
+                    "import os\n"
+                    "def escape():\n    return os.system('curl example.invalid')\n"
+                )
+            }
+        )
+        asyncio_report = self._verify(
+            {
+                "tmf_research/paper/broker.py": (
+                    "import asyncio\n"
+                    "async def escape():\n"
+                    "    return await asyncio.open_connection('127.0.0.1', 1)\n"
+                )
+            }
+        )
+
+        self.assertIn("paper-import-boundary", self._rules(os_report))
+        self.assertIn("paper-import-boundary", self._rules(asyncio_report))
+
+    def test_paper_cannot_import_an_unsafe_internal_helper(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/helpers/network.py": "import socket\n",
+                "tmf_research/paper/broker.py": (
+                    "from tmf_research.helpers.network import send\n"
+                ),
+            }
+        )
+
+        self.assertIn("paper-import-boundary", self._rules(report))
 
     def test_detects_dynamic_sdk_and_paper_network_imports(self) -> None:
         sdk_report = self._verify(
@@ -116,6 +183,69 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertIn("sdk-import-boundary", self._rules(sdk_report))
         self.assertIn("paper-network-boundary", self._rules(paper_report))
+
+    def test_detects_constant_folded_dynamic_sdk_import(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "import importlib\n"
+                    "def load():\n"
+                    "    return importlib.import_module('shio' + 'aji')\n"
+                )
+            }
+        )
+
+        self.assertIn("sdk-import-boundary", self._rules(report))
+
+    def test_detects_relative_dynamic_raw_adapter_import(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "import importlib\n"
+                    "def load():\n"
+                    "    return importlib.import_module(\n"
+                    "        '..infrastructure.' + 'shioaji_market_data',\n"
+                    "        __package__,\n"
+                    "    )\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-adapter-dependency", self._rules(report))
+
+    def test_detects_dynamic_raw_adapter_with_explicit_package(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "import importlib\n"
+                    "def load():\n"
+                    "    return importlib.import_module(\n"
+                    "        '.shioaji_market_data',\n"
+                    "        'tmf_research.infrastructure',\n"
+                    "    )\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-adapter-dependency", self._rules(report))
+
+    def test_detects_dunder_import_with_explicit_relative_level(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "def load():\n"
+                    "    return __import__(\n"
+                    "        'infrastructure.shioaji_market_data',\n"
+                    "        globals(),\n"
+                    "        locals(),\n"
+                    "        (),\n"
+                    "        2,\n"
+                    "    )\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-adapter-dependency", self._rules(report))
 
     def test_detects_forbidden_paper_boundary_class_names(self) -> None:
         class_names = (
@@ -156,7 +286,7 @@ class ReadonlyVerifierTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("invalid-source-root", self._rules(report))
 
-    def _verify(self, files: dict[str, str]):
+    def _verify(self, files: dict[str, str]) -> ReadonlyReport:
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory) / "src"
             for relative, content in files.items():
@@ -166,7 +296,7 @@ class ReadonlyVerifierTests(unittest.TestCase):
             return verify_readonly(source_root)
 
     @staticmethod
-    def _rules(report) -> set[str]:
+    def _rules(report: ReadonlyReport) -> set[str]:
         return {finding.rule for finding in report.findings}
 
 

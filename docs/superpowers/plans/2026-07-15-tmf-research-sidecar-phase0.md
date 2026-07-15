@@ -1,6 +1,6 @@
 # TMF Research Sidecar Phase 0 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build a standalone, testable Phase 0 safety foundation for TMF research without connecting it to the existing strategy.
 
@@ -22,7 +22,7 @@
 - Create: `tmf-research-agent/tests/__init__.py`
 - Test: `tmf-research-agent/tests/test_project_boundary.py`
 
-- [ ] **Step 1: Write the failing project-boundary test**
+- [x] **Step 1: Write the failing project-boundary test**
 
 ```python
 class ProjectBoundaryTests(unittest.TestCase):
@@ -32,23 +32,23 @@ class ProjectBoundaryTests(unittest.TestCase):
             self.assertNotIn("tmf-research-agent", Path(relative).read_text())
 ```
 
-- [ ] **Step 2: Run the test to verify the package is missing**
+- [x] **Step 2: Run the test to verify the package is missing**
 
 Run: `cd tmf-research-agent && python3 -m unittest tests.test_project_boundary -v`
 Expected: FAIL because the sidecar package metadata and policy files do not exist.
 
-- [ ] **Step 3: Add minimal project metadata and isolation documentation**
+- [x] **Step 3: Add minimal project metadata and isolation documentation**
 
 Define the `tmf` console entry point, require Python 3.11+, document Phase 0 scope,
 point `SPEC.md` to `../docs/txresearch.md`, prohibit main-strategy imports in the
 local `AGENTS.md`, and ignore Python caches/build artifacts plus generated data.
 
-- [ ] **Step 4: Run the boundary test**
+- [x] **Step 4: Run the boundary test**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.test_project_boundary -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Use a Lore commit recording that the Python project is intentionally isolated
 from host entry points.
@@ -63,7 +63,7 @@ from host entry points.
 - Create: `tmf-research-agent/src/tmf_research/infrastructure/shioaji_market_data.py`
 - Test: `tmf-research-agent/tests/test_readonly_gateway.py`
 
-- [ ] **Step 1: Write failing gateway tests**
+- [x] **Step 1: Write failing gateway tests**
 
 Cover `TMFR1` resolution, primitive-only `ContractInfo`, tick and bid/ask
 subscription delegation, unsubscription, historical tick batches, historical K
@@ -84,29 +84,29 @@ self.assertFalse(hasattr(contract, "raw_contract"))
 self.assertIsInstance(gateway, MarketDataGateway)
 ```
 
-- [ ] **Step 2: Run tests and observe the missing modules**
+- [x] **Step 2: Run tests and observe the missing modules**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.test_readonly_gateway -v`
 Expected: FAIL with `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement immutable domain values and protocol**
+- [x] **Step 3: Implement immutable domain values and protocol**
 
 Create frozen `ContractInfo`, `TickBatch`, and `KbarBatch` dataclasses. Define the
 runtime-checkable protocol with the seven methods fixed by the research spec.
 
-- [ ] **Step 4: Implement the single raw-object adapter**
+- [x] **Step 4: Implement the single raw-object adapter**
 
 Retain the injected API object and SDK quote constants only in
 `shioaji_market_data.py`; cache raw contracts internally by target code; convert
 all returned values into domain dataclasses; raise `ContractResolutionError` for
 missing or uncached contracts.
 
-- [ ] **Step 5: Run the gateway tests**
+- [x] **Step 5: Run the gateway tests**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.test_readonly_gateway -v`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Use a Lore commit documenting raw SDK confinement and the choice to inject quote
 constants instead of adding a runtime SDK dependency in Phase 0.
@@ -118,7 +118,7 @@ constants instead of adding a runtime SDK dependency in Phase 0.
 - Create: `tmf-research-agent/src/tmf_research/security/readonly_verifier.py`
 - Test: `tmf-research-agent/tests/test_readonly_verifier.py`
 
-- [ ] **Step 1: Write failing verifier tests**
+- [x] **Step 1: Write failing verifier tests**
 
 Tests must prove a clean source tree passes and temporary source trees detect:
 
@@ -129,25 +129,25 @@ Tests must prove a clean source tree passes and temporary source trees detect:
 as a name and raw string, an SDK import outside the adapter, a raw-adapter import
 from a consumer, a network import from `paper/`, and invalid Python syntax.
 
-- [ ] **Step 2: Run tests and observe the missing verifier**
+- [x] **Step 2: Run tests and observe the missing verifier**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.test_readonly_verifier -v`
 Expected: FAIL with `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement deterministic findings and scans**
+- [x] **Step 3: Implement deterministic findings and scans**
 
 Create frozen `ReadonlyFinding` and `ReadonlyReport` values. Walk `*.py` files in
 sorted order, scan raw text and AST, collect imports, enforce the sole SDK/raw
 adapter boundary, enforce the paper network boundary, and sort/deduplicate all
 findings by path, line, rule, and symbol.
 
-- [ ] **Step 4: Keep the verifier self-clean**
+- [x] **Step 4: Keep the verifier self-clean**
 
 Assemble forbidden capability names from string fragments so no forbidden raw
 token exists in production `src/`, while still reconstructing the full policy at
 runtime.
 
-- [ ] **Step 5: Run verifier tests and scan production source**
+- [x] **Step 5: Run verifier tests and scan production source**
 
 Run:
 
@@ -159,7 +159,7 @@ PYTHONPATH=src python3 -c 'from pathlib import Path; from tmf_research.security.
 
 Expected: both commands exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Use a Lore commit documenting fail-closed static scanning and the deliberate
 production/test scan boundary.
@@ -172,7 +172,7 @@ production/test scan boundary.
 - Create: `tmf-research-agent/src/tmf_research/paper/broker.py`
 - Test: `tmf-research-agent/tests/test_paper_boundary.py`
 
-- [ ] **Step 1: Write failing paper-boundary tests**
+- [x] **Step 1: Write failing paper-boundary tests**
 
 Cover zero-argument construction, one-contract validation, immutable PAPER
 records, duplicate intent rejection, invalid direction rejection, and absence of
@@ -184,18 +184,18 @@ record = PaperBroker().record_intent(intent)
 self.assertEqual(record.execution_mode, "PAPER")
 ```
 
-- [ ] **Step 2: Run tests and observe the missing modules**
+- [x] **Step 2: Run tests and observe the missing modules**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.test_paper_boundary -v`
 Expected: FAIL with `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement the minimal in-memory boundary**
+- [x] **Step 3: Implement the minimal in-memory boundary**
 
 Validate directions and quantity in immutable domain values. Let `PaperBroker`
 record unique intents only; expose records as an immutable tuple; do not model
 fills, prices, PnL, or connectivity in Phase 0.
 
-- [ ] **Step 4: Run paper and verifier tests**
+- [x] **Step 4: Run paper and verifier tests**
 
 Run:
 
@@ -206,7 +206,7 @@ PYTHONPATH=src python3 -m unittest tests.test_paper_boundary tests.test_readonly
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Use a Lore commit recording why Phase 0 records intents without implementing
 Phase 6 fill behavior.
@@ -217,23 +217,23 @@ Phase 6 fill behavior.
 - Create: `tmf-research-agent/src/tmf_research/cli.py`
 - Test: `tmf-research-agent/tests/test_cli.py`
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 Test that a clean project prints `READONLY VERIFIED` and returns 0, a violating
 temporary project prints findings and returns 1, and a missing source root fails
 closed with return code 1.
 
-- [ ] **Step 2: Run tests and observe the missing CLI**
+- [x] **Step 2: Run tests and observe the missing CLI**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.test_cli -v`
 Expected: FAIL with `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement the argparse command**
+- [x] **Step 3: Implement the argparse command**
 
 Resolve the project root, run `verify_readonly(project_root / "src")`, render
 stable one-line findings, and support `python -m tmf_research.cli`.
 
-- [ ] **Step 4: Run CLI tests and the real command**
+- [x] **Step 4: Run CLI tests and the real command**
 
 Run:
 
@@ -245,7 +245,7 @@ PYTHONPATH=src python3 -m tmf_research.cli verify-readonly --root .
 
 Expected: tests pass and command prints `READONLY VERIFIED`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Use a Lore commit recording the fail-closed CLI contract.
 
@@ -255,12 +255,12 @@ Use a Lore commit recording the fail-closed CLI contract.
 - Modify: `tmf-research-agent/README.md`
 - Modify: `docs/superpowers/plans/2026-07-15-tmf-research-sidecar-phase0.md`
 
-- [ ] **Step 1: Run all Python tests**
+- [x] **Step 1: Run all Python tests**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest discover -s tests -v`
 Expected: all tests pass with zero failures.
 
-- [ ] **Step 2: Run safety and static checks**
+- [x] **Step 2: Run safety and static checks**
 
 Run:
 
@@ -272,12 +272,12 @@ PYTHONPATH=src python3 -m compileall -q src tests
 
 Expected: verifier prints `READONLY VERIFIED`; compilation exits 0.
 
-- [ ] **Step 3: Run host regressions**
+- [x] **Step 3: Run host regressions**
 
 Run from the worktree root: `npm test`
 Expected: 272 tests pass, zero fail.
 
-- [ ] **Step 4: Confirm sidecar isolation and forbidden raw tokens**
+- [x] **Step 4: Confirm sidecar isolation and forbidden raw tokens**
 
 Run:
 
@@ -288,12 +288,12 @@ rg -n 'tmf-research-agent|tmf_research' src tests package.json workflows || true
 
 Expected: no host integration diff or reference.
 
-- [ ] **Step 5: Update README commands and check the diff**
+- [x] **Step 5: Update README commands and check the diff**
 
 Document the exact test and verifier commands, Phase 0 limitations, and later
 phase ordering. Run `git diff --check` and inspect `git status --short`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Use a Lore commit including all verification evidence and any known validation
 gap.

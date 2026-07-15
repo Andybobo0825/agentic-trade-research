@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -37,4 +37,4 @@ class PaperRecord:
     direction: PaperDirection
     quantity: int
     recorded_at: datetime
-    execution_mode: ExecutionMode = "PAPER"
+    execution_mode: ExecutionMode = field(default="PAPER", init=False)

@@ -12,14 +12,14 @@ fill.
 ## Development commands
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
 PYTHONPATH=src python3 -m tmf_research.cli verify-readonly --root .
+PYTHONPATH=src python3 -m unittest discover -s tests -v
 PYTHONPATH=src python3 -m compileall -q src tests
 ```
 
 The CLI command becomes available as `tmf verify-readonly` after installing this
-project. Development and CI use the module form so Phase 0 needs no environment
-mutation.
+project. Local source development can use the module form without mutating its
+environment; CI installs the sidecar and runs the exact console command first.
 
 ## Phase ordering
 

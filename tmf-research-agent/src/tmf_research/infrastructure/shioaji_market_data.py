@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import fields, is_dataclass
+from datetime import date, datetime, time, timezone
+from decimal import Decimal
+from enum import Enum
 from types import MappingProxyType
 
 from tmf_research.domain.contracts import ContractInfo, KbarBatch, TickBatch
@@ -26,9 +29,57 @@ def _text(subject: object, name: str, default: str = "") -> str:
 
 
 def _payload_snapshot(payload: object) -> Mapping[str, object]:
+    mapping = _payload_mapping(payload)
+    frozen = _freeze_value(mapping)
+    if not isinstance(frozen, Mapping):
+        raise TypeError("market-data payload did not normalize to a mapping")
+    return frozen
+
+
+def _payload_mapping(payload: object) -> Mapping[object, object]:
     if isinstance(payload, Mapping):
-        return MappingProxyType(dict(payload))
-    return MappingProxyType({"data": payload})
+        return payload
+    if is_dataclass(payload) and not isinstance(payload, type):
+        return {field.name: getattr(payload, field.name) for field in fields(payload)}
+    for method_name in ("model_dump", "dict", "_asdict"):
+        method = getattr(payload, method_name, None)
+        if callable(method):
+            candidate = method()
+            if isinstance(candidate, Mapping):
+                return candidate
+    attributes = getattr(payload, "__dict__", None)
+    if isinstance(attributes, Mapping):
+        return {
+            key: value
+            for key, value in attributes.items()
+            if isinstance(key, str) and not key.startswith("_")
+        }
+    raise TypeError(
+        f"unsupported market-data payload type: {type(payload).__name__}"
+    )
+
+
+def _freeze_value(value: object) -> object:
+    if isinstance(value, Enum):
+        return _freeze_value(value.value)
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(_freeze_value(item) for item in value)
+    to_list = getattr(value, "tolist", None)
+    if callable(to_list):
+        return _freeze_value(to_list())
+    raise TypeError(
+        f"unsupported market-data payload value: {type(value).__name__}"
+    )
 
 
 class ShioajiMarketDataGateway:

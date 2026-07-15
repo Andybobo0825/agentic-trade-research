@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import chdir
 from io import StringIO
 from pathlib import Path
 
@@ -57,6 +58,27 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIn("invalid-source-root", output.getvalue())
+
+    def test_default_root_discovers_the_current_sidecar_checkout(self) -> None:
+        output = StringIO()
+        capability = "place" + "_order"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pyproject.toml").write_text(
+                '[project]\nname = "tmf-research-agent"\n',
+                encoding="utf-8",
+            )
+            source = root / "src" / "tmf_research" / "unsafe.py"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                f"def run(api):\n    return api.{capability}()\n",
+                encoding="utf-8",
+            )
+            with chdir(root):
+                status = main(["verify-readonly"], stdout=output)
+
+        self.assertEqual(status, 1)
+        self.assertIn(capability, output.getvalue())
 
 
 if __name__ == "__main__":

@@ -33,6 +33,17 @@ class ProjectBoundaryTests(unittest.TestCase):
                     host_file.read_text(encoding="utf-8"),
                 )
 
+    def test_sidecar_ci_runs_readonly_gate_before_tests(self) -> None:
+        workflow = (
+            HOST_ROOT / ".github" / "workflows" / "tmf-research-sidecar.yml"
+        ).read_text(encoding="utf-8")
+
+        verifier = "run: tmf verify-readonly"
+        tests = "python -m unittest discover -s tests -v"
+        self.assertIn(verifier, workflow)
+        self.assertIn(tests, workflow)
+        self.assertLess(workflow.index(verifier), workflow.index(tests))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
+from enum import IntEnum
 from types import SimpleNamespace
 
 from tmf_research.infrastructure.readonly_gateway import MarketDataGateway
@@ -13,6 +14,10 @@ from tmf_research.infrastructure.shioaji_market_data import (
 
 
 FIXED_NOW = datetime(2026, 7, 15, 8, 30, tzinfo=timezone.utc)
+
+
+class FakeTickKind(IntEnum):
+    TRADE = 1
 
 
 class FakeQuote:
@@ -52,6 +57,10 @@ class FakeApi:
         self.quote = FakeQuote()
         self.subscription_calls: list[tuple[str, object, object]] = []
         self.history_calls: list[tuple[object, ...]] = []
+        self.tick_payload: object = {
+            "ts": [1, 2],
+            "close": [100.0, 101.0],
+        }
 
     def subscribe(
         self,
@@ -69,9 +78,9 @@ class FakeApi:
     ) -> None:
         self.subscription_calls.append(("unsubscribe", contract, quote_type))
 
-    def ticks(self, contract: object, *, date: str) -> dict[str, object]:
+    def ticks(self, contract: object, *, date: str) -> object:
         self.history_calls.append(("ticks", contract, date))
-        return {"ts": [1, 2], "close": [100.0, 101.0]}
+        return self.tick_payload
 
     def kbars(
         self,
@@ -136,12 +145,12 @@ class ReadonlyGatewayTests(unittest.TestCase):
         self.assertEqual(ticks.contract, contract)
         self.assertEqual(ticks.date, "2026-07-14")
         self.assertEqual(ticks.fetched_at, FIXED_NOW)
-        self.assertEqual(ticks.payload["close"], [100.0, 101.0])
+        self.assertEqual(ticks.payload["close"], (100.0, 101.0))
         self.assertEqual(kbars.contract, contract)
         self.assertEqual(kbars.start, "2026-07-01")
         self.assertEqual(kbars.end, "2026-07-14")
         self.assertEqual(kbars.fetched_at, FIXED_NOW)
-        self.assertEqual(kbars.payload["Close"], [101.0])
+        self.assertEqual(kbars.payload["Close"], (101.0,))
         self.assertEqual(
             self.api.history_calls,
             [
@@ -154,6 +163,27 @@ class ReadonlyGatewayTests(unittest.TestCase):
                 ),
             ],
         )
+
+        close_values = ticks.payload["close"]
+        self.assertIsInstance(close_values, tuple)
+        with self.assertRaises(AttributeError):
+            close_values.append(102.0)  # type: ignore[attr-defined]
+
+    def test_rejects_opaque_historical_payload_instead_of_leaking_it(self) -> None:
+        contract = self.gateway.resolve_near_contract()
+        self.api.tick_payload = object()
+
+        with self.assertRaisesRegex(TypeError, "unsupported market-data payload"):
+            self.gateway.fetch_ticks(contract, "2026-07-14")
+
+    def test_normalizes_enum_subclasses_to_primitive_values(self) -> None:
+        contract = self.gateway.resolve_near_contract()
+        self.api.tick_payload = {"kind": FakeTickKind.TRADE}
+
+        ticks = self.gateway.fetch_ticks(contract, "2026-07-14")
+
+        self.assertEqual(ticks.payload["kind"], 1)
+        self.assertIs(type(ticks.payload["kind"]), int)
 
     def test_rejects_contract_values_not_resolved_by_this_gateway(self) -> None:
         contract = replace(

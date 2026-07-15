@@ -100,10 +100,16 @@ class DataQualityMonitor:
             if event.volume < 0:
                 reasons.append("NEGATIVE_VOLUME")
         else:
-            if event.bid_prices and event.ask_prices and event.ask_prices[0] < event.bid_prices[0]:
+            crossed_book = bool(
+                event.bid_prices
+                and event.ask_prices
+                and event.ask_prices[0] < event.bid_prices[0]
+            )
+            if crossed_book:
                 reasons.append("CROSSED_BOOK")
             if (
-                any(price <= 0 for price in (*event.bid_prices, *event.ask_prices))
+                crossed_book
+                or any(price <= 0 for price in (*event.bid_prices, *event.ask_prices))
                 or any(volume < 0 for volume in (*event.bid_volumes, *event.ask_volumes))
                 or len(event.bid_prices) != len(event.bid_volumes)
                 or len(event.ask_prices) != len(event.ask_volumes)

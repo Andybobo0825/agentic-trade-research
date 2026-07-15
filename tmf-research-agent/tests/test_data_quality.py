@@ -79,7 +79,7 @@ class DataQualityTests(unittest.TestCase):
             delivery_month="202607",
             code="TMF202607",
             bid_prices=(23001.0,),
-            bid_volumes=(-1,),
+            bid_volumes=(1,),
             ask_prices=(23000.0,),
             ask_volumes=(2,),
             simtrade=False,

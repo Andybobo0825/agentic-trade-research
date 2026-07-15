@@ -181,7 +181,8 @@ def _target_code(
     bidasks: tuple[BidAskEvent, ...],
     previous: OneSecondState | None,
 ) -> str | None:
-    values = {event.target_code for event in (*ticks, *bidasks)}
+    values = {event.target_code for event in ticks}
+    values.update(event.target_code for event in bidasks)
     if previous is not None and previous.target_code is not None:
         values.add(previous.target_code)
     if len(values) > 1:

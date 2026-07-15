@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tmf_research.collection.raw_writer import RawWriter
 from tmf_research.domain.events import TickEvent
 from tmf_research.infrastructure.raw_store import AppendOnlyRawStore
 
@@ -58,6 +59,35 @@ class RawStoreTests(unittest.TestCase):
                     segment_id="tick-20260715-0001",
                     created_at=NOW,
                 )
+
+    def test_raw_writer_delegates_each_batch_to_a_new_segment(self) -> None:
+        event = TickEvent(
+            event_id="tick-1",
+            received_at=NOW,
+            exchange_datetime=NOW,
+            alias_code="TMFR1",
+            target_code="TMF202607",
+            delivery_month="202607",
+            code="TMF202607",
+            close=23000.0,
+            volume=1,
+            simtrade=False,
+            raw_payload={},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            writer = RawWriter(
+                AppendOnlyRawStore(Path(directory), writer_version="phase1-v1")
+            )
+
+            manifest = writer.write(
+                "tick",
+                [event],
+                segment_id="writer-0001",
+                created_at=NOW,
+            )
+
+            self.assertEqual(manifest.record_count, 1)
+            self.assertEqual(manifest.event_type, "tick")
 
 
 if __name__ == "__main__":

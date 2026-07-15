@@ -11,6 +11,7 @@ from tmf_research.domain.contracts import ContractInfo, KbarBatch, TickBatch
 
 
 Clock = Callable[[], datetime]
+MarketCallback = Callable[[Mapping[str, object]], None]
 
 
 class ContractResolutionError(LookupError):
@@ -128,6 +129,12 @@ class ShioajiMarketDataGateway:
         self._raw_contracts[target_code] = raw_contract
         return contract
 
+    def register_tick_callback(self, callback: MarketCallback) -> None:
+        self._api.quote.set_on_tick_fop_v1_callback(callback)
+
+    def register_bidask_callback(self, callback: MarketCallback) -> None:
+        self._api.quote.set_on_bidask_fop_v1_callback(callback)
+
     def subscribe_tick(self, contract: ContractInfo) -> None:
         self._change_subscription("subscribe", contract, self._tick_quote_type)
 
@@ -207,7 +214,12 @@ class ShioajiMarketDataGateway:
         quote_type: object,
     ) -> None:
         raw_contract = self._raw_contract(contract)
-        direct_method = getattr(self._api, action, None)
+        if action == "subscribe":
+            direct_method = getattr(self._api, "subscribe", None)
+        elif action == "unsubscribe":
+            direct_method = getattr(self._api, "unsubscribe", None)
+        else:
+            raise AssertionError(f"unsupported subscription action: {action}")
         if callable(direct_method):
             direct_method(raw_contract, quote_type=quote_type)
             return

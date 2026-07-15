@@ -23,6 +23,14 @@ class FakeTickKind(IntEnum):
 class FakeQuote:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object, object, object]] = []
+        self.tick_callback = None
+        self.bidask_callback = None
+
+    def set_on_tick_fop_v1_callback(self, callback) -> None:
+        self.tick_callback = callback
+
+    def set_on_bidask_fop_v1_callback(self, callback) -> None:
+        self.bidask_callback = callback
 
     def subscribe(
         self,
@@ -135,6 +143,21 @@ class ReadonlyGatewayTests(unittest.TestCase):
                 ("unsubscribe", self.api.raw_contract, "bidask"),
             ],
         )
+
+    def test_adapts_raw_sdk_callbacks_to_immutable_mappings(self) -> None:
+        received: list[object] = []
+        self.gateway.register_tick_callback(received.append)
+        self.gateway.register_bidask_callback(received.append)
+
+        tick = {"code": "TMF202607", "close": [23000.0]}
+        quote = SimpleNamespace(code="TMF202607", bid_price=[22999.0])
+        self.api.quote.tick_callback("futures", tick)
+        self.api.quote.bidask_callback("futures", quote)
+        tick["code"] = "MUTATED"
+
+        self.assertEqual(received[0]["code"], "TMF202607")
+        self.assertEqual(received[0]["close"], (23000.0,))
+        self.assertEqual(received[1]["bid_price"], (22999.0,))
 
     def test_fetches_historical_market_data_as_domain_batches(self) -> None:
         contract = self.gateway.resolve_near_contract()

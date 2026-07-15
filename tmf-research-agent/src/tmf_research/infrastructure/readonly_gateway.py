@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Protocol, runtime_checkable
 
 from tmf_research.domain.contracts import ContractInfo, KbarBatch, TickBatch
@@ -10,6 +11,16 @@ class MarketDataGateway(Protocol):
     """Only market-data capabilities exposed beyond infrastructure."""
 
     def resolve_near_contract(self) -> ContractInfo: ...
+
+    def register_tick_callback(
+        self,
+        callback: Callable[[Mapping[str, object]], None],
+    ) -> None: ...
+
+    def register_bidask_callback(
+        self,
+        callback: Callable[[Mapping[str, object]], None],
+    ) -> None: ...
 
     def subscribe_tick(self, contract: ContractInfo) -> None: ...
 

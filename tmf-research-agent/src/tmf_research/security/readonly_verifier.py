@@ -38,6 +38,16 @@ _RAW_ADAPTER_MODULE = ".".join(
 )
 _RAW_ADAPTER_LEAF = "shioaji_market_data"
 _SDK_IMPORT_ROOTS = frozenset(("shioaji",))
+_ALLOWED_RAW_API_CAPABILITIES = frozenset(
+    (
+        "Contracts",
+        "kbars",
+        "quote",
+        "subscribe",
+        "ticks",
+        "unsubscribe",
+    )
+)
 _NETWORK_IMPORT_ROOTS = frozenset(
     ("aiohttp", "http", "httpx", "requests", "socket", "urllib")
 )
@@ -181,6 +191,25 @@ def _scan_ast(relative: Path, tree: ast.AST) -> set[ReadonlyFinding]:
     findings: set[ReadonlyFinding] = set()
 
     for node in ast.walk(tree):
+        if is_adapter:
+            capability = _raw_api_capability(node)
+            if (
+                capability is not None
+                and capability not in _ALLOWED_RAW_API_CAPABILITIES
+            ):
+                findings.add(
+                    ReadonlyFinding(
+                        path=path,
+                        line=getattr(node, "lineno", 0),
+                        column=getattr(node, "col_offset", 0) + 1,
+                        rule="raw-api-capability",
+                        symbol=capability,
+                        message=(
+                            "raw adapter may use only explicitly audited "
+                            "market-data capabilities"
+                        ),
+                    )
+                )
         if (
             isinstance(node, ast.ClassDef)
             and node.name in _FORBIDDEN_PAPER_CLASS_NAMES
@@ -277,6 +306,31 @@ def _scan_ast(relative: Path, tree: ast.AST) -> set[ReadonlyFinding]:
                 )
             )
     return findings
+
+
+def _raw_api_capability(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Attribute) and _is_raw_api_reference(node.value):
+        return node.attr
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("getattr", "hasattr")
+        and node.args
+        and _is_raw_api_reference(node.args[0])
+    ):
+        if len(node.args) < 2:
+            return "<dynamic>"
+        return _constant_string(node.args[1]) or "<dynamic>"
+    return None
+
+
+def _is_raw_api_reference(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Name)
+        and node.id == "_api"
+        or isinstance(node, ast.Attribute)
+        and node.attr == "_api"
+    )
 
 
 def _forbidden_node_symbol(node: ast.AST) -> str | None:

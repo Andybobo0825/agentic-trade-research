@@ -1,31 +1,25 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
 
-from tmf_research.models.imputer import MedianImputer
+from tmf_research.models.training import train_phase4_model
 
-
-START = datetime(2026, 1, 1, tzinfo=timezone.utc)
-END = datetime(2026, 2, 1, tzinfo=timezone.utc)
+from tests.unit.test_phase4_training import inner_train_dataset, training_spec
 
 
 class ImputerTests(unittest.TestCase):
-    def test_required_missing_fails_closed_and_optional_uses_train_median_indicator(self) -> None:
-        imputer = MedianImputer.fit(
-            ({"required": 1.0, "optional": 10.0}, {"required": 2.0, "optional": None}, {"required": 3.0, "optional": 30.0}),
-            feature_order=("required", "optional"), required_features=("required",), fit_start=START, fit_end=END,
-        )
+    def test_required_missing_fails_closed_and_optional_uses_inner_train_median_indicator(self) -> None:
+        imputer = train_phase4_model(inner_train_dataset(), training_spec()).preprocessor.imputer
 
-        optional = imputer.transform({"required": 5.0, "optional": None})
-        required = imputer.transform({"required": None, "optional": 99.0})
+        optional = imputer.transform({"return_1m": 5.0, "basis": None})
+        required = imputer.transform({"return_1m": None, "basis": 99.0})
 
-        self.assertEqual(optional.values, (5.0, 20.0, 1.0))
-        self.assertEqual(optional.output_feature_order, ("required", "optional", "optional__missing"))
+        self.assertEqual(optional.values, (5.0, 30.0, 1.0))
+        self.assertEqual(optional.output_feature_order, ("return_1m", "basis", "basis__missing"))
         self.assertTrue(optional.is_eligible)
         self.assertFalse(required.is_eligible)
         self.assertEqual(required.signal, "NO_TRADE")
-        self.assertIn("REQUIRED_FEATURE_MISSING:required", required.reasons)
+        self.assertIn("REQUIRED_FEATURE_MISSING:return_1m", required.reasons)
 
 
 if __name__ == "__main__":

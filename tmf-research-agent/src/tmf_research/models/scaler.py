@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import cast
 
-from tmf_research.models.imputer import ImputationResult, MedianImputer
+from tmf_research.models.imputer import MedianImputer
+from tmf_research.models.provenance import InnerTrainDataset, TrainingProvenance, canonical_hash
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,15 +14,14 @@ class StandardScaler:
     feature_order: tuple[str, ...]
     means: tuple[float, ...]
     standard_deviations: tuple[float, ...]
-    fit_scope: str = "INNER_TRAIN"
 
     def __post_init__(self) -> None:
         if len(self.feature_order) != len(self.means) or len(self.means) != len(self.standard_deviations):
             raise ValueError("scaler dimension mismatch")
+        if any(not math.isfinite(value) for value in self.means):
+            raise ValueError("scaler means must be finite")
         if any(value <= 0.0 or not math.isfinite(value) for value in self.standard_deviations):
             raise ValueError("scaler deviation must be finite and positive")
-        if self.fit_scope != "INNER_TRAIN":
-            raise ValueError("scaler fit scope must be INNER_TRAIN")
 
     @property
     def dimension(self) -> int:
@@ -33,23 +30,35 @@ class StandardScaler:
     def transform(self, values: Sequence[float]) -> tuple[float, ...]:
         if len(values) != self.dimension:
             raise ValueError("scaler dimension mismatch")
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("scaler input must be finite")
         return tuple((float(value) - mean) / deviation for value, mean, deviation in zip(values, self.means, self.standard_deviations, strict=True))
 
 
 @dataclass(frozen=True, slots=True)
 class OutlierLimits:
     limits: tuple[tuple[str, float, float], ...]
-    fit_scope: str = "INNER_TRAIN"
+
+    def __post_init__(self) -> None:
+        if any(not math.isfinite(lower) or not math.isfinite(upper) or upper < lower for _, lower, upper in self.limits):
+            raise ValueError("outlier limits must be finite and ordered")
 
     def clip(self, feature_order: tuple[str, ...], values: Sequence[float]) -> tuple[float, ...]:
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("outlier input must be finite")
         by_name = {name: (lower, upper) for name, lower, upper in self.limits}
+        if set(by_name) != set(feature_order):
+            raise ValueError("outlier feature order mismatch")
         return tuple(min(by_name[name][1], max(by_name[name][0], float(value))) for name, value in zip(feature_order, values, strict=True))
 
 
 @dataclass(frozen=True, slots=True)
 class LargeTradeThresholds:
     thresholds: tuple[tuple[str, float], ...]
-    fit_scope: str = "INNER_TRAIN"
+
+    def __post_init__(self) -> None:
+        if any(not math.isfinite(value) for _, value in self.thresholds):
+            raise ValueError("large-trade thresholds must be finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,10 +76,14 @@ class FoldPreprocessor:
     scaler: StandardScaler
     outlier_limits: OutlierLimits
     large_trade_thresholds: LargeTradeThresholds
-    fit_start: datetime
-    fit_end: datetime
-    fit_scope: str
+    provenance: TrainingProvenance
     content_hash: str
+
+    def __post_init__(self) -> None:
+        if self.imputer.provenance != self.provenance:
+            raise ValueError("imputer provenance mismatch")
+        if self.scaler.feature_order != self.imputer.output_feature_order:
+            raise ValueError("scaler and imputer feature order mismatch")
 
     @property
     def feature_order(self) -> tuple[str, ...]:
@@ -81,66 +94,62 @@ class FoldPreprocessor:
         return self.imputer.output_feature_order
 
     @classmethod
-    def fit(
+    def fit_inner_train(
         cls,
-        rows: Sequence[Mapping[str, float | None]],
+        dataset: InnerTrainDataset,
         *,
         feature_order: tuple[str, ...],
         required_features: tuple[str, ...],
-        fit_start: datetime,
-        fit_end: datetime,
         large_trade_features: tuple[str, ...] = (),
         lower_quantile: float = 0.01,
         upper_quantile: float = 0.99,
         large_trade_quantile: float = 0.95,
     ) -> FoldPreprocessor:
         if not 0.0 <= lower_quantile < upper_quantile <= 1.0 or not 0.0 <= large_trade_quantile <= 1.0:
-            raise ValueError("invalid train quantile")
+            raise ValueError("invalid inner-train quantile")
         if not set(large_trade_features).issubset(feature_order):
             raise ValueError("large trade features must belong to feature order")
-        imputer = MedianImputer.fit(
-            rows, feature_order=feature_order, required_features=required_features,
-            fit_start=fit_start, fit_end=fit_end,
+        imputer = MedianImputer.fit_inner_train(dataset, feature_order=feature_order, required_features=required_features)
+        complete_train = tuple(
+            result.values
+            for row in dataset.rows
+            for result in (imputer.transform(row.features),)
+            if result.is_eligible and row.is_complete and row.label != "AMBIGUOUS"
         )
-        complete_train: list[tuple[float, ...]] = []
-        for row in rows:
-            result = imputer.transform(row)
-            if result.is_eligible:
-                complete_train.append(result.values)
         if not complete_train:
-            raise ValueError("preprocessor requires complete train rows")
+            raise ValueError("preprocessor requires eligible inner-train rows")
         limits = tuple(
             (name, _quantile(sorted(row[index] for row in complete_train), lower_quantile), _quantile(sorted(row[index] for row in complete_train), upper_quantile))
             for index, name in enumerate(feature_order)
         )
         outliers = OutlierLimits(limits)
-        clipped = tuple(
-            outliers.clip(feature_order, row[: len(feature_order)]) + row[len(feature_order) :]
-            for row in complete_train
-        )
-        means = tuple(sum(row[index] for row in clipped) / len(clipped) for index in range(len(imputer.output_feature_order)))
+        clipped = tuple(outliers.clip(feature_order, row[: len(feature_order)]) + row[len(feature_order) :] for row in complete_train)
+        means = tuple(sum(row[index] for row in clipped) / len(clipped) for index in range(imputer.output_dimension))
         deviations = tuple(
             math.sqrt(sum((row[index] - means[index]) ** 2 for row in clipped) / len(clipped)) or 1.0
             for index in range(len(means))
         )
         scaler = StandardScaler(imputer.output_feature_order, means, deviations)
         thresholds = LargeTradeThresholds(tuple(
-            (name, _quantile(sorted(_present_values(rows, name)), large_trade_quantile))
+            (name, _quantile(sorted(_present_values(dataset, name)), large_trade_quantile))
             for name in large_trade_features
         ))
-        payload = _state_payload(imputer, scaler, outliers, thresholds, fit_start, fit_end, "INNER_TRAIN")
-        return cls(imputer, scaler, outliers, thresholds, fit_start, fit_end, "INNER_TRAIN", _hash(payload))
+        payload = _state_payload(imputer, scaler, outliers, thresholds, dataset.provenance)
+        return cls(imputer, scaler, outliers, thresholds, dataset.provenance, canonical_hash(payload))
 
     def transform(self, row: Mapping[str, float | None]) -> PreprocessingResult:
-        imputed: ImputationResult = self.imputer.transform(row)
+        imputed = self.imputer.transform(row)
         if not imputed.is_eligible:
             return PreprocessingResult((), self.output_feature_order, False, "NO_TRADE", imputed.reasons)
         original_dimension = len(self.feature_order)
         clipped = self.outlier_limits.clip(self.feature_order, imputed.values[:original_dimension]) + imputed.values[original_dimension:]
-        return PreprocessingResult(self.scaler.transform(clipped), self.output_feature_order, True, None, ())
+        scaled = self.scaler.transform(clipped)
+        if any(not math.isfinite(value) for value in scaled):
+            return PreprocessingResult((), self.output_feature_order, False, "NO_TRADE", ("NONFINITE_TRANSFORM",))
+        return PreprocessingResult(scaled, self.output_feature_order, True, None, ())
 
     def to_dict(self) -> dict[str, object]:
-        payload = _state_payload(self.imputer, self.scaler, self.outlier_limits, self.large_trade_thresholds, self.fit_start, self.fit_end, self.fit_scope)
+        payload = _state_payload(self.imputer, self.scaler, self.outlier_limits, self.large_trade_thresholds, self.provenance)
         payload["content_hash"] = self.content_hash
         return payload
 
@@ -154,40 +163,44 @@ class FoldPreprocessor:
             imputer=imputer,
             scaler=StandardScaler(
                 tuple(_strings(scaler_payload["feature_order"])), tuple(_floats(scaler_payload["means"])),
-                tuple(_floats(scaler_payload["standard_deviations"])), str(scaler_payload["fit_scope"]),
+                tuple(_floats(scaler_payload["standard_deviations"])),
             ),
-            outlier_limits=OutlierLimits(tuple((str(item[0]), _number(item[1]), _number(item[2])) for item in _triples(outlier_payload["limits"])), str(outlier_payload["fit_scope"])),
-            large_trade_thresholds=LargeTradeThresholds(tuple((str(item[0]), _number(item[1])) for item in _pairs(large_payload["thresholds"])), str(large_payload["fit_scope"])),
-            fit_start=datetime.fromisoformat(str(payload["fit_start"])), fit_end=datetime.fromisoformat(str(payload["fit_end"])),
-            fit_scope=str(payload["fit_scope"]), content_hash=str(payload["content_hash"]),
+            outlier_limits=OutlierLimits(tuple((str(item[0]), _number(item[1]), _number(item[2])) for item in _triples(outlier_payload["limits"]))),
+            large_trade_thresholds=LargeTradeThresholds(tuple((str(item[0]), _number(item[1])) for item in _pairs(large_payload["thresholds"]))),
+            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            content_hash=str(payload["content_hash"]),
         )
         expected = instance.to_dict()
         expected.pop("content_hash")
-        if _hash(expected) != instance.content_hash:
+        if canonical_hash(expected) != instance.content_hash:
             raise ValueError("preprocessor content hash mismatch")
         return instance
 
 
 def _state_payload(
-    imputer: MedianImputer, scaler: StandardScaler, outliers: OutlierLimits,
-    large_thresholds: LargeTradeThresholds, fit_start: datetime, fit_end: datetime, fit_scope: str,
+    imputer: MedianImputer,
+    scaler: StandardScaler,
+    outliers: OutlierLimits,
+    large_thresholds: LargeTradeThresholds,
+    provenance: TrainingProvenance,
 ) -> dict[str, object]:
     return {
         "imputer": imputer.to_dict(),
         "scaler": {
-            "feature_order": list(scaler.feature_order), "means": list(scaler.means),
-            "standard_deviations": list(scaler.standard_deviations), "dimension": scaler.dimension,
-            "fit_scope": scaler.fit_scope,
+            "feature_order": list(scaler.feature_order),
+            "means": list(scaler.means),
+            "standard_deviations": list(scaler.standard_deviations),
+            "dimension": scaler.dimension,
         },
-        "outlier_limits": {"limits": [list(item) for item in outliers.limits], "fit_scope": outliers.fit_scope},
-        "large_trade_thresholds": {"thresholds": [list(item) for item in large_thresholds.thresholds], "fit_scope": large_thresholds.fit_scope},
-        "fit_start": fit_start.isoformat(), "fit_end": fit_end.isoformat(), "fit_scope": fit_scope,
+        "outlier_limits": {"limits": [list(item) for item in outliers.limits]},
+        "large_trade_thresholds": {"thresholds": [list(item) for item in large_thresholds.thresholds]},
+        "provenance": provenance.to_dict(),
     }
 
 
 def _quantile(values: Sequence[float], fraction: float) -> float:
     if not values:
-        raise ValueError("quantile requires train values")
+        raise ValueError("quantile requires inner-train values")
     if len(values) == 1:
         return float(values[0])
     position = fraction * (len(values) - 1)
@@ -198,8 +211,11 @@ def _quantile(values: Sequence[float], fraction: float) -> float:
     return float(values[lower] + (values[upper] - values[lower]) * (position - lower))
 
 
-def _hash(payload: object) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+def _present_values(dataset: InnerTrainDataset, name: str) -> tuple[float, ...]:
+    values = tuple(float(value) for row in dataset.rows if (value := row.features.get(name)) is not None)
+    if not values:
+        raise ValueError(f"large-trade feature has no inner-train values:{name}")
+    return values
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -215,9 +231,9 @@ def _strings(value: object) -> list[str]:
 
 
 def _floats(value: object) -> list[float]:
-    if not isinstance(value, list) or not all(isinstance(item, (int, float)) for item in value):
+    if not isinstance(value, list):
         raise ValueError("expected number list")
-    return [float(item) for item in value]
+    return [_number(item) for item in cast(list[object], value)]
 
 
 def _pairs(value: object) -> list[list[object]]:
@@ -232,16 +248,7 @@ def _triples(value: object) -> list[list[object]]:
     return cast(list[list[object]], value)
 
 
-def _present_values(rows: Sequence[Mapping[str, float | None]], name: str) -> tuple[float, ...]:
-    values: list[float] = []
-    for row in rows:
-        value = row.get(name)
-        if value is not None:
-            values.append(float(value))
-    return tuple(values)
-
-
 def _number(value: object) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise ValueError("expected number")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+        raise ValueError("expected finite number")
     return float(value)

@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
 
 from tmf_research.models.scaler import FoldPreprocessor
 
+from tests.unit.test_scaler import scaler_dataset
+
 
 class TransformScopeLeakageTests(unittest.TestCase):
-    def test_validation_and_test_sentinels_cannot_change_train_fitted_state(self) -> None:
-        preprocessor = FoldPreprocessor.fit(
-            ({"x": 1.0}, {"x": 2.0}, {"x": 3.0}), feature_order=("x",), required_features=("x",),
-            fit_start=datetime(2026, 1, 1, tzinfo=timezone.utc), fit_end=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    def test_validation_and_test_sentinels_cannot_change_inner_train_state(self) -> None:
+        preprocessor = FoldPreprocessor.fit_inner_train(
+            scaler_dataset(), feature_order=("return_1m", "large_volume"), required_features=("return_1m",),
+            large_trade_features=("large_volume",),
         )
-        before = preprocessor.content_hash
+        before = preprocessor.to_dict()
 
-        preprocessor.transform({"x": 999999999.0})
-        preprocessor.transform({"x": -999999999.0})
+        preprocessor.transform({"return_1m": 999999999.0, "large_volume": -999999999.0})
+        preprocessor.transform({"return_1m": -999999999.0, "large_volume": 999999999.0})
 
-        self.assertEqual(preprocessor.content_hash, before)
-        self.assertEqual(preprocessor.fit_scope, "INNER_TRAIN")
+        self.assertEqual(preprocessor.to_dict(), before)
+        self.assertEqual(preprocessor.provenance, scaler_dataset().provenance)
 
 
 if __name__ == "__main__":

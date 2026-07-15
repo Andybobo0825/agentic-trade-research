@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -16,6 +17,13 @@ class BaselineObservation:
     vwap: float
     ema_slope: float
     returns: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if not self.returns or any(
+            not math.isfinite(value)
+            for value in (self.price, self.previous_price, self.vwap, self.ema_slope, *self.returns)
+        ):
+            raise ValueError("baseline inputs must be finite and non-empty")
 
 
 def baseline_0(_observation: BaselineObservation) -> Signal:

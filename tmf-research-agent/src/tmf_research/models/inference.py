@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -11,7 +12,7 @@ class ClassProbabilities:
 
     def __post_init__(self) -> None:
         values = self.as_tuple()
-        if any(value < 0.0 or value > 1.0 for value in values):
+        if any(not math.isfinite(value) or value < 0.0 or value > 1.0 for value in values):
             raise ValueError("probability must be between zero and one")
         if abs(sum(values) - 1.0) > 1e-12:
             raise ValueError("class probabilities must sum to one")
@@ -22,7 +23,7 @@ class ClassProbabilities:
 
 def combine_probabilities(*, p_trade: float, p_long_given_trade: float) -> ClassProbabilities:
     for value in (p_trade, p_long_given_trade):
-        if value < 0.0 or value > 1.0:
+        if not math.isfinite(value) or value < 0.0 or value > 1.0:
             raise ValueError("probability must be between zero and one")
     p_long = p_trade * p_long_given_trade
     p_short = p_trade * (1.0 - p_long_given_trade)

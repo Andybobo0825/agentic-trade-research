@@ -15,8 +15,9 @@ class ProbabilityTests(unittest.TestCase):
         self.assertAlmostEqual(sum(result.as_tuple()), 1.0)
 
     def test_out_of_range_probability_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "probability"):
-            combine_probabilities(p_trade=1.01, p_long_given_trade=0.5)
+        for value in (1.01, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "probability"):
+                combine_probabilities(p_trade=value, p_long_given_trade=0.5)
 
 
 if __name__ == "__main__":

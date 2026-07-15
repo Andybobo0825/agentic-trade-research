@@ -4,16 +4,16 @@ from dataclasses import replace
 import unittest
 from datetime import timedelta
 
-from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow
+from tmf_research.models.provenance import Phase4SourceRow
 from tmf_research.models.training import InteractionRole, Phase4TrainingSpec, train_phase4_model
 
-from tests.unit.test_phase4_training import START, fold_manifest, inner_train_dataset, training_spec
+from tests.unit.test_phase4_training import START, fold_materialization, inner_train_dataset, training_spec
 
 
 class LogisticTests(unittest.TestCase):
     def test_rejects_unknown_labels_and_zero_l2_before_training(self) -> None:
         with self.assertRaisesRegex(ValueError, "label"):
-            InnerTrainRow(START + timedelta(days=1), {"x": 0.0}, "UNKNOWN")  # type: ignore[arg-type]
+            Phase4SourceRow("bad", START + timedelta(days=1), {"x": 0.0}, "UNKNOWN", 0.0)  # type: ignore[arg-type]
         with self.assertRaisesRegex(ValueError, "L2"):
             Phase4TrainingSpec(primary_features=("x",), required_features=("x",), l2=0.0)
 
@@ -71,14 +71,12 @@ class LogisticTests(unittest.TestCase):
             primary_features=("return_1m", "quote"), required_features=("return_1m", "quote"),
             interactions=(interaction,), max_iterations=5,
         )
-        dataset = InnerTrainDataset.create(
-            manifest=fold_manifest("e" * 64),
-            rows=(
-                InnerTrainRow(START + timedelta(days=1), {"return_1m": -1.0, "quote": 1.0, "return_x_quote": -1.0}, "NO_TRADE"),
-                InnerTrainRow(START + timedelta(days=2), {"return_1m": -0.5, "quote": 1.0, "return_x_quote": -0.5}, "SHORT"),
-                InnerTrainRow(START + timedelta(days=3), {"return_1m": 1.0, "quote": 1.0, "return_x_quote": 1.0}, "LONG"),
-            ),
+        rows = (
+            Phase4SourceRow("train-1", START + timedelta(days=1), {"return_1m": -1.0, "quote": 1.0, "return_x_quote": -1.0}, "NO_TRADE", 0.0),
+            Phase4SourceRow("train-2", START + timedelta(days=2), {"return_1m": -0.5, "quote": 1.0, "return_x_quote": -0.5}, "SHORT", 0.0),
+            Phase4SourceRow("train-3", START + timedelta(days=3), {"return_1m": 1.0, "quote": 1.0, "return_x_quote": 1.0}, "LONG", 0.0),
         )
+        dataset = fold_materialization(train_rows=rows).inner_train
 
         model = train_phase4_model(dataset, spec).model
 

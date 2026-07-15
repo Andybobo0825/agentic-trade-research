@@ -27,6 +27,9 @@ def volatility_features(bars: tuple[Bar, ...]) -> dict[str, float | None]:
         "true_range_1m": current,
         "atr_5m": atr,
         "realized_vol_5m": realized,
-        "range_expansion_ratio": current / baseline if current is not None and baseline not in (None, 0.0) else None,
+        "range_expansion_ratio": (
+            current / baseline
+            if current is not None and baseline is not None and baseline != 0.0
+            else None
+        ),
     }
-

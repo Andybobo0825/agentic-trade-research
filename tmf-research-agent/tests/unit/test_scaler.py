@@ -3,21 +3,19 @@ from __future__ import annotations
 import unittest
 from datetime import timedelta
 
-from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow
+from tmf_research.models.provenance import InnerTrainDataset, Phase4SourceRow
 from tmf_research.models.scaler import FoldPreprocessor, StandardScaler
 
-from tests.unit.test_phase4_training import START, fold_manifest
+from tests.unit.test_phase4_training import START, fold_materialization
 
 
 def scaler_dataset() -> InnerTrainDataset:
-    return InnerTrainDataset.create(
-        manifest=fold_manifest("c" * 64),
-        rows=(
-            InnerTrainRow(START + timedelta(days=1), {"return_1m": -1.0, "large_volume": 1.0}, "NO_TRADE"),
-            InnerTrainRow(START + timedelta(days=2), {"return_1m": 0.0, "large_volume": 2.0}, "SHORT"),
-            InnerTrainRow(START + timedelta(days=3), {"return_1m": 1.0, "large_volume": 100.0}, "LONG"),
-        ),
+    rows = (
+        Phase4SourceRow("train-1", START + timedelta(days=1), {"return_1m": -1.0, "large_volume": 1.0}, "NO_TRADE", 0.0),
+        Phase4SourceRow("train-2", START + timedelta(days=2), {"return_1m": 0.0, "large_volume": 2.0}, "SHORT", 0.0),
+        Phase4SourceRow("train-3", START + timedelta(days=3), {"return_1m": 1.0, "large_volume": 100.0}, "LONG", 0.0),
     )
+    return fold_materialization(train_rows=rows).inner_train
 
 
 class ScalerTests(unittest.TestCase):

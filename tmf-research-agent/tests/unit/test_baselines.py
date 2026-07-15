@@ -4,10 +4,10 @@ import unittest
 from datetime import timedelta
 
 from tmf_research.models.baselines import BaselineObservation, ReturnOnlyBaseline, baseline_0, baseline_1, baseline_2, baseline_3, report_outer_fold
-from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow
+from tmf_research.models.provenance import Phase4SourceRow
 from tmf_research.models.training import Phase4TrainingSpec, train_phase4_model
 
-from tests.unit.test_phase4_training import START, fold_manifest
+from tests.unit.test_phase4_training import START, fold_materialization
 
 
 class BaselineTests(unittest.TestCase):
@@ -24,19 +24,19 @@ class BaselineTests(unittest.TestCase):
 
     def test_baseline_four_uses_only_price_returns_and_reports_outer_fold(self) -> None:
         rows = (
-            InnerTrainRow(START + timedelta(days=1), {"return_1m": -2.0}, "NO_TRADE"),
-            InnerTrainRow(START + timedelta(days=2), {"return_1m": -1.0}, "NO_TRADE"),
-            InnerTrainRow(START + timedelta(days=3), {"return_1m": 1.0}, "SHORT"),
-            InnerTrainRow(START + timedelta(days=4), {"return_1m": 2.0}, "LONG"),
+            Phase4SourceRow("train-1", START + timedelta(days=1), {"return_1m": -2.0}, "NO_TRADE", 0.0),
+            Phase4SourceRow("train-2", START + timedelta(days=2), {"return_1m": -1.0}, "NO_TRADE", 0.0),
+            Phase4SourceRow("train-3", START + timedelta(days=3), {"return_1m": 1.0}, "SHORT", 0.0),
+            Phase4SourceRow("train-4", START + timedelta(days=4), {"return_1m": 2.0}, "LONG", 0.0),
         )
-        dataset = InnerTrainDataset.create(
-            manifest=fold_manifest("b" * 64), rows=rows,
-        )
+        dataset = fold_materialization(train_rows=rows).inner_train
         training = train_phase4_model(
             dataset,
             Phase4TrainingSpec(primary_features=("return_1m",), required_features=("return_1m",)),
         )
         baseline = ReturnOnlyBaseline(training.preprocessor, training.model.direction_model)
+        with self.assertRaisesRegex(ValueError, "direction model"):
+            ReturnOnlyBaseline(training.preprocessor, training.model.trade_model)
 
         report = report_outer_fold(
             outer_fold_id="outer-1",
@@ -49,15 +49,12 @@ class BaselineTests(unittest.TestCase):
 
     def test_baseline_four_uses_the_exact_scaled_training_representation(self) -> None:
         rows = (
-            InnerTrainRow(START + timedelta(days=1), {"return_1m": 100.0}, "NO_TRADE"),
-            InnerTrainRow(START + timedelta(days=2), {"return_1m": 101.0}, "NO_TRADE"),
-            InnerTrainRow(START + timedelta(days=3), {"return_1m": 102.0}, "SHORT"),
-            InnerTrainRow(START + timedelta(days=4), {"return_1m": 103.0}, "LONG"),
+            Phase4SourceRow("train-1", START + timedelta(days=1), {"return_1m": 100.0}, "NO_TRADE", 0.0),
+            Phase4SourceRow("train-2", START + timedelta(days=2), {"return_1m": 101.0}, "NO_TRADE", 0.0),
+            Phase4SourceRow("train-3", START + timedelta(days=3), {"return_1m": 102.0}, "SHORT", 0.0),
+            Phase4SourceRow("train-4", START + timedelta(days=4), {"return_1m": 103.0}, "LONG", 0.0),
         )
-        dataset = InnerTrainDataset.create(
-            manifest=fold_manifest("b" * 64),
-            rows=rows,
-        )
+        dataset = fold_materialization(train_rows=rows).inner_train
         training = train_phase4_model(
             dataset,
             Phase4TrainingSpec(primary_features=("return_1m",), required_features=("return_1m",)),

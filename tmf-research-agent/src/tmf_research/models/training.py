@@ -117,7 +117,7 @@ class Phase4TrainingResult:
     ) -> InnerValidationPredictions:
         if not isinstance(dataset, InnerValidationDataset):
             raise ValueError("only sealed inner-validation datasets can be scored")
-        if dataset.validation_range.parent_provenance != self.preprocessor.provenance:
+        if dataset.manifest != self.preprocessor.provenance.manifest:
             raise ValueError("inner-validation parent training provenance mismatch")
         if self.model.record.provenance != self.preprocessor.provenance:
             raise ValueError("model training provenance mismatch")
@@ -139,12 +139,11 @@ class Phase4TrainingResult:
             )
             direction_outcome = int(row.label == "LONG") if trade_outcome else None
             generated.append(_generated_prediction(
-                available_at=row.available_at,
+                source_row=row,
                 p_trade=p_trade,
                 trade_outcome=trade_outcome,
                 p_long_given_trade=p_long,
                 direction_outcome=direction_outcome,
-                net_return=row.net_return,
             ))
         return _generated_predictions(
             provenance=dataset.provenance,
@@ -155,6 +154,8 @@ class Phase4TrainingResult:
 
 
 def train_phase4_model(dataset: InnerTrainDataset, specification: Phase4TrainingSpec) -> Phase4TrainingResult:
+    if not isinstance(dataset, InnerTrainDataset):
+        raise ValueError("training requires a materialized inner-train capability")
     expected_order = specification.raw_feature_order
     if any(tuple(row.features) != expected_order for row in dataset.rows):
         raise ValueError("inner-train feature order does not match declared formal roles")

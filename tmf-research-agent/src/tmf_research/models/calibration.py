@@ -161,7 +161,7 @@ class TwoStageCalibrator:
         return cls(
             trade_calibrator=calibrator_from_dict(_mapping(payload["trade"])),
             direction_calibrator=calibrator_from_dict(_mapping(payload["direction"])),
-            validation_provenance=InnerValidationProvenance.from_dict(
+            validation_provenance=InnerValidationProvenance._from_dict(
                 _mapping(payload["validation_provenance"])
             ),
             preprocessor_hash=str(payload["preprocessor_hash"]), model_hash=str(payload["model_hash"]),

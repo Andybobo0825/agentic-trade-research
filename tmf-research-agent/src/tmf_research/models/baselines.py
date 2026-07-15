@@ -60,6 +60,8 @@ class ReturnOnlyBaseline:
             raise ValueError("baseline four training provenance mismatch")
         if self.model.record.preprocessor_hash != self.preprocessor.content_hash:
             raise ValueError("baseline four preprocessor hash mismatch")
+        if self.model.classes != ("SHORT", "LONG"):
+            raise ValueError("baseline four requires the direction model")
 
     @property
     def feature_order(self) -> tuple[str, ...]:

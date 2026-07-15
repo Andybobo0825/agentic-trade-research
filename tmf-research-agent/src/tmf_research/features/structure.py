@@ -7,7 +7,11 @@ from tmf_research.processing.bars import Bar
 def structure_features(bars: tuple[Bar, ...], atr: float | None, context: FeatureContext) -> dict[str, float | None]:
     price = bars[-1].close if bars else None
     def distance(level: float | None) -> float | None:
-        return (price - level) / atr if price is not None and level is not None and atr not in (None, 0.0) else None
+        return (
+            (price - level) / atr
+            if price is not None and level is not None and atr is not None and atr != 0.0
+            else None
+        )
 
     previous_high_distance = distance(context.previous_day_high)
     false_breakout = (

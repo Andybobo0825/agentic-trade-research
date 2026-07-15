@@ -40,6 +40,8 @@ class ModelMetadata:
     code_commit: str
     random_seed: int
     training_data_hash: str
+    validation_dataset_hash: str
+    validation_prediction_hash: str
     experiment_id: str
     outer_fold_count: int
     locked_holdout_status: str
@@ -53,6 +55,8 @@ class ModelMetadata:
         if self.training_end <= self.training_start:
             raise ValueError("training interval must be positive")
         validate_sha256(self.training_data_hash, "training data hash")
+        validate_sha256(self.validation_dataset_hash, "validation dataset hash")
+        validate_sha256(self.validation_prediction_hash, "validation prediction hash")
         if self.model_status not in ("DRAFT_PHASE4", "REJECTED_INSUFFICIENT_CALIBRATION"):
             raise ValueError("Phase 4 cannot persist an approved model status")
 
@@ -64,6 +68,8 @@ class ModelMetadata:
             "horizon": self.horizon, "feature_version": self.feature_version, "label_version": self.label_version,
             "schema_version": self.schema_version, "code_commit": self.code_commit, "random_seed": self.random_seed,
             "training_data_hash": self.training_data_hash, "experiment_id": self.experiment_id,
+            "validation_dataset_hash": self.validation_dataset_hash,
+            "validation_prediction_hash": self.validation_prediction_hash,
             "outer_fold_count": self.outer_fold_count, "locked_holdout_status": self.locked_holdout_status,
             "model_status": self.model_status,
         }
@@ -82,6 +88,8 @@ class ModelMetadata:
             label_version=str(payload["label_version"]), schema_version=str(payload["schema_version"]),
             code_commit=str(payload["code_commit"]), random_seed=_integer(payload["random_seed"]),
             training_data_hash=str(payload["training_data_hash"]), experiment_id=str(payload["experiment_id"]),
+            validation_dataset_hash=str(payload["validation_dataset_hash"]),
+            validation_prediction_hash=str(payload["validation_prediction_hash"]),
             outer_fold_count=_integer(payload["outer_fold_count"]), locked_holdout_status=str(payload["locked_holdout_status"]),
             model_status=cast(ModelStatus, status),
         )
@@ -132,6 +140,12 @@ class ModelBundle:
             raise ValueError("calibrator fold provenance mismatch")
         if self.calibrator.preprocessor_hash != self.preprocessor.content_hash or self.calibrator.model_hash != self.model.content_hash:
             raise ValueError("calibrator model provenance mismatch")
+        if (
+            self.metadata.validation_dataset_hash
+            != self.calibrator.validation_provenance.validation_dataset_hash
+            or self.metadata.validation_prediction_hash != self.calibrator.validation_hash
+        ):
+            raise ValueError("metadata calibration evidence provenance mismatch")
         if self.calibrator.insufficient_evidence != (self.metadata.model_status == "REJECTED_INSUFFICIENT_CALIBRATION"):
             raise ValueError("model status and calibration evidence disagree")
 
@@ -165,6 +179,8 @@ class ExpectedModelContract:
     schema_version: str
     scaler_dimension: int
     imputer_dimension: int
+    validation_dataset_hash: str
+    validation_prediction_hash: str
     model_checksum: str | None = None
 
     @classmethod
@@ -174,7 +190,10 @@ class ExpectedModelContract:
             "instrument": bundle.metadata.instrument, "session": bundle.metadata.session,
             "horizon": bundle.metadata.horizon, "schema_version": bundle.metadata.schema_version,
             "scaler_dimension": bundle.preprocessor.scaler.dimension,
-            "imputer_dimension": bundle.preprocessor.imputer.output_dimension, "model_checksum": None,
+            "imputer_dimension": bundle.preprocessor.imputer.output_dimension,
+            "validation_dataset_hash": bundle.metadata.validation_dataset_hash,
+            "validation_prediction_hash": bundle.metadata.validation_prediction_hash,
+            "model_checksum": None,
         }
         if set(overrides) - set(values):
             raise ValueError("unknown expected contract override")
@@ -183,7 +202,10 @@ class ExpectedModelContract:
             _string(values["feature_version"]), _string_tuple(values["feature_order"]),
             _string(values["instrument"]), _string(values["session"]), _string(values["horizon"]),
             _string(values["schema_version"]), _integer(values["scaler_dimension"]),
-            _integer(values["imputer_dimension"]), _optional_string(values["model_checksum"]),
+            _integer(values["imputer_dimension"]),
+            _string(values["validation_dataset_hash"]),
+            _string(values["validation_prediction_hash"]),
+            _optional_string(values["model_checksum"]),
         )
 
 
@@ -267,6 +289,14 @@ def _contract_mismatches(bundle: ModelBundle, expected: ExpectedModelContract) -
         (bundle.metadata.schema_version == expected.schema_version, "SCHEMA_VERSION_MISMATCH"),
         (bundle.preprocessor.scaler.dimension == expected.scaler_dimension, "SCALER_DIMENSION_MISMATCH"),
         (bundle.preprocessor.imputer.output_dimension == expected.imputer_dimension, "IMPUTER_DIMENSION_MISMATCH"),
+        (
+            bundle.metadata.validation_dataset_hash == expected.validation_dataset_hash,
+            "VALIDATION_DATASET_HASH_MISMATCH",
+        ),
+        (
+            bundle.metadata.validation_prediction_hash == expected.validation_prediction_hash,
+            "VALIDATION_PREDICTION_HASH_MISMATCH",
+        ),
     )
     return tuple(reason for valid, reason in checks if not valid)
 

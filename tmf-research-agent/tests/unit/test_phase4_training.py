@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
-from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow, NestedFoldManifest
+from tmf_research.models.provenance import (
+    InnerTrainDataset,
+    Phase4FoldMaterializer,
+    Phase4SourceRow,
+)
 from tmf_research.models.training import Phase4TrainingSpec, train_phase4_model
 
 
@@ -11,11 +17,56 @@ START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 END = datetime(2026, 2, 1, tzinfo=timezone.utc)
 
 
-def fold_manifest(dataset_hash: str = "d" * 64) -> NestedFoldManifest:
-    return NestedFoldManifest.plan(
+def default_train_rows() -> tuple[Phase4SourceRow, ...]:
+    return (
+        Phase4SourceRow("train-1", START + timedelta(days=1), {"return_1m": -2.0, "basis": None}, "NO_TRADE", 0.0),
+        Phase4SourceRow("train-2", START + timedelta(days=2), {"return_1m": -1.0, "basis": 10.0}, "NO_TRADE", 0.0),
+        Phase4SourceRow("train-3", START + timedelta(days=3), {"return_1m": 1.0, "basis": 20.0}, "LONG", 0.0),
+        Phase4SourceRow("train-4", START + timedelta(days=4), {"return_1m": 2.0, "basis": 30.0}, "SHORT", 0.0),
+        Phase4SourceRow("train-5", START + timedelta(days=5), {"return_1m": 9.0, "basis": 40.0}, "AMBIGUOUS", 0.0),
+        Phase4SourceRow("train-6", START + timedelta(days=6), {"return_1m": 9.0, "basis": 50.0}, "LONG", 0.0, is_complete=False),
+    )
+
+
+def default_validation_rows() -> tuple[Phase4SourceRow, ...]:
+    return tuple(
+        Phase4SourceRow(
+            f"validation-{index}",
+            END + timedelta(minutes=index + 1),
+            {"return_1m": float(index - 10), "basis": float(index + 10)},
+            "NO_TRADE" if index < 10 else ("SHORT" if index < 15 else "LONG"),
+            -1.0 if index < 10 else 1.0,
+        )
+        for index in range(20)
+    )
+
+
+def fold_materialization(
+    *,
+    train_rows: tuple[Phase4SourceRow, ...] | None = None,
+    validation_rows: tuple[Phase4SourceRow, ...] | None = None,
+) -> Phase4FoldMaterializer:
+    selected_train = default_train_rows() if train_rows is None else train_rows
+    if validation_rows is None:
+        if train_rows is None:
+            selected_validation = default_validation_rows()
+        else:
+            template = {name: 0.0 for name in selected_train[0].features}
+            selected_validation = (
+                Phase4SourceRow("validation-auto-1", END + timedelta(minutes=1), template, "NO_TRADE", -1.0),
+                Phase4SourceRow("validation-auto-2", END + timedelta(minutes=2), template, "LONG", 1.0),
+            )
+    else:
+        selected_validation = validation_rows
+    template = {name: 0.0 for name in selected_train[0].features}
+    outer_rows = (
+        Phase4SourceRow("outer-1", END + timedelta(hours=2, minutes=1), template, "NO_TRADE", -1.0),
+        Phase4SourceRow("outer-2", END + timedelta(hours=2, minutes=2), template, "LONG", 1.0),
+    )
+    return Phase4FoldMaterializer.materialize(
+        source_rows=selected_train + selected_validation + outer_rows,
         outer_fold_id="outer-1",
         inner_fold_id="inner-1",
-        dataset_hash=dataset_hash,
         train_start=START,
         train_end=END,
         validation_start=END + timedelta(minutes=1),
@@ -26,18 +77,7 @@ def fold_manifest(dataset_hash: str = "d" * 64) -> NestedFoldManifest:
 
 
 def inner_train_dataset() -> InnerTrainDataset:
-    rows = (
-        InnerTrainRow(START + timedelta(days=1), {"return_1m": -2.0, "basis": None}, "NO_TRADE"),
-        InnerTrainRow(START + timedelta(days=2), {"return_1m": -1.0, "basis": 10.0}, "NO_TRADE"),
-        InnerTrainRow(START + timedelta(days=3), {"return_1m": 1.0, "basis": 20.0}, "LONG"),
-        InnerTrainRow(START + timedelta(days=4), {"return_1m": 2.0, "basis": 30.0}, "SHORT"),
-        InnerTrainRow(START + timedelta(days=5), {"return_1m": 9.0, "basis": 40.0}, "AMBIGUOUS"),
-        InnerTrainRow(START + timedelta(days=6), {"return_1m": 9.0, "basis": 50.0}, "LONG", is_complete=False),
-    )
-    return InnerTrainDataset.create(
-        manifest=fold_manifest(),
-        rows=rows,
-    )
+    return fold_materialization().inner_train
 
 
 def training_spec() -> Phase4TrainingSpec:
@@ -69,17 +109,23 @@ class Phase4TrainingTests(unittest.TestCase):
         self.assertEqual(result.model.trade_model.record.sample_count, 4)
         self.assertEqual(result.model.direction_model.record.sample_count, 2)
 
-    def test_outer_or_future_rows_cannot_form_an_inner_train_capability(self) -> None:
-        with self.assertRaisesRegex(ValueError, "fit interval"):
-            InnerTrainDataset.create(
-                manifest=fold_manifest(),
-                rows=(InnerTrainRow(END + timedelta(microseconds=1), {"return_1m": 1.0}, "LONG"),),
+    def test_outer_test_capability_cannot_be_repurposed_as_inner_train(self) -> None:
+        materialized = fold_materialization()
+        with self.assertRaisesRegex(ValueError, "inner-train capability"):
+            train_phase4_model(
+                cast(InnerTrainDataset, materialized.outer_test),
+                training_spec(),
+            )
+        with self.assertRaises((TypeError, ValueError)):
+            replace(
+                materialized.inner_train,
+                rows=materialized.outer_test.rows,
             )
 
-    def test_nonfinite_training_features_are_rejected_before_fit(self) -> None:
+    def test_nonfinite_source_features_are_rejected_before_materialization(self) -> None:
         for value in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "finite"):
-                InnerTrainRow(START + timedelta(days=1), {"return_1m": value}, "LONG")
+                Phase4SourceRow("bad", START + timedelta(days=1), {"return_1m": value}, "LONG", 0.0)
 
     def test_validation_sentinel_cannot_change_fitted_or_model_hashes(self) -> None:
         result = train_phase4_model(inner_train_dataset(), training_spec())
@@ -92,18 +138,10 @@ class Phase4TrainingTests(unittest.TestCase):
 
     def test_undeclared_features_cannot_expand_the_formal_model(self) -> None:
         rows = tuple(
-            InnerTrainRow(
-                row.available_at,
-                {**row.features, "undeclared": 1.0},
-                row.label,
-                row.is_complete,
-            )
-            for row in inner_train_dataset().rows
+            replace(row, features={**row.features, "undeclared": 1.0})
+            for row in default_train_rows()
         )
-        expanded = InnerTrainDataset.create(
-            manifest=fold_manifest(),
-            rows=rows,
-        )
+        expanded = fold_materialization(train_rows=rows).inner_train
 
         with self.assertRaisesRegex(ValueError, "feature order"):
             train_phase4_model(expanded, training_spec())

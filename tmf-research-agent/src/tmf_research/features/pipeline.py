@@ -59,7 +59,14 @@ class FeaturePipeline:
         values["rolling_vwap_5m"] = rolling_vwap
         vol = volatility_features(complete)
         atr = vol["atr_5m"]
-        values["price_to_session_vwap_atr"] = (latest_close - session_vwap) / atr if latest_close is not None and session_vwap is not None and atr not in (None, 0.0) else None
+        values["price_to_session_vwap_atr"] = (
+            (latest_close - session_vwap) / atr
+            if latest_close is not None
+            and session_vwap is not None
+            and atr is not None
+            and atr != 0.0
+            else None
+        )
         older_vwap = vwap(complete[:-5]) if len(complete) > 5 else None
         values["vwap_slope_5m"] = session_vwap - older_vwap if session_vwap is not None and older_vwap is not None else None
         values.update(flow(causal_states, context.large_trade_threshold))

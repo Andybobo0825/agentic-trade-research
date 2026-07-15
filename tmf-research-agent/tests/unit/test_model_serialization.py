@@ -36,6 +36,8 @@ def bundle() -> ModelBundle:
         training_start=START, training_end=END, instrument="TMF", session="DAY", horizon="15m",
         feature_version="phase3-features-v1", label_version="labels-v1", schema_version="model-bundle-v1",
         code_commit="abc123", random_seed=7, training_data_hash=dataset.train_hash,
+        validation_dataset_hash=calibration.validation_provenance.validation_dataset_hash,
+        validation_prediction_hash=calibration.validation_hash,
         experiment_id="experiment-1", outer_fold_count=0, locked_holdout_status="NOT_RUN",
         model_status="DRAFT_PHASE4",
     )
@@ -81,6 +83,8 @@ class ModelSerializationTests(unittest.TestCase):
             ({"schema_version": "wrong"}, "SCHEMA_VERSION_MISMATCH"),
             ({"scaler_dimension": 999}, "SCALER_DIMENSION_MISMATCH"),
             ({"imputer_dimension": 999}, "IMPUTER_DIMENSION_MISMATCH"),
+            ({"validation_dataset_hash": "0" * 64}, "VALIDATION_DATASET_HASH_MISMATCH"),
+            ({"validation_prediction_hash": "0" * 64}, "VALIDATION_PREDICTION_HASH_MISMATCH"),
             ({"model_checksum": "0" * 64}, "EXPECTED_MODEL_CHECKSUM_MISMATCH"),
         )
         with TemporaryDirectory() as directory:
@@ -103,6 +107,8 @@ class ModelSerializationTests(unittest.TestCase):
             ("scaler.json", "IMPUTER_INPUT_DIMENSION"),
             ("scaler.json", "IMPUTER_OUTPUT_DIMENSION"),
             ("calibrator.json", "OUTER_TEST_CALIBRATION_ROLE"),
+            ("calibrator.json", "CALIBRATION_VALIDATION_HASH"),
+            ("calibrator.json", "CALIBRATION_DATASET_HASH"),
         )
         with TemporaryDirectory() as directory:
             tampered_root = Path(directory) / "tampered"
@@ -128,13 +134,44 @@ class ModelSerializationTests(unittest.TestCase):
                 elif corruption == "IMPUTER_OUTPUT_DIMENSION":
                     payload["imputer"]["output_dimension"] = 999
                 elif corruption == "OUTER_TEST_CALIBRATION_ROLE":
-                    payload["validation_provenance"]["validation_range"]["fold"]["role"] = "OUTER_TEST"
+                    payload["validation_provenance"]["manifest"]["inner_validation"]["role"] = "OUTER_TEST"
+                elif corruption == "CALIBRATION_VALIDATION_HASH":
+                    payload["validation_hash"] = "0" * 64
+                elif corruption == "CALIBRATION_DATASET_HASH":
+                    payload["validation_provenance"]["validation_dataset_hash"] = "0" * 64
                 else:
                     payload.update(corruption)
                 (root / filename).write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
                 (root / "checksum.sha256").write_text(_bundle_checksum(root) + "\n", encoding="ascii")
                 result = load_model_bundle(root, ExpectedModelContract.from_bundle(original))
                 self.assertEqual(result.reasons, ("MODEL_BUNDLE_INVALID",))
+
+    def test_rehashed_consistent_validation_substitution_fails_expected_contract(self) -> None:
+        original = bundle()
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "model"
+            save_model_bundle(original, root)
+            metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+            calibrator = json.loads((root / "calibrator.json").read_text(encoding="utf-8"))
+            substituted_hash = "0" * 64
+            metadata["validation_prediction_hash"] = substituted_hash
+            calibrator["validation_hash"] = substituted_hash
+            (root / "metadata.json").write_text(
+                json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            (root / "calibrator.json").write_text(
+                json.dumps(calibrator, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            (root / "checksum.sha256").write_text(
+                _bundle_checksum(root) + "\n",
+                encoding="ascii",
+            )
+
+            result = load_model_bundle(root, ExpectedModelContract.from_bundle(original))
+
+        self.assertEqual(result.reasons, ("VALIDATION_PREDICTION_HASH_MISMATCH",))
 
     def test_publish_is_exclusive_and_load_io_errors_are_stable(self) -> None:
         original = bundle()
@@ -167,6 +204,8 @@ class ModelSerializationTests(unittest.TestCase):
         original = bundle()
         cases = (
             (replace(original.metadata, training_data_hash="0" * 64), "training data"),
+            (replace(original.metadata, validation_dataset_hash="0" * 64), "calibration evidence"),
+            (replace(original.metadata, validation_prediction_hash="0" * 64), "calibration evidence"),
             (replace(original.metadata, training_start=START.replace(year=2025)), "training interval"),
             (replace(original.metadata, random_seed=999), "random seed"),
         )

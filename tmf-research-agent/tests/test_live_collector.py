@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from tmf_research.collection.event_queue import BoundedEventQueue
 from tmf_research.collection.live_collector import LiveCollector, MarketCallback
 from tmf_research.domain.contracts import ContractInfo
-from tmf_research.domain.events import BidAskEvent, TickEvent
+from tmf_research.domain.events import BidAskEvent, MarketEvent, TickEvent
 from tmf_research.infrastructure.contract_resolver import ContractTracker
 
 
@@ -49,7 +49,7 @@ class FakeGateway:
 class LiveCollectorTests(unittest.TestCase):
     def test_subscribes_callbacks_and_enqueues_tick_and_bidask_events(self) -> None:
         gateway = FakeGateway()
-        queue = BoundedEventQueue[TickEvent | BidAskEvent](capacity=4)
+        queue = BoundedEventQueue[MarketEvent](capacity=4)
         tracker = ContractTracker(gateway)
         ids = iter(("tick-1", "bidask-1"))
         collector = LiveCollector(
@@ -97,7 +97,7 @@ class LiveCollectorTests(unittest.TestCase):
 
     def test_full_queue_returns_from_callback_with_drop_evidence(self) -> None:
         gateway = FakeGateway()
-        queue = BoundedEventQueue[object](capacity=1, clock=lambda: NOW)
+        queue = BoundedEventQueue[MarketEvent](capacity=1, clock=lambda: NOW)
         collector = LiveCollector(
             gateway,
             ContractTracker(gateway),

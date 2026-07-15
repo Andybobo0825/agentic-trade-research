@@ -31,7 +31,7 @@ class LiveCollector:
         self,
         gateway: LiveGateway,
         tracker: ContractTracker,
-        event_queue: BoundedEventQueue[MarketEvent | object],
+        event_queue: BoundedEventQueue[MarketEvent],
         *,
         clock: Callable[[], datetime] | None = None,
         event_id_factory: Callable[[], str] | None = None,

@@ -49,6 +49,61 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertTrue(report.ok, report.render())
 
+    def test_adapter_allows_only_positive_raw_api_capabilities(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/infrastructure/shioaji_market_data.py": (
+                    "class Adapter:\n"
+                    "    def __init__(self, raw_api):\n"
+                    "        self._api = raw_api\n"
+                    "    def leak(self):\n"
+                    "        return self._api.account_balance()\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-api-capability", self._rules(report))
+        self.assertIn(
+            "account_balance",
+            {finding.symbol for finding in report.findings},
+        )
+
+    def test_adapter_rejects_dynamic_raw_api_capability_lookup(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/infrastructure/shioaji_market_data.py": (
+                    "class Adapter:\n"
+                    "    def __init__(self, raw_api):\n"
+                    "        self._api = raw_api\n"
+                    "    def invoke(self, capability):\n"
+                    "        return getattr(self._api, capability)()\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-api-capability", self._rules(report))
+
+    def test_adapter_allows_declared_market_data_capabilities(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/infrastructure/shioaji_market_data.py": (
+                    "class Adapter:\n"
+                    "    def __init__(self, raw_api):\n"
+                    "        self._api = raw_api\n"
+                    "    def market_data(self, contract):\n"
+                    "        self._api.Contracts\n"
+                    "        self._api.quote.subscribe(contract)\n"
+                    "        self._api.quote.unsubscribe(contract)\n"
+                    "        self._api.quote.set_on_tick_fop_v1_callback(print)\n"
+                    "        self._api.quote.set_on_bidask_fop_v1_callback(print)\n"
+                    "        self._api.ticks(contract, date='2026-07-15')\n"
+                    "        self._api.kbars(contract, start='x', end='y')\n"
+                )
+            }
+        )
+
+        self.assertTrue(report.ok, report.render())
+
     def test_detects_raw_adapter_dependency_from_a_consumer(self) -> None:
         report = self._verify(
             {

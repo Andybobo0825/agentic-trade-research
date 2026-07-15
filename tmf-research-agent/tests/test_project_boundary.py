@@ -33,6 +33,21 @@ class ProjectBoundaryTests(unittest.TestCase):
                     host_file.read_text(encoding="utf-8"),
                 )
 
+    def test_all_host_runtime_sources_remain_isolated_from_sidecar(self) -> None:
+        host_paths = [HOST_ROOT / "package.json"]
+        for root_name in ("src", "bin"):
+            host_paths.extend(
+                path
+                for path in (HOST_ROOT / root_name).rglob("*")
+                if path.is_file()
+            )
+
+        for host_path in host_paths:
+            with self.subTest(host_path=host_path):
+                source = host_path.read_text(encoding="utf-8")
+                self.assertNotIn("tmf-research-agent", source)
+                self.assertNotIn("tmf_research", source)
+
     def test_sidecar_ci_runs_readonly_gate_before_tests(self) -> None:
         workflow = (
             HOST_ROOT / ".github" / "workflows" / "tmf-research-sidecar.yml"

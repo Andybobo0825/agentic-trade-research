@@ -130,10 +130,20 @@ class ShioajiMarketDataGateway:
         return contract
 
     def register_tick_callback(self, callback: MarketCallback) -> None:
-        self._api.quote.set_on_tick_fop_v1_callback(callback)
+        def adapt(*args: object) -> None:
+            if not args:
+                raise TypeError("tick callback payload is required")
+            callback(_payload_snapshot(args[-1]))
+
+        self._api.quote.set_on_tick_fop_v1_callback(adapt)
 
     def register_bidask_callback(self, callback: MarketCallback) -> None:
-        self._api.quote.set_on_bidask_fop_v1_callback(callback)
+        def adapt(*args: object) -> None:
+            if not args:
+                raise TypeError("bidask callback payload is required")
+            callback(_payload_snapshot(args[-1]))
+
+        self._api.quote.set_on_bidask_fop_v1_callback(adapt)
 
     def subscribe_tick(self, contract: ContractInfo) -> None:
         self._change_subscription("subscribe", contract, self._tick_quote_type)

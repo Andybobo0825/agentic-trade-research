@@ -18,6 +18,12 @@ class ContractInfo:
     resolved_at: datetime
     resolver_version: str
 
+    def __post_init__(self) -> None:
+        if self.resolved_at.tzinfo is None:
+            raise ValueError("resolved_at must be timezone-aware")
+        if not self.alias_code.strip() or not self.target_code.strip():
+            raise ValueError("alias_code and target_code are required")
+
 
 @dataclass(frozen=True, slots=True)
 class TickBatch:

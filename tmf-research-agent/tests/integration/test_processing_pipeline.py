@@ -116,6 +116,10 @@ class ProcessingPipelineTests(unittest.TestCase):
         self.assertEqual(len(first.states), 60)
         self.assertEqual(first.bar_sets[0].bars[0].bar_start, START)
         self.assertTrue(first.bar_sets[0].bars[0].is_complete)
+        self.assertAlmostEqual(
+            first.bar_sets[0].bars[0].bidask_coverage_ratio,
+            2.0 / 60.0,
+        )
         self.assertEqual(first.quality_report.tick_count, 1)
 
     def test_pipeline_excludes_out_of_range_events_and_propagates_quality_evidence(self) -> None:

@@ -75,7 +75,7 @@ class OneSecondAggregatorTests(unittest.TestCase):
         self.assertAlmostEqual(state.level1_imbalance or 0.0, 0.25)
         self.assertAlmostEqual(state.level3_imbalance or 0.0, 0.25)
         self.assertAlmostEqual(state.level5_imbalance or 0.0, 0.25)
-        self.assertEqual((state.underlying_price, state.basis), (99.0, 1.0))
+        self.assertEqual((state.underlying_price, state.basis), (99.0, 3.0))
         self.assertAlmostEqual(state.last_tick_age_ms or 0.0, 300.0)
         self.assertAlmostEqual(state.last_bidask_age_ms or 0.0, 500.0)
         self.assertEqual(state.notional, 506.0)
@@ -99,10 +99,30 @@ class OneSecondAggregatorTests(unittest.TestCase):
         self.assertEqual((empty.volume, empty.trade_count), (0, 0))
         self.assertEqual((empty.buy_volume, empty.sell_volume, empty.unknown_volume), (0, 0, 0))
         self.assertEqual((empty.last_bid, empty.last_ask, empty.midpoint), (99.0, 101.0, 100.0))
-        self.assertEqual((empty.underlying_price, empty.basis), (99.0, 1.0))
+        self.assertEqual((empty.underlying_price, empty.basis), (99.0, 3.0))
         self.assertAlmostEqual(empty.last_tick_age_ms or 0.0, 1300.0)
         self.assertAlmostEqual(empty.last_bidask_age_ms or 0.0, 1500.0)
         self.assertEqual(empty.notional, 0.0)
+
+    def test_stale_carried_book_keeps_audit_prices_but_disables_book_metrics(self) -> None:
+        aggregator = OneSecondAggregator(max_bidask_age=timedelta(seconds=1))
+        previous = aggregator.aggregate(SECOND, (), (quote(),))
+
+        stale = aggregator.aggregate(
+            SECOND + timedelta(seconds=1),
+            (),
+            (),
+            previous=previous,
+        )
+
+        self.assertEqual((stale.last_bid, stale.last_ask), (99.0, 101.0))
+        self.assertFalse(stale.bidask_available)
+        self.assertIsNone(stale.spread)
+        self.assertIsNone(stale.midpoint)
+        self.assertIsNone(stale.microprice)
+        self.assertIsNone(stale.level1_imbalance)
+        self.assertIsNone(stale.level3_imbalance)
+        self.assertIsNone(stale.level5_imbalance)
 
 
 if __name__ == "__main__":

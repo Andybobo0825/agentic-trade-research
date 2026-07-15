@@ -157,12 +157,18 @@ class TwoStageCalibrator:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> TwoStageCalibrator:
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> TwoStageCalibrator:
         return cls(
             trade_calibrator=calibrator_from_dict(_mapping(payload["trade"])),
             direction_calibrator=calibrator_from_dict(_mapping(payload["direction"])),
             validation_provenance=InnerValidationProvenance._from_dict(
-                _mapping(payload["validation_provenance"])
+                _mapping(payload["validation_provenance"]),
+                deserialization_authority=deserialization_authority,
             ),
             preprocessor_hash=str(payload["preprocessor_hash"]), model_hash=str(payload["model_hash"]),
             validation_hash=str(payload["validation_hash"]), insufficient_evidence=_boolean(payload["insufficient_evidence"]),

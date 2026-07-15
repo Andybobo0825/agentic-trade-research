@@ -94,7 +94,12 @@ class BinaryTrainingRecord:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> BinaryTrainingRecord:
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> BinaryTrainingRecord:
         return cls(
             sample_count=_integer(payload["sample_count"]),
             class_counts=tuple((_integer(item[0]), _integer(item[1])) for item in _pairs(payload["class_counts"])),
@@ -102,7 +107,10 @@ class BinaryTrainingRecord:
             iterations=_integer(payload["iterations"]),
             converged=_boolean(payload["converged"]),
             final_loss=_number(payload["final_loss"]),
-            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            provenance=TrainingProvenance._from_dict(
+                _mapping(payload["provenance"]),
+                deserialization_authority=deserialization_authority,
+            ),
             preprocessor_hash=str(payload["preprocessor_hash"]),
         )
 
@@ -174,7 +182,12 @@ class BinaryLogisticModel:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> BinaryLogisticModel:
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> BinaryLogisticModel:
         classes = tuple(_strings(payload["classes"]))
         if len(classes) != 2:
             raise ValueError("serialized classes must contain two values")
@@ -184,7 +197,11 @@ class BinaryLogisticModel:
             class_weights=tuple((_integer(item[0]), _number(item[1])) for item in _pairs(payload["class_weights"])),
             max_iterations=_integer(payload["max_iterations"]), tolerance=_number(payload["tolerance"]),
             learning_rate=_number(payload["learning_rate"]), random_seed=_integer(payload["random_seed"]),
-            classes=classes, record=BinaryTrainingRecord.from_dict(_mapping(payload["record"])),
+            classes=classes,
+            record=BinaryTrainingRecord._from_dict(
+                _mapping(payload["record"]),
+                deserialization_authority=deserialization_authority,
+            ),
         )
 
 
@@ -232,12 +249,20 @@ class TwoStageTrainingRecord:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> TwoStageTrainingRecord:
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> TwoStageTrainingRecord:
         return cls(
             input_count=_integer(payload["input_count"]), eligible_count=_integer(payload["eligible_count"]),
             excluded_ambiguous=_integer(payload["excluded_ambiguous"]), excluded_incomplete=_integer(payload["excluded_incomplete"]),
             excluded_required_missing=_integer(payload["excluded_required_missing"]),
-            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            provenance=TrainingProvenance._from_dict(
+                _mapping(payload["provenance"]),
+                deserialization_authority=deserialization_authority,
+            ),
             preprocessor_hash=str(payload["preprocessor_hash"]),
             model_a_target=str(payload["model_a_target"]), model_b_target=str(payload["model_b_target"]),
         )

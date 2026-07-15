@@ -177,8 +177,16 @@ class FoldPreprocessor:
         return payload
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> FoldPreprocessor:
-        imputer = MedianImputer.from_dict(_mapping(payload["imputer"]))
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> FoldPreprocessor:
+        imputer = MedianImputer._from_dict(
+            _mapping(payload["imputer"]),
+            deserialization_authority=deserialization_authority,
+        )
         scaler_payload = _mapping(payload["scaler"])
         scaler_feature_order = tuple(_strings(scaler_payload["feature_order"]))
         scaler_means = tuple(_floats(scaler_payload["means"]))
@@ -196,7 +204,10 @@ class FoldPreprocessor:
             ),
             outlier_limits=OutlierLimits(tuple((str(item[0]), _number(item[1]), _number(item[2])) for item in _triples(outlier_payload["limits"]))),
             large_trade_thresholds=LargeTradeThresholds(tuple((str(item[0]), _number(item[1])) for item in _pairs(large_payload["thresholds"]))),
-            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            provenance=TrainingProvenance._from_dict(
+                _mapping(payload["provenance"]),
+                deserialization_authority=deserialization_authority,
+            ),
             content_hash=str(payload["content_hash"]),
         )
         expected = instance.to_dict()

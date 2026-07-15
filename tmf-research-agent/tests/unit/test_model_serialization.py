@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from unittest.mock import patch
 
-from tmf_research.models.calibration import fit_two_stage_calibrators
+from tmf_research.models.calibration import TwoStageCalibrator, fit_two_stage_calibrators
+from tmf_research.models.imputer import MedianImputer
+from tmf_research.models.logistic import BinaryLogisticModel, TwoStageTrainingRecord
 from tmf_research.models.serialization import (
     ExpectedModelContract,
     ModelBundle,
@@ -18,6 +22,7 @@ from tmf_research.models.serialization import (
     save_model_bundle,
 )
 from tmf_research.models.training import train_phase4_model
+from tmf_research.models.scaler import FoldPreprocessor
 
 from tests.unit.test_calibration import validation_predictions
 from tests.unit.test_phase4_training import END, START, inner_train_dataset, training_spec
@@ -52,6 +57,23 @@ def bundle() -> ModelBundle:
 
 
 class ModelSerializationTests(unittest.TestCase):
+    def test_expected_contract_requires_exact_published_bundle_checksum(self) -> None:
+        unpinned_factory = cast(
+            Callable[[ModelBundle], ExpectedModelContract],
+            ExpectedModelContract.from_bundle,
+        )
+        with self.assertRaises(TypeError):
+            unpinned_factory(bundle())
+        for reconstruction_type in (
+            MedianImputer,
+            FoldPreprocessor,
+            BinaryLogisticModel,
+            TwoStageTrainingRecord,
+            TwoStageCalibrator,
+        ):
+            with self.subTest(reconstruction_type=reconstruction_type.__name__):
+                self.assertFalse(hasattr(reconstruction_type, "from_dict"))
+
     def test_round_trip_preserves_research_probabilities_but_forces_no_trade(self) -> None:
         original = bundle()
         with TemporaryDirectory() as directory:
@@ -89,10 +111,21 @@ class ModelSerializationTests(unittest.TestCase):
         )
         with TemporaryDirectory() as directory:
             root = Path(directory) / "model"
-            save_model_bundle(original, root)
+            checksum = save_model_bundle(original, root)
             for overrides, reason in cases:
                 with self.subTest(reason=reason):
-                    result = load_model_bundle(root, ExpectedModelContract.from_bundle(original, **overrides))
+                    if reason == "EXPECTED_MODEL_CHECKSUM_MISMATCH":
+                        expected = ExpectedModelContract.from_bundle(
+                            original,
+                            model_checksum="0" * 64,
+                        )
+                    else:
+                        expected = ExpectedModelContract.from_bundle(
+                            original,
+                            model_checksum=checksum,
+                            **overrides,
+                        )
+                    result = load_model_bundle(root, expected)
                     self.assertEqual(result.signal, "NO_TRADE")
                     self.assertIn(reason, result.reasons)
 
@@ -112,14 +145,17 @@ class ModelSerializationTests(unittest.TestCase):
         )
         with TemporaryDirectory() as directory:
             tampered_root = Path(directory) / "tampered"
-            save_model_bundle(original, tampered_root)
+            checksum = save_model_bundle(original, tampered_root)
             (tampered_root / "trade_model.json").write_text("{}", encoding="utf-8")
-            tampered = load_model_bundle(tampered_root, ExpectedModelContract.from_bundle(original))
+            tampered = load_model_bundle(
+                tampered_root,
+                ExpectedModelContract.from_bundle(original, model_checksum=checksum),
+            )
             self.assertEqual(tampered.reasons, ("MODEL_CHECKSUM_MISMATCH",))
         for filename, corruption in corruptions:
             with self.subTest(filename=filename), TemporaryDirectory() as directory:
                 root = Path(directory) / "model"
-                save_model_bundle(original, root)
+                checksum = save_model_bundle(original, root)
                 payload = json.loads((root / filename).read_text(encoding="utf-8"))
                 if corruption == "ZERO_L2":
                     payload["model"]["l2"] = 0.0
@@ -143,14 +179,21 @@ class ModelSerializationTests(unittest.TestCase):
                     payload.update(corruption)
                 (root / filename).write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
                 (root / "checksum.sha256").write_text(_bundle_checksum(root) + "\n", encoding="ascii")
-                result = load_model_bundle(root, ExpectedModelContract.from_bundle(original))
-                self.assertEqual(result.reasons, ("MODEL_BUNDLE_INVALID",))
+                result = load_model_bundle(
+                    root,
+                    ExpectedModelContract.from_bundle(original, model_checksum=checksum),
+                )
+                self.assertEqual(result.reasons, ("EXPECTED_MODEL_CHECKSUM_MISMATCH",))
 
     def test_rehashed_consistent_validation_substitution_fails_expected_contract(self) -> None:
         original = bundle()
         with TemporaryDirectory() as directory:
             root = Path(directory) / "model"
-            save_model_bundle(original, root)
+            checksum = save_model_bundle(original, root)
+            expected = ExpectedModelContract.from_bundle(
+                original,
+                model_checksum=checksum,
+            )
             metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
             calibrator = json.loads((root / "calibrator.json").read_text(encoding="utf-8"))
             substituted_hash = "0" * 64
@@ -169,19 +212,50 @@ class ModelSerializationTests(unittest.TestCase):
                 encoding="ascii",
             )
 
-            result = load_model_bundle(root, ExpectedModelContract.from_bundle(original))
+            result = load_model_bundle(root, expected)
 
-        self.assertEqual(result.reasons, ("VALIDATION_PREDICTION_HASH_MISMATCH",))
+        self.assertEqual(result.reasons, ("EXPECTED_MODEL_CHECKSUM_MISMATCH",))
+
+    def test_rehashed_platt_content_substitution_fails_exact_bundle_contract(self) -> None:
+        original = bundle()
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "model"
+            checksum = save_model_bundle(original, root)
+            expected = ExpectedModelContract.from_bundle(
+                original,
+                model_checksum=checksum,
+            )
+            calibrator = json.loads((root / "calibrator.json").read_text(encoding="utf-8"))
+            calibrator["trade"] = {
+                "method": "PLATT",
+                "coefficient": 0.0,
+                "intercept": 0.0,
+            }
+            (root / "calibrator.json").write_text(
+                json.dumps(calibrator, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            (root / "checksum.sha256").write_text(
+                _bundle_checksum(root) + "\n",
+                encoding="ascii",
+            )
+
+            result = load_model_bundle(root, expected)
+
+        self.assertEqual(result.reasons, ("EXPECTED_MODEL_CHECKSUM_MISMATCH",))
 
     def test_publish_is_exclusive_and_load_io_errors_are_stable(self) -> None:
         original = bundle()
         with TemporaryDirectory() as directory:
             root = Path(directory) / "model"
-            save_model_bundle(original, root)
+            checksum = save_model_bundle(original, root)
             with self.assertRaises(FileExistsError):
                 save_model_bundle(original, root)
             with patch.object(Path, "read_bytes", side_effect=OSError("transient")):
-                result = load_model_bundle(root, ExpectedModelContract.from_bundle(original))
+                result = load_model_bundle(
+                    root,
+                    ExpectedModelContract.from_bundle(original, model_checksum=checksum),
+                )
         self.assertEqual(result.reasons, ("MODEL_BUNDLE_IO_ERROR",))
 
     def test_nonfinite_runtime_feature_and_approved_loader_fail_closed(self) -> None:
@@ -192,7 +266,10 @@ class ModelSerializationTests(unittest.TestCase):
                 self.assertEqual(prediction.signal, "NO_TRADE")
                 self.assertEqual(prediction.probabilities.as_tuple(), (1.0, 0.0, 0.0))
                 self.assertEqual(prediction.reasons, ("NONFINITE_FEATURE:return_1m",))
-        approved = load_approved_model_bundle(Path("unused"), ExpectedModelContract.from_bundle(original))
+        approved = load_approved_model_bundle(
+            Path("unused"),
+            ExpectedModelContract.from_bundle(original, model_checksum="0" * 64),
+        )
         self.assertEqual(approved.reasons, ("PHASE6_APPROVED_LOADER_NOT_IMPLEMENTED",))
 
     def test_bundle_rejects_manifest_or_calibration_provenance_disagreement(self) -> None:

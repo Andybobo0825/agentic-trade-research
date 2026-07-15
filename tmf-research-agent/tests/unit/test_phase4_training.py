@@ -7,10 +7,11 @@ from typing import cast
 
 from tmf_research.models.provenance import (
     InnerTrainDataset,
-    Phase4FoldMaterializer,
+    Phase4FoldCapabilities,
     Phase4SourceRow,
 )
 from tmf_research.models.training import Phase4TrainingSpec, train_phase4_model
+from tests.phase4_test_support import TEST_PHASE4_FOLD_PLANNER
 
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -45,7 +46,7 @@ def fold_materialization(
     *,
     train_rows: tuple[Phase4SourceRow, ...] | None = None,
     validation_rows: tuple[Phase4SourceRow, ...] | None = None,
-) -> Phase4FoldMaterializer:
+) -> Phase4FoldCapabilities:
     selected_train = default_train_rows() if train_rows is None else train_rows
     if validation_rows is None:
         if train_rows is None:
@@ -63,7 +64,7 @@ def fold_materialization(
         Phase4SourceRow("outer-1", END + timedelta(hours=2, minutes=1), template, "NO_TRADE", -1.0),
         Phase4SourceRow("outer-2", END + timedelta(hours=2, minutes=2), template, "LONG", 1.0),
     )
-    return Phase4FoldMaterializer.materialize(
+    return TEST_PHASE4_FOLD_PLANNER.issue(
         source_rows=selected_train + selected_validation + outer_rows,
         outer_fold_id="outer-1",
         inner_fold_id="inner-1",

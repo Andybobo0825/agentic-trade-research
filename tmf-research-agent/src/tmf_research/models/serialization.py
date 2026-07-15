@@ -12,7 +12,10 @@ from typing import Literal, cast
 from tmf_research.models.calibration import TwoStageCalibrator
 from tmf_research.models.inference import ClassProbabilities, combine_probabilities
 from tmf_research.models.logistic import BinaryLogisticModel, TwoStageLogisticModel, TwoStageTrainingRecord
-from tmf_research.models.provenance import validate_sha256
+from tmf_research.models.provenance import (
+    _CHECKSUM_VALIDATED_DESERIALIZATION,
+    validate_sha256,
+)
 from tmf_research.models.scaler import FoldPreprocessor
 
 
@@ -181,10 +184,21 @@ class ExpectedModelContract:
     imputer_dimension: int
     validation_dataset_hash: str
     validation_prediction_hash: str
-    model_checksum: str | None = None
+    model_checksum: str
+
+    def __post_init__(self) -> None:
+        validate_sha256(self.validation_dataset_hash, "expected validation dataset hash")
+        validate_sha256(self.validation_prediction_hash, "expected validation prediction hash")
+        validate_sha256(self.model_checksum, "expected model checksum")
 
     @classmethod
-    def from_bundle(cls, bundle: ModelBundle, **overrides: object) -> ExpectedModelContract:
+    def from_bundle(
+        cls,
+        bundle: ModelBundle,
+        *,
+        model_checksum: str,
+        **overrides: object,
+    ) -> ExpectedModelContract:
         values: dict[str, object] = {
             "feature_version": bundle.metadata.feature_version, "feature_order": bundle.feature_names,
             "instrument": bundle.metadata.instrument, "session": bundle.metadata.session,
@@ -193,7 +207,6 @@ class ExpectedModelContract:
             "imputer_dimension": bundle.preprocessor.imputer.output_dimension,
             "validation_dataset_hash": bundle.metadata.validation_dataset_hash,
             "validation_prediction_hash": bundle.metadata.validation_prediction_hash,
-            "model_checksum": None,
         }
         if set(overrides) - set(values):
             raise ValueError("unknown expected contract override")
@@ -205,7 +218,7 @@ class ExpectedModelContract:
             _integer(values["imputer_dimension"]),
             _string(values["validation_dataset_hash"]),
             _string(values["validation_prediction_hash"]),
-            _optional_string(values["model_checksum"]),
+            model_checksum,
         )
 
 
@@ -247,23 +260,38 @@ def load_model_bundle(root: Path, expected: ExpectedModelContract) -> ModelLoadR
         actual = _bundle_checksum(root)
         if len(declared) != 64 or declared != actual:
             return _rejected("MODEL_CHECKSUM_MISMATCH", checksum=actual)
-        if expected.model_checksum is not None and expected.model_checksum != actual:
+        if expected.model_checksum != actual:
             return _rejected("EXPECTED_MODEL_CHECKSUM_MISMATCH", checksum=actual)
         metadata = ModelMetadata.from_dict(_object(root / "metadata.json"))
         feature_names = tuple(_string_list(root / "feature_names.json"))
         manifest = _object(root / "feature_manifest.json")
-        preprocessor = FoldPreprocessor.from_dict(_object(root / "scaler.json"))
+        preprocessor = FoldPreprocessor._from_dict(
+            _object(root / "scaler.json"),
+            deserialization_authority=_CHECKSUM_VALIDATED_DESERIALIZATION,
+        )
         if _canonical(_object(root / "imputer.json")) != _canonical(preprocessor.imputer.to_dict()):
             return _rejected("IMPUTER_FILE_MISMATCH", checksum=actual)
         trade_payload = _object(root / "trade_model.json")
         model = TwoStageLogisticModel(
-            BinaryLogisticModel.from_dict(_mapping(trade_payload["model"])),
-            BinaryLogisticModel.from_dict(_object(root / "direction_model.json")),
-            TwoStageTrainingRecord.from_dict(_mapping(trade_payload["two_stage_record"])),
+            BinaryLogisticModel._from_dict(
+                _mapping(trade_payload["model"]),
+                deserialization_authority=_CHECKSUM_VALIDATED_DESERIALIZATION,
+            ),
+            BinaryLogisticModel._from_dict(
+                _object(root / "direction_model.json"),
+                deserialization_authority=_CHECKSUM_VALIDATED_DESERIALIZATION,
+            ),
+            TwoStageTrainingRecord._from_dict(
+                _mapping(trade_payload["two_stage_record"]),
+                deserialization_authority=_CHECKSUM_VALIDATED_DESERIALIZATION,
+            ),
         )
         bundle = ModelBundle(
             metadata, feature_names, manifest, preprocessor, model,
-            TwoStageCalibrator.from_dict(_object(root / "calibrator.json")),
+            TwoStageCalibrator._from_dict(
+                _object(root / "calibrator.json"),
+                deserialization_authority=_CHECKSUM_VALIDATED_DESERIALIZATION,
+            ),
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return _rejected("MODEL_BUNDLE_INVALID", checksum=actual)
@@ -357,7 +385,3 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     if not isinstance(value, tuple) or not all(isinstance(item, str) for item in value):
         raise ValueError("expected string tuple")
     return cast(tuple[str, ...], value)
-
-
-def _optional_string(value: object) -> str | None:
-    return None if value is None else _string(value)

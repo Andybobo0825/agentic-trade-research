@@ -7,6 +7,7 @@ from tmf_research.models.provenance import InnerTrainDataset, Phase4SourceRow
 from tmf_research.models.scaler import FoldPreprocessor, StandardScaler
 
 from tests.unit.test_phase4_training import START, fold_materialization
+from tests.phase4_deserialization_test_support import deserialize_preprocessor_for_test
 
 
 def scaler_dataset() -> InnerTrainDataset:
@@ -56,7 +57,7 @@ class ScalerTests(unittest.TestCase):
                 assert isinstance(nested, dict)
                 nested[field] = 999
                 with self.assertRaisesRegex(ValueError, "declared.*dimension"):
-                    FoldPreprocessor.from_dict(payload)
+                    deserialize_preprocessor_for_test(payload)
 
     def test_scaler_rejects_finite_inputs_that_overflow_arithmetic(self) -> None:
         scaler = StandardScaler(("x",), (-1e308,), (1e-308,))

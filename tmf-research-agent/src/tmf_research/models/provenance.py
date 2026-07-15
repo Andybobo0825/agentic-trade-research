@@ -21,8 +21,10 @@ class SplitRole(str, Enum):
 
 
 _AUTHORITY_DOMAIN = "tmf-phase4-fold-authority-v2"
-_MATERIALIZER_SEAL = object()
+_PLANNER_AUTHORITY = object()
+_ISSUED_CAPABILITY_SEAL = object()
 _GENERATED_PREDICTION_SEAL = object()
+_CHECKSUM_VALIDATED_DESERIALIZATION = object()
 
 
 class _SealedAuthority:
@@ -218,7 +220,13 @@ class NestedFoldManifest(_SealedAuthority):
         return {**self._payload(), "content_hash": self.content_hash}
 
     @classmethod
-    def _from_dict(cls, payload: Mapping[str, object]) -> NestedFoldManifest:
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> NestedFoldManifest:
+        _require_deserialization_authority(deserialization_authority)
         inner_train = _role_from_dict(_mapping(payload["inner_train"]))
         inner_validation = _role_from_dict(_mapping(payload["inner_validation"]))
         outer_test = _role_from_dict(_mapping(payload["outer_test"]))
@@ -329,9 +337,18 @@ class TrainingProvenance:
         return {"manifest": self.manifest.to_dict(), "train_hash": self.train_hash}
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> TrainingProvenance:
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> TrainingProvenance:
+        _require_deserialization_authority(deserialization_authority)
         return cls(
-            NestedFoldManifest._from_dict(_mapping(payload["manifest"])),
+            NestedFoldManifest._from_dict(
+                _mapping(payload["manifest"]),
+                deserialization_authority=deserialization_authority,
+            ),
             str(payload["train_hash"]),
         )
 
@@ -400,8 +417,17 @@ class InnerValidationProvenance(_SealedAuthority):
         }
 
     @classmethod
-    def _from_dict(cls, payload: Mapping[str, object]) -> InnerValidationProvenance:
-        manifest = NestedFoldManifest._from_dict(_mapping(payload["manifest"]))
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> InnerValidationProvenance:
+        _require_deserialization_authority(deserialization_authority)
+        manifest = NestedFoldManifest._from_dict(
+            _mapping(payload["manifest"]),
+            deserialization_authority=deserialization_authority,
+        )
         validation_hash = str(payload["validation_dataset_hash"])
         authority_payload = {
             "manifest_hash": manifest.content_hash,
@@ -471,9 +497,8 @@ class OuterTestDataset(_SealedAuthority):
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class Phase4FoldMaterializer(_SealedAuthority):
+class Phase4FoldCapabilities(_SealedAuthority):
     source_version: str
-    source_rows: tuple[Phase4SourceRow, ...]
     source_dataset_hash: str
     manifest: NestedFoldManifest
     inner_train: InnerTrainDataset
@@ -482,111 +507,146 @@ class Phase4FoldMaterializer(_SealedAuthority):
     _seal: object = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self._seal is not _MATERIALIZER_SEAL:
-            raise ValueError("fold materialization requires trusted source planner")
-        if self.source_dataset_hash != _source_dataset_hash(self.source_rows):
-            raise ValueError("materializer source dataset hash mismatch")
+        if self._seal is not _ISSUED_CAPABILITY_SEAL:
+            raise ValueError("fold capabilities require trusted planner issuance")
         if self.source_version != _source_dataset_version(self.source_dataset_hash):
-            raise ValueError("materializer source dataset version mismatch")
+            raise ValueError("issued source dataset version mismatch")
         if self.manifest.source_dataset_hash != self.source_dataset_hash:
-            raise ValueError("materializer manifest source mismatch")
+            raise ValueError("issued manifest source mismatch")
         if (
             self.inner_train.manifest != self.manifest
             or self.inner_validation.manifest != self.manifest
             or self.outer_test.manifest != self.manifest
         ):
-            raise ValueError("materializer capabilities do not share the committed manifest")
+            raise ValueError("issued capabilities do not share the committed manifest")
 
-    @classmethod
-    def materialize(
-        cls,
+
+class _Phase4FoldPlanRegistry:
+    __slots__ = ("_plans",)
+
+    def __init__(self, authority: object) -> None:
+        if authority is not _PLANNER_AUTHORITY:
+            raise TypeError("fold plan registry requires planner authority")
+        self._plans: dict[tuple[str, str, str], str] = {}
+
+    def _commit(
+        self,
         *,
-        source_rows: Sequence[Phase4SourceRow],
+        source_dataset_hash: str,
         outer_fold_id: str,
         inner_fold_id: str,
-        train_start: datetime,
-        train_end: datetime,
-        validation_start: datetime,
-        validation_end: datetime,
-        outer_test_start: datetime,
-        outer_test_end: datetime,
-    ) -> Phase4FoldMaterializer:
-        ordered = tuple(sorted(source_rows, key=lambda row: (row.available_at, row.row_id)))
-        if not ordered or len({row.row_id for row in ordered}) != len(ordered):
-            raise ValueError("materializer requires unique immutable source rows")
-        _exact_feature_order(ordered, "source")
-        if not (
-            train_start < train_end
-            < validation_start < validation_end
-            < outer_test_start < outer_test_end
-        ):
-            raise ValueError("fold plan intervals must be ordered and disjoint")
-        source_hash = _source_dataset_hash(ordered)
-        source_version = _source_dataset_version(source_hash)
-        plan_payload = _fold_plan_payload(
-            outer_fold_id=outer_fold_id,
-            inner_fold_id=inner_fold_id,
-            source_dataset_hash=source_hash,
-            train_start=train_start,
-            train_end=train_end,
-            validation_start=validation_start,
-            validation_end=validation_end,
-            outer_test_start=outer_test_start,
-            outer_test_end=outer_test_end,
-        )
-        plan_hash = canonical_hash(plan_payload)
-        train_rows = _slice(ordered, train_start, train_end)
-        validation_rows = _slice(ordered, validation_start, validation_end)
-        outer_rows = _slice(ordered, outer_test_start, outer_test_end)
-        train_commitment = _commit_role(SplitRole.INNER_TRAIN, train_start, train_end, train_rows)
-        validation_commitment = _commit_role(
-            SplitRole.INNER_VALIDATION,
-            validation_start,
-            validation_end,
-            validation_rows,
-        )
-        outer_commitment = _commit_role(SplitRole.OUTER_TEST, outer_test_start, outer_test_end, outer_rows)
-        manifest_payload = {
-            "outer_fold_id": outer_fold_id,
-            "inner_fold_id": inner_fold_id,
-            "source_version": source_version,
-            "source_dataset_hash": source_hash,
-            "plan_hash": plan_hash,
-            "inner_train": train_commitment.to_dict(),
-            "inner_validation": validation_commitment.to_dict(),
-            "outer_test": outer_commitment.to_dict(),
-        }
-        manifest_hash = canonical_hash(manifest_payload)
-        manifest = _sealed_instance(
-            NestedFoldManifest,
-            outer_fold_id=outer_fold_id,
-            inner_fold_id=inner_fold_id,
-            source_version=source_version,
-            source_dataset_hash=source_hash,
-            plan_hash=plan_hash,
-            inner_train=train_commitment,
-            inner_validation=validation_commitment,
-            outer_test=outer_commitment,
-            content_hash=manifest_hash,
-            _authority=_authority_tag(
-                "manifest",
-                {**manifest_payload, "content_hash": manifest_hash},
-            ),
-        )
-        inner_train = _inner_train_dataset(manifest, train_rows)
-        inner_validation = _inner_validation_dataset(manifest, validation_rows)
-        outer_test = _outer_test_dataset(manifest, outer_rows)
-        return _sealed_instance(
-            cls,
-            source_version=source_version,
-            source_rows=ordered,
-            source_dataset_hash=source_hash,
-            manifest=manifest,
-            inner_train=inner_train,
-            inner_validation=inner_validation,
-            outer_test=outer_test,
-            _seal=_MATERIALIZER_SEAL,
-        )
+        plan_hash: str,
+        authority: object,
+    ) -> None:
+        if authority is not _PLANNER_AUTHORITY:
+            raise TypeError("fold plan issuance requires planner authority")
+        key = (source_dataset_hash, outer_fold_id, inner_fold_id)
+        existing = self._plans.get(key)
+        if existing is not None and existing != plan_hash:
+            raise ValueError("canonical fold plan is already committed for this source and fold")
+        self._plans[key] = plan_hash
+
+
+def _issue_phase4_fold(
+    *,
+    registry: _Phase4FoldPlanRegistry,
+    planner_authority: object,
+    source_rows: Sequence[Phase4SourceRow],
+    outer_fold_id: str,
+    inner_fold_id: str,
+    train_start: datetime,
+    train_end: datetime,
+    validation_start: datetime,
+    validation_end: datetime,
+    outer_test_start: datetime,
+    outer_test_end: datetime,
+) -> Phase4FoldCapabilities:
+    if planner_authority is not _PLANNER_AUTHORITY:
+        raise TypeError("fold capability issuance requires planner authority")
+    if not isinstance(registry, _Phase4FoldPlanRegistry):
+        raise TypeError("fold capability issuance requires a plan registry")
+    ordered = tuple(sorted(source_rows, key=lambda row: (row.available_at, row.row_id)))
+    if not ordered or len({row.row_id for row in ordered}) != len(ordered):
+        raise ValueError("planner requires unique immutable source rows")
+    _exact_feature_order(ordered, "source")
+    if not (
+        train_start < train_end
+        < validation_start < validation_end
+        < outer_test_start < outer_test_end
+    ):
+        raise ValueError("fold plan intervals must be ordered and disjoint")
+    source_hash = _source_dataset_hash(ordered)
+    source_version = _source_dataset_version(source_hash)
+    plan_payload = _fold_plan_payload(
+        outer_fold_id=outer_fold_id,
+        inner_fold_id=inner_fold_id,
+        source_dataset_hash=source_hash,
+        train_start=train_start,
+        train_end=train_end,
+        validation_start=validation_start,
+        validation_end=validation_end,
+        outer_test_start=outer_test_start,
+        outer_test_end=outer_test_end,
+    )
+    plan_hash = canonical_hash(plan_payload)
+    train_rows = _slice(ordered, train_start, train_end)
+    validation_rows = _slice(ordered, validation_start, validation_end)
+    outer_rows = _slice(ordered, outer_test_start, outer_test_end)
+    train_commitment = _commit_role(SplitRole.INNER_TRAIN, train_start, train_end, train_rows)
+    validation_commitment = _commit_role(
+        SplitRole.INNER_VALIDATION,
+        validation_start,
+        validation_end,
+        validation_rows,
+    )
+    outer_commitment = _commit_role(SplitRole.OUTER_TEST, outer_test_start, outer_test_end, outer_rows)
+    manifest_payload = {
+        "outer_fold_id": outer_fold_id,
+        "inner_fold_id": inner_fold_id,
+        "source_version": source_version,
+        "source_dataset_hash": source_hash,
+        "plan_hash": plan_hash,
+        "inner_train": train_commitment.to_dict(),
+        "inner_validation": validation_commitment.to_dict(),
+        "outer_test": outer_commitment.to_dict(),
+    }
+    manifest_hash = canonical_hash(manifest_payload)
+    manifest = _sealed_instance(
+        NestedFoldManifest,
+        outer_fold_id=outer_fold_id,
+        inner_fold_id=inner_fold_id,
+        source_version=source_version,
+        source_dataset_hash=source_hash,
+        plan_hash=plan_hash,
+        inner_train=train_commitment,
+        inner_validation=validation_commitment,
+        outer_test=outer_commitment,
+        content_hash=manifest_hash,
+        _authority=_authority_tag(
+            "manifest",
+            {**manifest_payload, "content_hash": manifest_hash},
+        ),
+    )
+    inner_train = _inner_train_dataset(manifest, train_rows)
+    inner_validation = _inner_validation_dataset(manifest, validation_rows)
+    outer_test = _outer_test_dataset(manifest, outer_rows)
+    registry._commit(
+        source_dataset_hash=source_hash,
+        outer_fold_id=outer_fold_id,
+        inner_fold_id=inner_fold_id,
+        plan_hash=plan_hash,
+        authority=planner_authority,
+    )
+    return _sealed_instance(
+        Phase4FoldCapabilities,
+        source_version=source_version,
+        source_dataset_hash=source_hash,
+        manifest=manifest,
+        inner_train=inner_train,
+        inner_validation=inner_validation,
+        outer_test=outer_test,
+        _seal=_ISSUED_CAPABILITY_SEAL,
+    )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -977,6 +1037,11 @@ def _verify_authority(kind: str, payload: object, authority: str) -> None:
     validate_sha256(authority, "authority tag")
     if authority != _authority_tag(kind, payload):
         raise ValueError("authority authentication mismatch")
+
+
+def _require_deserialization_authority(authority: object) -> None:
+    if authority is not _CHECKSUM_VALIDATED_DESERIALIZATION:
+        raise TypeError("provenance reconstruction requires checksum-validated deserialization")
 
 
 def _aware(value: datetime, name: str) -> None:

@@ -95,13 +95,21 @@ class MedianImputer:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> MedianImputer:
+    def _from_dict(
+        cls,
+        payload: Mapping[str, object],
+        *,
+        deserialization_authority: object,
+    ) -> MedianImputer:
         instance = cls(
             feature_order=tuple(_strings(payload["feature_order"])),
             required_features=tuple(_strings(payload["required_features"])),
             optional_features=tuple(_strings(payload["optional_features"])),
             medians=tuple((str(item[0]), _number(item[1])) for item in _pairs(payload["medians"])),
-            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            provenance=TrainingProvenance._from_dict(
+                _mapping(payload["provenance"]),
+                deserialization_authority=deserialization_authority,
+            ),
             content_hash=str(payload["content_hash"]),
         )
         if (

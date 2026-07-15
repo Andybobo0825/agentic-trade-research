@@ -4,7 +4,7 @@ import unittest
 from datetime import timedelta
 from typing import cast
 
-from tmf_research.models.calibration import IsotonicCalibrator, TwoStageCalibrator, fit_two_stage_calibrators
+from tmf_research.models.calibration import IsotonicCalibrator, fit_two_stage_calibrators
 from tmf_research.models.provenance import (
     InnerValidationPredictions,
     Phase4SourceRow,
@@ -13,6 +13,7 @@ from tmf_research.models.provenance import (
 
 from tests.unit.test_phase4_training import END, fold_materialization, training_spec
 from tmf_research.models.training import train_phase4_model
+from tests.phase4_deserialization_test_support import deserialize_calibrator_for_test
 
 
 def validation_predictions(*, sparse: bool = False) -> InnerValidationPredictions:
@@ -101,7 +102,7 @@ class CalibrationTests(unittest.TestCase):
         payload["validation_hash"] = "not-a-hash"
 
         with self.assertRaisesRegex(ValueError, "validation hash"):
-            TwoStageCalibrator.from_dict(payload)
+            deserialize_calibrator_for_test(payload)
 
 
 if __name__ == "__main__":

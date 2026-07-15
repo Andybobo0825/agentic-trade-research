@@ -13,7 +13,7 @@ from tests.unit.test_executable_prices import state
 NOW = datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc)
 
 
-def parameters(*, fit_end: datetime | None = None) -> LabelParameters:
+def parameters(*, fit_end: datetime | None = None, horizon: int = 5) -> LabelParameters:
     return LabelParameters(
         version="barrier-v1",
         fit_start=NOW - timedelta(days=30),
@@ -22,7 +22,7 @@ def parameters(*, fit_end: datetime | None = None) -> LabelParameters:
         stop_atr_multiplier=1.0,
         minimum_target_points=3.0,
         minimum_stop_points=3.0,
-        horizon_minutes=5,
+        horizon_minutes=horizon,
     )
 
 
@@ -91,6 +91,8 @@ class TripleBarrierTests(unittest.TestCase):
         self.assertEqual((long.label, long.first_touch), ("LONG", "UPPER"))
         self.assertEqual((short.label, short.first_touch), ("SHORT", "LOWER"))
         self.assertEqual((ambiguous.label, ambiguous.first_touch), ("AMBIGUOUS", "BOTH"))
+        self.assertFalse(ambiguous.training_eligible)
+        self.assertTrue(long.training_eligible)
         self.assertEqual((vertical.label, vertical.first_touch), ("NO_TRADE", "VERTICAL"))
         self.assertEqual((long.entry_bid, long.entry_ask, long.entry_spread), (99.0, 101.0, 2.0))
         self.assertEqual((long.upper_barrier, long.lower_barrier), (105.0, 96.0))

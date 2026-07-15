@@ -47,9 +47,9 @@ class LabelPipelineTests(unittest.TestCase):
         self.assertTrue(all(candidate.decision_time in (bar(0).bar_end, bar(1).bar_end) for candidate in candidates))
 
     def test_label_manifest_hash_is_stable_and_primary_horizon_is_15m(self) -> None:
-        params = parameters()
-        first = LabelManifest.from_parameters("labels-v1", (params,))
-        second = LabelManifest.from_parameters("labels-v1", (params,))
+        params = tuple(parameters(horizon=horizon) for horizon in (5, 15, 60))
+        first = LabelManifest.from_parameters("labels-v1", params)
+        second = LabelManifest.from_parameters("labels-v1", params)
 
         self.assertEqual(first.primary_horizon_minutes, 15)
         self.assertEqual(first.content_hash, second.content_hash)

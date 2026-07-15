@@ -28,14 +28,21 @@ def tick(**overrides: object) -> TickEvent:
     return TickEvent(**values)
 
 
-def quote(event_id: str, occurred_at: datetime, *, bid: float = 22999.0) -> BidAskEvent:
+def quote(
+    event_id: str,
+    occurred_at: datetime,
+    *,
+    bid: float = 22999.0,
+    received_at: datetime | None = None,
+    delivery_month: str = "202607",
+) -> BidAskEvent:
     return BidAskEvent(
         event_id=event_id,
-        received_at=occurred_at,
+        received_at=received_at or occurred_at,
         exchange_datetime=occurred_at,
         alias_code="TMFR1",
         target_code="TMF202607",
-        delivery_month="202607",
+        delivery_month=delivery_month,
         code="TMF202607",
         bid_prices=(bid,),
         bid_volumes=(2,),
@@ -84,6 +91,36 @@ class QuoteJoinerTests(unittest.TestCase):
         self.assertFalse(missing_join.bidask_available)
         self.assertIsNone(missing_join.matched_bidask_at)
         self.assertEqual(missing_join.unavailable_reason, "MISSING_BIDASK")
+
+    def test_rejects_quote_not_yet_received_or_from_wrong_delivery(self) -> None:
+        late_arrival = quote(
+            "quote-late-arrival",
+            NOW - timedelta(seconds=1),
+            received_at=NOW + timedelta(milliseconds=1),
+        )
+        wrong_delivery = quote(
+            "quote-wrong-delivery",
+            NOW - timedelta(seconds=1),
+            delivery_month="202608",
+        )
+
+        joined = self.joiner.join(tick(), (late_arrival, wrong_delivery))
+
+        self.assertFalse(joined.bidask_available)
+        self.assertEqual(joined.unavailable_reason, "MISSING_BIDASK")
+
+    def test_quote_age_threshold_is_inclusive_and_one_microsecond_later_is_stale(self) -> None:
+        threshold = quote("quote-threshold", NOW - timedelta(seconds=2))
+        stale = quote(
+            "quote-stale",
+            NOW - timedelta(seconds=2, microseconds=1),
+        )
+
+        self.assertTrue(self.joiner.join(tick(), (threshold,)).bidask_available)
+        self.assertEqual(
+            self.joiner.join(tick(), (stale,)).unavailable_reason,
+            "STALE_BIDASK",
+        )
 
 
 if __name__ == "__main__":

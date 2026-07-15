@@ -105,6 +105,19 @@ class BarAggregatorTests(unittest.TestCase):
                 )[0]
                 self.assertEqual(bar.bar_start, ANCHOR)
 
+    def test_session_end_clips_final_bucket_and_marks_it_incomplete(self) -> None:
+        state = minute_states()[0]
+        session_end = ANCHOR + timedelta(minutes=30)
+
+        bar = BarAggregator(interval_minutes=60).aggregate(
+            (state,),
+            session_start=ANCHOR,
+            session_end=session_end,
+        )[0]
+
+        self.assertEqual(bar.bar_end, session_end)
+        self.assertFalse(bar.is_complete)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -117,6 +117,55 @@ class ProcessingPipelineTests(unittest.TestCase):
         self.assertTrue(first.bar_sets[0].bars[0].is_complete)
         self.assertEqual(first.quality_report.tick_count, 1)
 
+    def test_pipeline_excludes_out_of_range_events_and_propagates_quality_evidence(self) -> None:
+        calendar = TradingCalendar(
+            version="fixture-v1",
+            timezone="UTC",
+            days=(
+                TradingDay(
+                    trading_date=date(2026, 7, 20),
+                    day_close=time(13, 45),
+                    night_open=None,
+                    night_close=None,
+                ),
+            ),
+        )
+        resolution = SessionResolver(calendar).resolve(START)
+        future_tick = tick()
+        object.__setattr__(
+            future_tick,
+            "exchange_datetime",
+            START + timedelta(seconds=2),
+        )
+        future_quote = quote()
+        object.__setattr__(
+            future_quote,
+            "exchange_datetime",
+            START + timedelta(seconds=2),
+        )
+
+        result = ProcessingPipeline(
+            quote_joiner=QuoteJoiner(max_quote_age=timedelta(seconds=2)),
+        ).process(
+            ticks=(tick(), future_tick),
+            bidasks=(quote(), future_quote),
+            resolution=resolution,
+            start_second=START,
+            end_second=START,
+            source_manifests=(),
+            intervals=(1,),
+            rejection_reasons=("INVALID_PRICE",),
+            queue_drop_count=1,
+            connection_drop_count=1,
+        )
+
+        self.assertEqual(len(result.quote_joins), 1)
+        self.assertEqual(result.quality_report.tick_count, 1)
+        self.assertEqual(result.quality_report.bidask_count, 1)
+        self.assertEqual(result.quality_report.invalid_price_count, 1)
+        self.assertEqual(result.quality_report.queue_drop_count, 1)
+        self.assertEqual(result.quality_report.connection_drop_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

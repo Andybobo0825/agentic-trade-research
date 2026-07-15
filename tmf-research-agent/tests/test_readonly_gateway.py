@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
 from enum import IntEnum
@@ -23,13 +24,19 @@ class FakeTickKind(IntEnum):
 class FakeQuote:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object, object, object]] = []
-        self.tick_callback = None
-        self.bidask_callback = None
+        self.tick_callback: Callable[..., None] | None = None
+        self.bidask_callback: Callable[..., None] | None = None
 
-    def set_on_tick_fop_v1_callback(self, callback) -> None:
+    def set_on_tick_fop_v1_callback(
+        self,
+        callback: Callable[..., None],
+    ) -> None:
         self.tick_callback = callback
 
-    def set_on_bidask_fop_v1_callback(self, callback) -> None:
+    def set_on_bidask_fop_v1_callback(
+        self,
+        callback: Callable[..., None],
+    ) -> None:
         self.bidask_callback = callback
 
     def subscribe(
@@ -145,14 +152,20 @@ class ReadonlyGatewayTests(unittest.TestCase):
         )
 
     def test_adapts_raw_sdk_callbacks_to_immutable_mappings(self) -> None:
-        received: list[object] = []
+        received: list[Mapping[str, object]] = []
         self.gateway.register_tick_callback(received.append)
         self.gateway.register_bidask_callback(received.append)
 
         tick = {"code": "TMF202607", "close": [23000.0]}
         quote = SimpleNamespace(code="TMF202607", bid_price=[22999.0])
-        self.api.quote.tick_callback("futures", tick)
-        self.api.quote.bidask_callback("futures", quote)
+        tick_callback = self.api.quote.tick_callback
+        bidask_callback = self.api.quote.bidask_callback
+        self.assertIsNotNone(tick_callback)
+        self.assertIsNotNone(bidask_callback)
+        assert tick_callback is not None
+        assert bidask_callback is not None
+        tick_callback("futures", tick)
+        bidask_callback("futures", quote)
         tick["code"] = "MUTATED"
 
         self.assertEqual(received[0]["code"], "TMF202607")

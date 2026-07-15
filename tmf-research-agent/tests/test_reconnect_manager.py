@@ -59,7 +59,10 @@ class ReconnectManagerTests(unittest.TestCase):
         self.assertEqual(disconnected.connection_status, "DISCONNECTED")
         self.assertEqual(manager.state, ConnectionState.CONNECTED)
         self.assertEqual(result.connection.connection_status, "CONNECTED")
-        self.assertEqual(result.rollover.new_target_code, "TMF202608")
+        rollover = result.rollover
+        self.assertIsNotNone(rollover)
+        assert rollover is not None
+        self.assertEqual(rollover.new_target_code, "TMF202608")
         self.assertEqual(
             gateway.calls,
             [("tick", "TMF202608"), ("bidask", "TMF202608")],

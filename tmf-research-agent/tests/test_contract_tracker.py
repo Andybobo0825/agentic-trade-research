@@ -50,9 +50,12 @@ class ContractTrackerTests(unittest.TestCase):
         self.assertEqual(initial.contract.target_code, "TMF202607")
         self.assertIsNone(initial.rollover)
         self.assertEqual(rollover.contract.target_code, "TMF202608")
-        self.assertEqual(rollover.rollover.old_target_code, "TMF202607")
-        self.assertEqual(rollover.rollover.new_target_code, "TMF202608")
-        self.assertFalse(rollover.rollover.allow_paper_trade)
+        rollover_event = rollover.rollover
+        self.assertIsNotNone(rollover_event)
+        assert rollover_event is not None
+        self.assertEqual(rollover_event.old_target_code, "TMF202607")
+        self.assertEqual(rollover_event.new_target_code, "TMF202608")
+        self.assertFalse(rollover_event.allow_paper_trade)
 
 
 if __name__ == "__main__":

@@ -83,6 +83,22 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertIn("raw-api-capability", self._rules(report))
 
+    def test_adapter_raw_api_alias_cannot_bypass_capability_allowlist(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/infrastructure/shioaji_market_data.py": (
+                    "class Adapter:\n"
+                    "    def __init__(self, raw_api):\n"
+                    "        self._api = raw_api\n"
+                    "    def leak(self):\n"
+                    "        alias = self._api\n"
+                    "        return alias.account_balance()\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-api-capability", self._rules(report))
+
     def test_adapter_allows_declared_market_data_capabilities(self) -> None:
         report = self._verify(
             {

@@ -230,6 +230,38 @@ class ModelLoadResult:
     checksum: str | None
 
 
+def phase5_registry_artifacts(
+    bundle: ModelBundle,
+    *,
+    fold_metrics: Mapping[str, object],
+    stability_report: Mapping[str, object],
+    ablation_report: Mapping[str, object],
+    overfitting_report: Mapping[str, object],
+) -> dict[str, object]:
+    """Serialize the trained Phase 4 components for a Phase 5 SPEC 37 publication.
+
+    Publication and the final model state remain owned by the immutable Phase 5
+    registry; this helper prevents arbitrary placeholder model payloads.
+    """
+    record = bundle.model.record
+    return {
+        "feature_names.json": list(bundle.feature_names),
+        "feature_manifest.json": dict(bundle.feature_manifest),
+        "scaler.json": bundle.preprocessor.to_dict(),
+        "imputer.json": bundle.preprocessor.imputer.to_dict(),
+        "trade_model.json": {
+            "model": bundle.model.trade_model.to_dict(),
+            "two_stage_record": record.to_dict(),
+        },
+        "direction_model.json": bundle.model.direction_model.to_dict(),
+        "calibrator.json": bundle.calibrator.to_dict(),
+        "fold_metrics.json": dict(fold_metrics),
+        "stability_report.json": dict(stability_report),
+        "ablation_report.json": dict(ablation_report),
+        "overfitting_report.json": dict(overfitting_report),
+    }
+
+
 def save_model_bundle(bundle: ModelBundle, root: Path) -> str:
     root.parent.mkdir(parents=True, exist_ok=True)
     root.mkdir(exist_ok=False)

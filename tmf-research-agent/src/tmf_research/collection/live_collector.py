@@ -125,30 +125,36 @@ def _datetime(
 
 
 def _float(payload: Mapping[str, object], name: str) -> float:
-    return float(payload.get(name, 0.0))
+    return float(_number(payload.get(name, 0.0), name))
 
 
 def _int(payload: Mapping[str, object], name: str) -> int:
-    return int(payload.get(name, 0))
+    return int(_number(payload.get(name, 0), name))
 
 
 def _optional_float(payload: Mapping[str, object], name: str) -> float | None:
     value = payload.get(name)
-    return None if value is None else float(value)
+    return None if value is None else float(_number(value, name))
 
 
 def _optional_int(payload: Mapping[str, object], name: str) -> int | None:
     value = payload.get(name)
-    return None if value is None else int(value)
+    return None if value is None else int(_number(value, name))
 
 
 def _float_tuple(value: object) -> tuple[float, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return ()
-    return tuple(float(item) for item in value)
+    return tuple(float(_number(item, "depth value")) for item in value)
 
 
 def _int_tuple(value: object) -> tuple[int, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return ()
-    return tuple(int(item) for item in value)
+    return tuple(int(_number(item, "depth value")) for item in value)
+
+
+def _number(value: object, name: str) -> int | float | str:
+    if isinstance(value, (int, float, str)) and not isinstance(value, bool):
+        return value
+    raise TypeError(f"{name} must be numeric")

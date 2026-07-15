@@ -83,6 +83,22 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertIn("raw-api-capability", self._rules(report))
 
+    def test_adapter_rejects_vars_raw_api_capability_lookup(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/infrastructure/shioaji_market_data.py": (
+                    "class Adapter:\n"
+                    "    def __init__(self, raw_api):\n"
+                    "        self._api = raw_api\n"
+                    "    def invoke(self):\n"
+                    "        capabilities = vars(self._api)\n"
+                    "        return capabilities['account' + '_balance']()\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-api-capability", self._rules(report))
+
     def test_adapter_raw_api_alias_cannot_bypass_capability_allowlist(self) -> None:
         report = self._verify(
             {

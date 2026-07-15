@@ -18,6 +18,7 @@ _SAFE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 class SegmentManifest:
     segment_id: str
     event_type: str
+    dataset_version: str
     relative_path: str
     checksum_sha256: str
     record_count: int
@@ -28,14 +29,27 @@ class SegmentManifest:
     maximum_event_time: str
 
 
+class RawIntegrityError(RuntimeError):
+    """Raised when immutable raw bytes do not match their manifest."""
+
+
 class AppendOnlyRawStore:
     """Writes create-once NDJSON segments plus an append-only canonical catalog."""
 
-    def __init__(self, root: Path, *, writer_version: str) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        writer_version: str,
+        dataset_version: str = "dataset-v1",
+    ) -> None:
         if not writer_version.strip():
             raise ValueError("writer_version is required")
+        _validate_path_component(dataset_version, "dataset_version")
         self._root = root.resolve()
         self._writer_version = writer_version
+        self._dataset_version = dataset_version
+        self._dataset_root = self._root / "datasets" / dataset_version
         self._root.mkdir(parents=True, exist_ok=True)
 
     def append_segment(
@@ -60,7 +74,7 @@ class AppendOnlyRawStore:
             (_canonical_json(record) + "\n").encode("utf-8")
             for record in records
         )
-        directory = self._root / "segments" / event_type
+        directory = self._dataset_root / "segments" / event_type
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{segment_id}.ndjson"
         if path.exists():
@@ -76,6 +90,7 @@ class AppendOnlyRawStore:
         manifest = SegmentManifest(
             segment_id=segment_id,
             event_type=event_type,
+            dataset_version=self._dataset_version,
             relative_path=path.relative_to(self._root).as_posix(),
             checksum_sha256=hashlib.sha256(encoded).hexdigest(),
             record_count=len(records),
@@ -98,7 +113,7 @@ class AppendOnlyRawStore:
         if len(event_ids) != len(set(event_ids)):
             raise FileExistsError("duplicate event_id within segment")
 
-        directory = self._root / "event_ids"
+        directory = self._dataset_root / "event_ids"
         directory.mkdir(parents=True, exist_ok=True)
         markers = {
             event_id: directory / f"{hashlib.sha256(event_id.encode()).hexdigest()}.id"
@@ -115,10 +130,50 @@ class AppendOnlyRawStore:
             marker.chmod(0o444)
 
     def verify(self, manifest: SegmentManifest) -> bool:
-        path = self._root / manifest.relative_path
+        try:
+            path = self._verified_manifest_path(manifest)
+        except RawIntegrityError:
+            return False
         if not path.is_file():
             return False
-        return hashlib.sha256(path.read_bytes()).hexdigest() == manifest.checksum_sha256
+        try:
+            encoded = path.read_bytes()
+        except OSError:
+            return False
+        return hashlib.sha256(encoded).hexdigest() == manifest.checksum_sha256
+
+    def read_verified(self, manifest: SegmentManifest) -> tuple[dict[str, object], ...]:
+        path = self._verified_manifest_path(manifest)
+        try:
+            encoded = path.read_bytes()
+        except OSError as error:
+            raise RawIntegrityError("raw segment is missing or unreadable") from error
+        checksum = hashlib.sha256(encoded).hexdigest()
+        if checksum != manifest.checksum_sha256:
+            raise RawIntegrityError("raw segment checksum mismatch")
+        try:
+            records = tuple(json.loads(line) for line in encoded.splitlines())
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RawIntegrityError("raw segment is not valid NDJSON") from error
+        if len(records) != manifest.record_count or not all(
+            isinstance(record, dict) for record in records
+        ):
+            raise RawIntegrityError("raw segment record count or shape mismatch")
+        return records
+
+    def _verified_manifest_path(self, manifest: SegmentManifest) -> Path:
+        if manifest.dataset_version != self._dataset_version:
+            raise RawIntegrityError("manifest dataset version mismatch")
+        expected = (
+            self._dataset_root
+            / "segments"
+            / manifest.event_type
+            / f"{manifest.segment_id}.ndjson"
+        ).resolve()
+        actual = (self._root / manifest.relative_path).resolve()
+        if actual != expected or not actual.is_relative_to(self._root):
+            raise RawIntegrityError("manifest raw path mismatch")
+        return actual
 
 
 def _event_time(record: Mapping[str, object]) -> str:

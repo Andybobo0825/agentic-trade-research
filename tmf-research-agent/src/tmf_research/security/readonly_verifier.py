@@ -21,6 +21,15 @@ _FORBIDDEN_SYMBOLS = (
     "Live" + "Broker",
     "Shioaji" + "Broker",
 )
+_FORBIDDEN_PAPER_CLASS_NAMES = frozenset(
+    (
+        "Broker",
+        "Execution" + "Broker",
+        "Live" + "Execution",
+        "Order" + "Gateway",
+        "Real" + "Broker",
+    )
+)
 _ALLOWED_ADAPTER_PATH = Path(
     "tmf_research/infrastructure/shioaji_market_data.py"
 )
@@ -148,6 +157,20 @@ def _scan_ast(relative: Path, tree: ast.AST) -> set[ReadonlyFinding]:
     findings: set[ReadonlyFinding] = set()
 
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ClassDef)
+            and node.name in _FORBIDDEN_PAPER_CLASS_NAMES
+        ):
+            findings.add(
+                ReadonlyFinding(
+                    path=path,
+                    line=node.lineno,
+                    column=node.col_offset + 1,
+                    rule="forbidden-paper-class",
+                    symbol=node.name,
+                    message="PaperBroker is the only permitted trading boundary",
+                )
+            )
         symbol = _forbidden_node_symbol(node)
         if symbol is not None:
             findings.add(
@@ -231,6 +254,8 @@ def _is_raw_api_access(node: ast.AST) -> bool:
         and node.id == "_api"
         or isinstance(node, ast.Attribute)
         and node.attr == "_api"
+        or isinstance(node, ast.arg)
+        and node.arg in ("api", "raw_api", "shioaji_api")
     )
 
 
@@ -240,4 +265,26 @@ def _iter_imports(tree: ast.AST) -> Iterator[tuple[str, int, int]]:
             for alias in node.names:
                 yield alias.name, node.lineno, node.col_offset + 1
         elif isinstance(node, ast.ImportFrom) and node.module:
-            yield node.module, node.lineno, node.col_offset + 1
+            for alias in node.names:
+                yield (
+                    f"{node.module}.{alias.name}",
+                    node.lineno,
+                    node.col_offset + 1,
+                )
+        elif isinstance(node, ast.Call) and node.args:
+            imported = _dynamic_import_name(node)
+            if imported is not None:
+                yield imported, node.lineno, node.col_offset + 1
+
+
+def _dynamic_import_name(node: ast.Call) -> str | None:
+    first_argument = node.args[0]
+    if not isinstance(first_argument, ast.Constant) or not isinstance(
+        first_argument.value, str
+    ):
+        return None
+    if isinstance(node.func, ast.Name) and node.func.id == "__import__":
+        return first_argument.value
+    if isinstance(node.func, ast.Attribute) and node.func.attr == "import_module":
+        return first_argument.value
+    return None

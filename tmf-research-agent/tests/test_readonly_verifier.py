@@ -61,6 +61,17 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertIn("raw-adapter-dependency", self._rules(report))
 
+    def test_detects_raw_adapter_imported_from_parent_package(self) -> None:
+        report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "from tmf_research.infrastructure import shioaji_market_data\n"
+                )
+            }
+        )
+
+        self.assertIn("raw-adapter-dependency", self._rules(report))
+
     def test_detects_raw_api_attribute_access_outside_adapter(self) -> None:
         report = self._verify(
             {
@@ -72,12 +83,63 @@ class ReadonlyVerifierTests(unittest.TestCase):
 
         self.assertIn("raw-api-access", self._rules(report))
 
+    def test_detects_raw_api_parameter_outside_adapter(self) -> None:
+        report = self._verify(
+            {"tmf_research/models/inference.py": "def leak(api):\n    return api\n"}
+        )
+
+        self.assertIn("raw-api-access", self._rules(report))
+
     def test_detects_network_import_inside_paper_package(self) -> None:
         report = self._verify(
             {"tmf_research/paper/broker.py": "import socket\n"}
         )
 
         self.assertIn("paper-network-boundary", self._rules(report))
+
+    def test_detects_dynamic_sdk_and_paper_network_imports(self) -> None:
+        sdk_report = self._verify(
+            {
+                "tmf_research/models/inference.py": (
+                    "import importlib\n"
+                    "def load():\n    return importlib.import_module('shioaji')\n"
+                )
+            }
+        )
+        paper_report = self._verify(
+            {
+                "tmf_research/paper/broker.py": (
+                    "def load():\n    return __import__('socket')\n"
+                )
+            }
+        )
+
+        self.assertIn("sdk-import-boundary", self._rules(sdk_report))
+        self.assertIn("paper-network-boundary", self._rules(paper_report))
+
+    def test_detects_forbidden_paper_boundary_class_names(self) -> None:
+        class_names = (
+            "Broker",
+            "ExecutionBroker",
+            "LiveExecution",
+            "OrderGateway",
+            "RealBroker",
+        )
+
+        for class_name in class_names:
+            with self.subTest(class_name=class_name):
+                report = self._verify(
+                    {
+                        "tmf_research/paper/unsafe.py": (
+                            f"class {class_name}:\n    pass\n"
+                        )
+                    }
+                )
+                self.assertIn("forbidden-paper-class", self._rules(report))
+                self.assertIn(
+                    class_name,
+                    {finding.symbol for finding in report.findings},
+                )
 
     def test_invalid_python_fails_closed(self) -> None:
         report = self._verify(

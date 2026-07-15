@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from tmf_research.collection.event_queue import BoundedEventQueue
-from tmf_research.collection.live_collector import LiveCollector
+from tmf_research.collection.live_collector import LiveCollector, MarketCallback
 from tmf_research.domain.contracts import ContractInfo
 from tmf_research.domain.events import BidAskEvent, TickEvent
 from tmf_research.infrastructure.contract_resolver import ContractTracker
@@ -25,17 +26,17 @@ class FakeGateway:
             resolved_at=NOW,
             resolver_version="test-v1",
         )
-        self.tick_callback = None
-        self.bidask_callback = None
+        self.tick_callback: MarketCallback | None = None
+        self.bidask_callback: MarketCallback | None = None
         self.subscriptions: list[tuple[str, str]] = []
 
     def resolve_near_contract(self) -> ContractInfo:
         return self.contract
 
-    def register_tick_callback(self, callback):
+    def register_tick_callback(self, callback: MarketCallback) -> None:
         self.tick_callback = callback
 
-    def register_bidask_callback(self, callback):
+    def register_bidask_callback(self, callback: MarketCallback) -> None:
         self.bidask_callback = callback
 
     def subscribe_tick(self, contract: ContractInfo) -> None:
@@ -48,7 +49,7 @@ class FakeGateway:
 class LiveCollectorTests(unittest.TestCase):
     def test_subscribes_callbacks_and_enqueues_tick_and_bidask_events(self) -> None:
         gateway = FakeGateway()
-        queue = BoundedEventQueue[object](capacity=4)
+        queue = BoundedEventQueue[TickEvent | BidAskEvent](capacity=4)
         tracker = ContractTracker(gateway)
         ids = iter(("tick-1", "bidask-1"))
         collector = LiveCollector(
@@ -60,10 +61,16 @@ class LiveCollectorTests(unittest.TestCase):
         )
 
         resolution = collector.start()
-        gateway.tick_callback(
+        tick_callback = gateway.tick_callback
+        bidask_callback = gateway.bidask_callback
+        self.assertIsNotNone(tick_callback)
+        self.assertIsNotNone(bidask_callback)
+        assert tick_callback is not None
+        assert bidask_callback is not None
+        tick_callback(
             {"datetime": NOW, "code": "TMF202607", "close": 23000, "volume": 2}
         )
-        gateway.bidask_callback(
+        bidask_callback(
             {
                 "datetime": NOW,
                 "code": "TMF202607",
@@ -83,6 +90,8 @@ class LiveCollectorTests(unittest.TestCase):
         bidask = queue.pop()
         self.assertIsInstance(tick, TickEvent)
         self.assertIsInstance(bidask, BidAskEvent)
+        assert isinstance(tick, TickEvent)
+        assert isinstance(bidask, BidAskEvent)
         self.assertEqual(tick.target_code, "TMF202607")
         self.assertEqual(bidask.bid_prices, (22999.0, 22998.0))
 
@@ -96,15 +105,18 @@ class LiveCollectorTests(unittest.TestCase):
             clock=lambda: NOW,
         )
         collector.start()
-        payload = {
+        payload: Mapping[str, object] = {
             "datetime": NOW,
             "code": "TMF202607",
             "close": 23000,
             "volume": 1,
         }
 
-        gateway.tick_callback(payload)
-        gateway.tick_callback(payload)
+        tick_callback = gateway.tick_callback
+        self.assertIsNotNone(tick_callback)
+        assert tick_callback is not None
+        tick_callback(payload)
+        tick_callback(payload)
 
         self.assertEqual(queue.dropped_event_count, 1)
         self.assertFalse(queue.quality_valid)

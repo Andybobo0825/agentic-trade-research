@@ -10,22 +10,27 @@ from tmf_research.domain.events import BidAskEvent, TickEvent
 NOW = datetime(2026, 7, 15, 8, 45, tzinfo=timezone.utc)
 
 
-def tick(**overrides: object) -> TickEvent:
-    values = {
-        "event_id": "tick-1",
-        "received_at": NOW,
-        "exchange_datetime": NOW,
-        "alias_code": "TMFR1",
-        "target_code": "TMF202607",
-        "delivery_month": "202607",
-        "code": "TMF202607",
-        "close": 23000.0,
-        "volume": 1,
-        "simtrade": False,
-        "raw_payload": {},
-    }
-    values.update(overrides)
-    return TickEvent(**values)
+def tick(
+    *,
+    event_id: str = "tick-1",
+    exchange_datetime: datetime = NOW,
+    close: float = 23000.0,
+    volume: int = 1,
+    simtrade: bool = False,
+) -> TickEvent:
+    return TickEvent(
+        event_id=event_id,
+        received_at=NOW,
+        exchange_datetime=exchange_datetime,
+        alias_code="TMFR1",
+        target_code="TMF202607",
+        delivery_month="202607",
+        code="TMF202607",
+        close=close,
+        volume=volume,
+        simtrade=simtrade,
+        raw_payload={},
+    )
 
 
 class DataQualityTests(unittest.TestCase):

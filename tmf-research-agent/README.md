@@ -5,9 +5,15 @@ specification in [`../docs/txresearch.md`](../docs/txresearch.md).
 
 ## Current scope
 
-Phase 0 establishes read-only boundaries only. It does not connect to the host
-Node.js strategy, start Shioaji, train a model, produce a signal, or simulate a
-fill.
+Phase 0 establishes fail-closed read-only boundaries. Phase 1 adds isolated
+market-data collection primitives: point-in-time contract tracking, Tick and
+BidAsk callbacks, a nonblocking bounded queue with backpressure evidence,
+immutable raw NDJSON segments with checksums, reconnect/resubscribe state, and
+explicit data-quality rejection evidence.
+
+The sidecar still does not connect to the host Node.js strategy, own brokerage
+credentials, train a model, produce a signal, or simulate a fill. Processing,
+features, models, and paper inference remain later phases.
 
 ## Development commands
 

@@ -10,22 +10,20 @@ from tmf_research.processing.quote_joiner import QuoteJoiner
 NOW = datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc)
 
 
-def tick(**overrides: object) -> TickEvent:
-    values = {
-        "event_id": "tick-1",
-        "received_at": NOW,
-        "exchange_datetime": NOW,
-        "alias_code": "TMFR1",
-        "target_code": "TMF202607",
-        "delivery_month": "202607",
-        "code": "TMF202607",
-        "close": 23000.0,
-        "volume": 1,
-        "simtrade": False,
-        "raw_payload": {},
-    }
-    values.update(overrides)
-    return TickEvent(**values)
+def tick() -> TickEvent:
+    return TickEvent(
+        event_id="tick-1",
+        received_at=NOW,
+        exchange_datetime=NOW,
+        alias_code="TMFR1",
+        target_code="TMF202607",
+        delivery_month="202607",
+        code="TMF202607",
+        close=23000.0,
+        volume=1,
+        simtrade=False,
+        raw_payload={},
+    )
 
 
 def quote(

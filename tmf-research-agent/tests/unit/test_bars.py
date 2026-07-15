@@ -54,12 +54,12 @@ def minute_states() -> tuple[OneSecondState, ...]:
     states: list[OneSecondState] = []
     previous: OneSecondState | None = None
     for offset in range(60):
-        ticks = ()
+        ticks: tuple[TickEvent, ...] = ()
         if offset == 0:
             ticks = (tick(offset, 100.0, 1),)
         elif offset == 59:
             ticks = (tick(offset, 102.0, 2),)
-        quotes = (quote(),) if offset == 0 else ()
+        quotes: tuple[BidAskEvent, ...] = (quote(),) if offset == 0 else ()
         previous = builder.aggregate(
             ANCHOR + timedelta(seconds=offset),
             ticks,

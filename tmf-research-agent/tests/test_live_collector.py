@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
 import unittest
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -47,6 +50,41 @@ class FakeGateway:
 
 
 class LiveCollectorTests(unittest.TestCase):
+    def test_market_callbacks_have_executable_minimality_tripwires(self) -> None:
+        forbidden_names = {
+            "acquire",
+            "aggregate",
+            "fit",
+            "history",
+            "infer",
+            "join",
+            "model",
+            "open",
+            "paper",
+            "predict",
+            "sleep",
+            "train",
+            "wait",
+            "write",
+        }
+        for callback in (LiveCollector._on_tick, LiveCollector._on_bidask):
+            tree = ast.parse(textwrap.dedent(inspect.getsource(callback)))
+            self.assertFalse(
+                any(isinstance(node, (ast.Await, ast.For, ast.Try, ast.While, ast.With)) for node in ast.walk(tree))
+            )
+            called_names = {
+                node.func.id.lower()
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            called_attributes = {
+                node.func.attr.lower()
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            }
+            self.assertFalse(forbidden_names & (called_names | called_attributes))
+            self.assertEqual(sum(name == "offer" for name in called_attributes), 1)
+
     def test_subscribes_callbacks_and_enqueues_tick_and_bidask_events(self) -> None:
         gateway = FakeGateway()
         queue = BoundedEventQueue[MarketEvent](capacity=4)

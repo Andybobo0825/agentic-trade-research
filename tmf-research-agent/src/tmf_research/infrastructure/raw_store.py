@@ -3,11 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
 from pathlib import Path
+
+
+_SAFE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +48,8 @@ class AppendOnlyRawStore:
     ) -> SegmentManifest:
         if not event_type.strip() or not segment_id.strip():
             raise ValueError("event_type and segment_id are required")
+        _validate_path_component(event_type, "event_type")
+        _validate_path_component(segment_id, "segment_id")
         if not events:
             raise ValueError("events cannot be empty")
         if created_at.tzinfo is None:
@@ -57,6 +63,9 @@ class AppendOnlyRawStore:
         directory = self._root / "segments" / event_type
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{segment_id}.ndjson"
+        if path.exists():
+            raise FileExistsError(path)
+        self._reserve_event_ids(records)
         with path.open("xb") as stream:
             stream.write(encoded)
             stream.flush()
@@ -84,6 +93,27 @@ class AppendOnlyRawStore:
             os.fsync(stream.fileno())
         return manifest
 
+    def _reserve_event_ids(self, records: Sequence[Mapping[str, object]]) -> None:
+        event_ids = [_event_id(record) for record in records]
+        if len(event_ids) != len(set(event_ids)):
+            raise FileExistsError("duplicate event_id within segment")
+
+        directory = self._root / "event_ids"
+        directory.mkdir(parents=True, exist_ok=True)
+        markers = {
+            event_id: directory / f"{hashlib.sha256(event_id.encode()).hexdigest()}.id"
+            for event_id in event_ids
+        }
+        for event_id, marker in markers.items():
+            if marker.exists():
+                raise FileExistsError(f"duplicate event_id: {event_id}")
+        for event_id, marker in markers.items():
+            with marker.open("xb") as stream:
+                stream.write(event_id.encode("utf-8"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            marker.chmod(0o444)
+
     def verify(self, manifest: SegmentManifest) -> bool:
         path = self._root / manifest.relative_path
         if not path.is_file():
@@ -97,6 +127,18 @@ def _event_time(record: Mapping[str, object]) -> str:
         if isinstance(value, str) and value:
             return value
     raise ValueError("raw event has no timestamp")
+
+
+def _event_id(record: Mapping[str, object]) -> str:
+    value = record.get("event_id")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("raw event has no event_id")
+    return value
+
+
+def _validate_path_component(value: str, name: str) -> None:
+    if value in {".", ".."} or _SAFE_PATH_COMPONENT.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a safe path component")
 
 
 def _record(value: object) -> dict[str, object]:

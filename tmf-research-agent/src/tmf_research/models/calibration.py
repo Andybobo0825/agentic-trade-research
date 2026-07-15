@@ -40,6 +40,20 @@ class CalibrationMetrics:
     expected_calibration_error: float
     expected_value: float
 
+    def __post_init__(self) -> None:
+        if any(
+            not math.isfinite(value)
+            for value in (
+                self.brier_score,
+                self.log_loss,
+                self.expected_calibration_error,
+                self.expected_value,
+            )
+        ):
+            raise ValueError("calibration metrics must be finite")
+        if self.brier_score < 0.0 or self.log_loss < 0.0 or self.expected_calibration_error < 0.0:
+            raise ValueError("calibration loss/error metrics must be non-negative")
+
     @property
     def sort_key(self) -> tuple[float, float, float, float]:
         return (self.brier_score, self.log_loss, self.expected_calibration_error, -self.expected_value)

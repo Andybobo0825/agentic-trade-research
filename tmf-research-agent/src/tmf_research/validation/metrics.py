@@ -40,7 +40,10 @@ class TradeResult:
     def __post_init__(self) -> None:
         if self.direction not in ("LONG", "SHORT"):
             raise ValueError("trade direction must be LONG or SHORT")
-        if any(not math.isfinite(value) for value in (self.net_points, self.gross_points, self.holding_minutes)):
+        if any(
+            not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+            for value in (self.net_points, self.gross_points, self.holding_minutes)
+        ):
             raise ValueError("trade values must be finite")
         if self.holding_minutes < 0 or not self.trading_date.strip():
             raise ValueError("invalid trade holding period/date")
@@ -77,7 +80,11 @@ def classification_metrics(
     bin_count: int = 10,
     minimum_bin_size: int = 20,
 ) -> ClassificationMetrics:
-    if not outcomes or len(outcomes) != len(probabilities) or any(value not in (0, 1) for value in outcomes):
+    if (
+        not outcomes or len(outcomes) != len(probabilities)
+        or any(isinstance(value, bool) or value not in (0, 1) for value in outcomes)
+        or not 0.0 <= threshold <= 1.0 or bin_count <= 0 or minimum_bin_size <= 0
+    ):
         raise ValueError("paired binary classification evidence is required")
     if any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in probabilities):
         raise ValueError("probabilities must be finite and bounded")
@@ -135,7 +142,11 @@ def trading_metrics(
     candidate_count: int,
     total_available_minutes: float,
 ) -> TradingMetrics:
-    if candidate_count <= 0 or total_available_minutes <= 0:
+    if (
+        isinstance(candidate_count, bool) or candidate_count <= 0
+        or isinstance(total_available_minutes, bool) or total_available_minutes <= 0
+        or not math.isfinite(total_available_minutes)
+    ):
         raise ValueError("positive candidate/time exposure denominator is required")
     count = len(trades)
     long_count = sum(trade.direction == "LONG" for trade in trades)
@@ -146,7 +157,7 @@ def trading_metrics(
     net_pnl = sum(trade.net_points for trade in trades)
     gross_profit = sum(wins)
     gross_loss = -sum(losses)
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (math.inf if gross_profit > 0 else 0.0)
+    profit_factor = gross_profit / max(gross_loss, 1e-12) if gross_profit > 0 else 0.0
     peak = 0.0
     equity = 0.0
     maximum_drawdown = 0.0

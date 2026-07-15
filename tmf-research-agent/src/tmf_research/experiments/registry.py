@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, cast
 
 from tmf_research.experiments.comparison import ComparisonContext
@@ -15,44 +18,34 @@ from tmf_research.experiments.search_budget import SearchSpaceManifest
 
 AttemptStatus = Literal["SUCCEEDED", "FAILED"]
 DataProvenance = Literal["REAL_READONLY_MARKET_DATA", "SYNTHETIC_TEST_ONLY"]
-ModelStatus = Literal[
-    "DRAFT",
-    "VALIDATING",
-    "REJECTED_LEAKAGE",
-    "REJECTED_INSUFFICIENT_DATA",
-    "REJECTED_OVERFIT_RISK",
-    "REJECTED_UNSTABLE",
-    "CANDIDATE",
-    "LOCKED_TEST_PENDING",
-    "LOCKED_TEST_FAILED",
-    "APPROVED_FOR_PAPER",
-    "RETIRED",
-]
-MODEL_STATUSES = (
-    "DRAFT",
-    "VALIDATING",
-    "REJECTED_LEAKAGE",
-    "REJECTED_INSUFFICIENT_DATA",
-    "REJECTED_OVERFIT_RISK",
-    "REJECTED_UNSTABLE",
-    "CANDIDATE",
-    "LOCKED_TEST_PENDING",
-    "LOCKED_TEST_FAILED",
-    "APPROVED_FOR_PAPER",
-    "RETIRED",
-)
-_ALLOWED_TRANSITIONS: Mapping[str, frozenset[str]] = {
-    "DRAFT": frozenset({"VALIDATING", "REJECTED_LEAKAGE", "REJECTED_INSUFFICIENT_DATA", "RETIRED"}),
-    "VALIDATING": frozenset({"REJECTED_LEAKAGE", "REJECTED_INSUFFICIENT_DATA", "REJECTED_OVERFIT_RISK", "REJECTED_UNSTABLE", "CANDIDATE", "RETIRED"}),
-    "CANDIDATE": frozenset({"LOCKED_TEST_PENDING", "REJECTED_OVERFIT_RISK", "REJECTED_UNSTABLE", "RETIRED"}),
-    "LOCKED_TEST_PENDING": frozenset({"LOCKED_TEST_FAILED", "APPROVED_FOR_PAPER", "RETIRED"}),
-    "APPROVED_FOR_PAPER": frozenset({"RETIRED"}),
-    "REJECTED_LEAKAGE": frozenset({"RETIRED"}),
-    "REJECTED_INSUFFICIENT_DATA": frozenset({"RETIRED"}),
-    "REJECTED_OVERFIT_RISK": frozenset({"RETIRED"}),
-    "REJECTED_UNSTABLE": frozenset({"RETIRED"}),
-    "LOCKED_TEST_FAILED": frozenset({"RETIRED"}),
-    "RETIRED": frozenset(),
+_EXPERIMENT_EVIDENCE_SEAL = object()
+class ModelStatus(str, Enum):
+    DRAFT = "DRAFT"
+    VALIDATING = "VALIDATING"
+    REJECTED_LEAKAGE = "REJECTED_LEAKAGE"
+    REJECTED_INSUFFICIENT_DATA = "REJECTED_INSUFFICIENT_DATA"
+    REJECTED_OVERFIT_RISK = "REJECTED_OVERFIT_RISK"
+    REJECTED_UNSTABLE = "REJECTED_UNSTABLE"
+    CANDIDATE = "CANDIDATE"
+    LOCKED_TEST_PENDING = "LOCKED_TEST_PENDING"
+    LOCKED_TEST_FAILED = "LOCKED_TEST_FAILED"
+    APPROVED_FOR_PAPER = "APPROVED_FOR_PAPER"
+    RETIRED = "RETIRED"
+
+
+MODEL_STATUSES = tuple(status.value for status in ModelStatus)
+_ALLOWED_TRANSITIONS: Mapping[ModelStatus, frozenset[ModelStatus]] = {
+    ModelStatus.DRAFT: frozenset({ModelStatus.VALIDATING, ModelStatus.REJECTED_LEAKAGE, ModelStatus.REJECTED_INSUFFICIENT_DATA, ModelStatus.RETIRED}),
+    ModelStatus.VALIDATING: frozenset({ModelStatus.REJECTED_LEAKAGE, ModelStatus.REJECTED_INSUFFICIENT_DATA, ModelStatus.REJECTED_OVERFIT_RISK, ModelStatus.REJECTED_UNSTABLE, ModelStatus.CANDIDATE, ModelStatus.RETIRED}),
+    ModelStatus.CANDIDATE: frozenset({ModelStatus.LOCKED_TEST_PENDING, ModelStatus.REJECTED_OVERFIT_RISK, ModelStatus.REJECTED_UNSTABLE, ModelStatus.RETIRED}),
+    ModelStatus.LOCKED_TEST_PENDING: frozenset({ModelStatus.LOCKED_TEST_FAILED, ModelStatus.APPROVED_FOR_PAPER, ModelStatus.RETIRED}),
+    ModelStatus.APPROVED_FOR_PAPER: frozenset({ModelStatus.RETIRED}),
+    ModelStatus.REJECTED_LEAKAGE: frozenset({ModelStatus.RETIRED}),
+    ModelStatus.REJECTED_INSUFFICIENT_DATA: frozenset({ModelStatus.RETIRED}),
+    ModelStatus.REJECTED_OVERFIT_RISK: frozenset({ModelStatus.RETIRED}),
+    ModelStatus.REJECTED_UNSTABLE: frozenset({ModelStatus.RETIRED}),
+    ModelStatus.LOCKED_TEST_FAILED: frozenset({ModelStatus.RETIRED}),
+    ModelStatus.RETIRED: frozenset(),
 }
 
 
@@ -62,11 +55,11 @@ def transition_model_status(
     *,
     data_provenance: DataProvenance,
 ) -> ModelStatus:
-    if current not in MODEL_STATUSES or target not in MODEL_STATUSES:
-        raise ValueError("model state is outside fixed SPEC 42 states")
+    if not isinstance(current, ModelStatus) or not isinstance(target, ModelStatus):
+        raise TypeError("model state must use the exact SPEC 42 enum")
     if target not in _ALLOWED_TRANSITIONS[current]:
         raise ValueError(f"forbidden model state transition: {current}->{target}")
-    if data_provenance == "SYNTHETIC_TEST_ONLY" and target in ("LOCKED_TEST_PENDING", "APPROVED_FOR_PAPER"):
+    if data_provenance == "SYNTHETIC_TEST_ONLY" and target in (ModelStatus.LOCKED_TEST_PENDING, ModelStatus.APPROVED_FOR_PAPER):
         raise ValueError("synthetic evidence cannot enter a production approval path")
     return target
 
@@ -152,7 +145,38 @@ class ExperimentAttempt:
             raise ValueError("attempt id and aware timestamp are required")
         if self.status not in ("SUCCEEDED", "FAILED"):
             raise ValueError("attempt status must record success or failure")
-        object.__setattr__(self, "result", dict(self.result))
+        copied = json.loads(json.dumps(dict(self.result), allow_nan=False))
+        if not isinstance(copied, dict):
+            raise ValueError("attempt result must be a JSON object")
+        object.__setattr__(self, "result", MappingProxyType(copied))
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ExperimentRegistryEvidence:
+    experiment_id: str
+    definition_hash: str
+    search_manifest_hash: str
+    attempt_count: int
+    chain_head: str
+    checkpoint_hash: str
+    parameter_space: SearchSpaceManifest
+    _seal: object
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> ExperimentRegistryEvidence:
+        raise TypeError("experiment evidence must be issued by a verified immutable registry")
+
+    def __post_init__(self) -> None:
+        if self._seal is not _EXPERIMENT_EVIDENCE_SEAL:
+            raise TypeError("experiment evidence must be issued by a verified immutable registry")
+        if not self.experiment_id.strip() or self.attempt_count < 0:
+            raise ValueError("invalid experiment evidence")
+        for name, value in (
+            ("definition", self.definition_hash), ("search", self.search_manifest_hash),
+            ("chain", self.chain_head), ("checkpoint", self.checkpoint_hash),
+        ):
+            _sha256(value, name)
+        if self.search_manifest_hash != self.parameter_space.canonical_hash:
+            raise ValueError("experiment evidence search manifest mismatch")
 
 
 class ExperimentRegistry:
@@ -173,11 +197,23 @@ class ExperimentRegistry:
         definition_payload = definition.to_dict()
         _write_exclusive(root / "definition.json", _canonical(definition_payload))
         _write_exclusive(root / "attempts.jsonl", b"")
+        checkpoints = root / "checkpoints"
+        checkpoints.mkdir()
+        genesis = {
+            "version": 1,
+            "definition_hash": _hash(definition_payload),
+            "search_manifest_hash": definition.parameter_space.canonical_hash,
+            "journal_root": "0" * 64,
+        }
+        genesis_hash = _hash(genesis)
+        _write_exclusive(root / f"genesis.{genesis_hash}.json", _canonical(genesis))
         state = {
             "definition_hash": _hash(definition_payload),
             "search_manifest_hash": definition.parameter_space.canonical_hash,
             "attempt_count": 0,
             "chain_head": "0" * 64,
+            "genesis_hash": genesis_hash,
+            "checkpoint_hash": genesis_hash,
         }
         _write_exclusive(root / "state.json", _canonical(state))
         return cls(root)
@@ -221,8 +257,39 @@ class ExperimentRegistry:
             os.fsync(stream.fileno())
         state["attempt_count"] = _integer(state["attempt_count"]) + 1
         state["chain_head"] = entry["entry_hash"]
+        checkpoint_body = {
+            "sequence": state["attempt_count"],
+            "attempt_count": state["attempt_count"],
+            "chain_head": state["chain_head"],
+            "previous_checkpoint_hash": state["checkpoint_hash"],
+            "entry_hash": entry["entry_hash"],
+            "entry_status": attempt.status,
+        }
+        checkpoint_hash = _hash(checkpoint_body)
+        checkpoint_name = f"{_integer(state['attempt_count']):08d}-{checkpoint_hash}.json"
+        _write_exclusive(self._root / "checkpoints" / checkpoint_name, _canonical(checkpoint_body))
+        state["checkpoint_hash"] = checkpoint_hash
         _replace(self._root / "state.json", _canonical(state))
         self._verify()
+
+    def evidence(self) -> ExperimentRegistryEvidence:
+        self._verify()
+        state = _object(self._root / "state.json")
+        instance = object.__new__(ExperimentRegistryEvidence)
+        values: dict[str, object] = {
+            "experiment_id": str(self._definition["experiment_id"]),
+            "definition_hash": self.definition_hash,
+            "search_manifest_hash": self._space.canonical_hash,
+            "attempt_count": _integer(state["attempt_count"]),
+            "chain_head": str(state["chain_head"]),
+            "checkpoint_hash": str(state["checkpoint_hash"]),
+            "parameter_space": self._space,
+            "_seal": _EXPERIMENT_EVIDENCE_SEAL,
+        }
+        for name, value in values.items():
+            object.__setattr__(instance, name, value)
+        instance.__post_init__()
+        return instance
 
     def _read_attempts(self) -> list[Mapping[str, object]]:
         values: list[Mapping[str, object]] = []
@@ -235,9 +302,17 @@ class ExperimentRegistry:
 
     def _verify(self) -> None:
         state = _object(self._root / "state.json")
-        if state["definition_hash"] != _hash(self._definition):
+        genesis_files = tuple(self._root.glob("genesis.*.json"))
+        if len(genesis_files) != 1:
+            raise ValueError("exactly one immutable experiment genesis is required")
+        genesis_file = genesis_files[0]
+        genesis = _object(genesis_file)
+        genesis_hash = _hash(genesis)
+        if genesis_file.name != f"genesis.{genesis_hash}.json" or state["genesis_hash"] != genesis_hash:
+            raise ValueError("experiment genesis anchor mismatch")
+        if genesis["definition_hash"] != _hash(self._definition) or state["definition_hash"] != genesis["definition_hash"]:
             raise ValueError("preregistered experiment definition was mutated")
-        if state["search_manifest_hash"] != self._space.canonical_hash:
+        if genesis["search_manifest_hash"] != self._space.canonical_hash or state["search_manifest_hash"] != genesis["search_manifest_hash"]:
             raise ValueError("search space expansion after start is forbidden")
         previous = "0" * 64
         attempts = self._read_attempts()
@@ -246,7 +321,32 @@ class ExperimentRegistry:
             if entry.get("previous_hash") != previous or entry.get("entry_hash") != _hash(body):
                 raise ValueError("attempt journal is not append-only")
             previous = str(entry["entry_hash"])
-        if _integer(state["attempt_count"]) != len(attempts) or state["chain_head"] != previous:
+        authoritative_count = 0
+        authoritative_head = str(genesis["journal_root"])
+        previous_checkpoint = genesis_hash
+        checkpoints = tuple(sorted((self._root / "checkpoints").glob("*.json")))
+        for expected_sequence, checkpoint_file in enumerate(checkpoints, start=1):
+            checkpoint = _object(checkpoint_file)
+            checkpoint_hash = _hash(checkpoint)
+            expected_name = f"{expected_sequence:08d}-{checkpoint_hash}.json"
+            if checkpoint_file.name != expected_name:
+                raise ValueError("experiment checkpoint sequence/content address mismatch")
+            if (
+                _integer(checkpoint["sequence"]) != expected_sequence
+                or _integer(checkpoint["attempt_count"]) != expected_sequence
+                or checkpoint["previous_checkpoint_hash"] != previous_checkpoint
+            ):
+                raise ValueError("experiment checkpoint chain is invalid")
+            authoritative_count = expected_sequence
+            authoritative_head = str(checkpoint["chain_head"])
+            previous_checkpoint = checkpoint_hash
+        if (
+            authoritative_count != len(attempts)
+            or authoritative_head != previous
+            or _integer(state["attempt_count"]) != authoritative_count
+            or state["chain_head"] != authoritative_head
+            or state["checkpoint_hash"] != previous_checkpoint
+        ):
             raise ValueError("attempt deletion/truncation detected")
 
 
@@ -284,6 +384,10 @@ REQUIRED_METADATA = (
     "schema_version",
     "model_status",
     "data_provenance",
+    "phase4_bundle_hash",
+    "phase5_evidence_hash",
+    "experiment_checkpoint_hash",
+    "holdout_state_hash",
 )
 
 
@@ -316,12 +420,134 @@ class RegistryCompatibility:
         _sha256(self.model_checksum, "model_checksum")
 
 
-def publish_model_registry(
-    root: Path,
+_PUBLICATION_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class RegistryPublication:
+    metadata: Mapping[str, object]
+    artifacts: Mapping[str, object]
+    phase4_bundle_hash: str
+    phase5_evidence_hash: str
+    publication_hash: str
+    _seal: object
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> RegistryPublication:
+        raise TypeError("registry publications must be built from authoritative Phase 4/5 evidence")
+
+    def __post_init__(self) -> None:
+        if self._seal is not _PUBLICATION_SEAL:
+            raise TypeError("registry publication must derive from a Phase 4 bundle and Phase 5 evidence")
+        _sha256(self.phase4_bundle_hash, "phase4_bundle_hash")
+        _sha256(self.phase5_evidence_hash, "phase5_evidence_hash")
+        _sha256(self.publication_hash, "publication_hash")
+        if self.publication_hash != _hash({"metadata": dict(self.metadata), "artifacts": dict(self.artifacts)}):
+            raise ValueError("registry publication was mutated after provenance binding")
+
+
+def phase4_bundle_evidence_hash(bundle: object) -> str:
+    from tmf_research.models.serialization import ModelBundle, phase5_registry_artifacts
+
+    if not isinstance(bundle, ModelBundle):
+        raise TypeError("Phase 4 ModelBundle is required")
+    artifacts = phase5_registry_artifacts(
+        bundle,
+        fold_metrics={}, stability_report={}, ablation_report={}, overfitting_report={},
+    )
+    core = {
+        name: value
+        for name, value in artifacts.items()
+        if name not in {"fold_metrics.json", "stability_report.json", "ablation_report.json", "overfitting_report.json"}
+    }
+    return _hash({"metadata": bundle.metadata.to_dict(), "artifacts": core})
+
+
+def build_registry_publication(
     *,
-    metadata: Mapping[str, object],
-    artifacts: Mapping[str, object],
-) -> str:
+    bundle: object,
+    report: object,
+    evidence: object,
+    decision_result: object,
+    code_commit: str,
+) -> RegistryPublication:
+    from tmf_research.models.serialization import ModelBundle, phase5_registry_artifacts
+    from tmf_research.validation.approval import Phase5DecisionResult, Phase5EvidenceBundle, decide_phase5
+    from tmf_research.validation.report import Phase5Report, build_phase5_report
+
+    if not isinstance(bundle, ModelBundle) or not isinstance(report, Phase5Report):
+        raise TypeError("authoritative Phase 4 bundle and Phase 5 report are required")
+    if not isinstance(evidence, Phase5EvidenceBundle) or not isinstance(decision_result, Phase5DecisionResult):
+        raise TypeError("sealed Phase 5 evidence and decision result are required")
+    derived_result = decide_phase5(evidence)
+    if decision_result != derived_result:
+        raise ValueError("publication decision must be derived from the authoritative Phase 5 bundle")
+    decision = derived_result.decision
+    authoritative_report = build_phase5_report(
+        evidence.reports, evidence.gaps, evidence.dimensions, decision,
+    )
+    if report != authoritative_report or report.decision != decision or decision.evidence_hash != evidence.content_hash:
+        raise ValueError("report, decision, and Phase 5 evidence hashes do not agree")
+    if not _git_commit(code_commit) or not _git_commit_exists(code_commit):
+        raise ValueError("code_commit must identify a real repository commit")
+    if bundle.metadata.experiment_id != evidence.experiment.experiment_id:
+        raise ValueError("Phase 4 bundle and immutable experiment registry disagree")
+    phase4_hash = phase4_bundle_evidence_hash(bundle)
+    approved = decision.model_status is ModelStatus.APPROVED_FOR_PAPER
+    if approved:
+        if (
+            decision_result.approval is None or evidence.holdout is None
+            or evidence.data_provenance != "REAL_READONLY_MARKET_DATA"
+            or decision.valid_outer_folds < 5
+            or evidence.holdout.model_hash != phase4_hash
+            or decision_result.approval.evidence_hash != evidence.content_hash
+        ):
+            raise ValueError("APPROVED_FOR_PAPER requires the derived approval capability and bound holdout/model evidence")
+    elif decision_result.approval is not None:
+        raise ValueError("non-approved publication cannot carry an approval capability")
+    artifacts = phase5_registry_artifacts(
+        bundle,
+        fold_metrics={
+            "folds": [_fold_report_payload(value) for value in report.folds],
+            "summaries": {name: asdict(value) for name, value in report.summaries.items()},
+        },
+        stability_report={"dimensions": _dimensions_payload(report.dimensions)},
+        ablation_report={"comparisons": [_ablation_payload(value) for value in evidence.ablations]},
+        overfitting_report={"gaps": [asdict(value) for value in report.generalization_gaps], "decision": asdict(decision)},
+    )
+    metadata = {
+        **bundle.metadata.to_dict(),
+        "code_commit": code_commit,
+        "outer_fold_count": decision.valid_outer_folds,
+        "locked_holdout_status": (
+            "PASSED" if approved
+            else "PENDING" if decision.model_status is ModelStatus.LOCKED_TEST_PENDING
+            else "NOT_RUN"
+        ),
+        "model_status": decision.model_status.value,
+        "data_provenance": evidence.data_provenance,
+        "phase4_bundle_hash": phase4_hash,
+        "phase5_evidence_hash": evidence.content_hash,
+        "experiment_checkpoint_hash": evidence.experiment.checkpoint_hash,
+        "holdout_state_hash": None if evidence.holdout is None else evidence.holdout.state_hash,
+    }
+    instance = object.__new__(RegistryPublication)
+    for name, value in (
+        ("metadata", MappingProxyType(metadata)), ("artifacts", MappingProxyType(artifacts)),
+        ("phase4_bundle_hash", phase4_hash), ("phase5_evidence_hash", evidence.content_hash),
+        ("publication_hash", _hash({"metadata": metadata, "artifacts": artifacts})),
+        ("_seal", _PUBLICATION_SEAL),
+    ):
+        object.__setattr__(instance, name, value)
+    instance.__post_init__()
+    return instance
+
+
+def publish_model_registry(root: Path, publication: RegistryPublication) -> str:
+    if not isinstance(publication, RegistryPublication):
+        raise TypeError("publish_model_registry requires a sealed RegistryPublication")
+    publication.__post_init__()
+    metadata = publication.metadata
+    artifacts = publication.artifacts
     if root.exists():
         raise FileExistsError(root)
     missing_metadata = tuple(name for name in REQUIRED_METADATA if name not in metadata)
@@ -345,6 +571,13 @@ def publish_model_registry(
         _sha256(str(metadata[hash_name]), hash_name)
     if isinstance(metadata["outer_fold_count"], bool) or not isinstance(metadata["outer_fold_count"], int):
         raise ValueError("outer_fold_count must be an integer")
+    if status == ModelStatus.APPROVED_FOR_PAPER.value and (
+        metadata["outer_fold_count"] < 5
+        or metadata["locked_holdout_status"] != "PASSED"
+        or provenance != "REAL_READONLY_MARKET_DATA"
+        or metadata["holdout_state_hash"] is None
+    ):
+        raise ValueError("approved publication metadata does not satisfy the derived production gates")
     root.mkdir(parents=True)
     payloads = {"metadata.json": dict(metadata), **dict(artifacts)}
     for name in REGISTRY_FILES:
@@ -379,6 +612,35 @@ def validate_model_registry(
             "LOCKED_TEST_PENDING", "LOCKED_TEST_FAILED", "APPROVED_FOR_PAPER",
         ):
             return RegistryValidation("NO_TRADE", ("SYNTHETIC_APPROVAL_FORBIDDEN",), actual)
+        if metadata["model_status"] == ModelStatus.APPROVED_FOR_PAPER.value and (
+            _integer(metadata["outer_fold_count"]) < 5
+            or metadata["locked_holdout_status"] != "PASSED"
+            or metadata["data_provenance"] != "REAL_READONLY_MARKET_DATA"
+            or metadata["holdout_state_hash"] is None
+        ):
+            return RegistryValidation("NO_TRADE", ("APPROVAL_PROVENANCE_INVALID",), actual)
+        fold_metrics = _object(root / "fold_metrics.json")
+        folds = fold_metrics.get("folds")
+        overfitting = _object(root / "overfitting_report.json")
+        decision = overfitting.get("decision")
+        fold_keys = tuple(
+            (item.get("fold_id"), item.get("manifest_hash"))
+            for item in folds if isinstance(item, dict)
+        ) if isinstance(folds, list) else ()
+        if (
+            not isinstance(folds, list) or not isinstance(decision, dict)
+            or len(fold_keys) != len(folds) or len(set(fold_keys)) != len(fold_keys)
+            or any(
+                not isinstance(fold_id, str) or not fold_id.strip()
+                or not isinstance(manifest_hash, str) or not _valid_sha256(manifest_hash)
+                for fold_id, manifest_hash in fold_keys
+            )
+            or len(folds) < _integer(metadata["outer_fold_count"])
+            or decision.get("model_status") != metadata["model_status"]
+            or decision.get("evidence_hash") != metadata["phase5_evidence_hash"]
+            or decision.get("valid_outer_folds") != metadata["outer_fold_count"]
+        ):
+            return RegistryValidation("NO_TRADE", ("MODEL_REPORT_PROVENANCE_MISMATCH",), actual)
         if expected is not None:
             feature_names = json.loads((root / "feature_names.json").read_text(encoding="utf-8"))
             scaler = _object(root / "scaler.json")
@@ -436,7 +698,8 @@ def _validate_metadata(metadata: Mapping[str, object]) -> None:
         "model_id", "model_version", "created_at", "training_start", "training_end",
         "instrument", "session", "horizon", "feature_version", "label_version",
         "code_commit", "experiment_id", "locked_holdout_status", "schema_version",
-        "model_status", "data_provenance",
+        "model_status", "data_provenance", "phase4_bundle_hash", "phase5_evidence_hash",
+        "experiment_checkpoint_hash",
     )
     if any(not isinstance(metadata[name], str) or not str(metadata[name]).strip() for name in string_fields):
         raise ValueError("model metadata strings must be present and non-empty")
@@ -445,6 +708,12 @@ def _validate_metadata(metadata: Mapping[str, object]) -> None:
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError(f"{name} must be timezone-aware")
     _sha256(str(metadata["training_data_hash"]), "training_data_hash")
+    for name in ("phase4_bundle_hash", "phase5_evidence_hash", "experiment_checkpoint_hash"):
+        _sha256(str(metadata[name]), name)
+    if metadata["holdout_state_hash"] is not None:
+        _sha256(str(metadata["holdout_state_hash"]), "holdout_state_hash")
+    if not _git_commit(str(metadata["code_commit"])):
+        raise ValueError("code_commit must be a full hexadecimal commit id")
     for name in ("random_seed", "outer_fold_count"):
         if not isinstance(metadata[name], int) or isinstance(metadata[name], bool):
             raise ValueError(f"{name} must be an integer")
@@ -501,5 +770,62 @@ def _integer(value: object) -> int:
 
 
 def _sha256(value: str, name: str) -> None:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+    if not _valid_sha256(value):
         raise ValueError(f"invalid {name}")
+
+
+def _valid_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _git_commit(value: str) -> bool:
+    return len(value) in (40, 64) and all(character in "0123456789abcdef" for character in value)
+
+
+def _git_commit_exists(value: str) -> bool:
+    try:
+        result = subprocess.run(
+            ("git", "cat-file", "-e", f"{value}^{{commit}}"),
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _fold_report_payload(value: object) -> dict[str, object]:
+    from tmf_research.validation.report import FoldReport
+
+    if not isinstance(value, FoldReport):
+        raise TypeError("fold report evidence is required")
+    return {
+        "fold_id": value.fold_id, "manifest_hash": value.manifest_hash,
+        "split_regions": dict(value.split_regions), "classification": dict(value.classification),
+        "trading": dict(value.trading), "stability": dict(value.stability),
+    }
+
+
+def _dimensions_payload(value: object) -> dict[str, object]:
+    from tmf_research.validation.overfitting import StabilityDimensions
+
+    if not isinstance(value, StabilityDimensions):
+        raise TypeError("stability dimension evidence is required")
+    return {
+        "regimes": dict(value.regimes), "months": dict(value.months),
+        "directions": dict(value.directions), "target_codes": dict(value.target_codes),
+        "total_net_pnl": value.total_net_pnl,
+    }
+
+
+def _ablation_payload(value: object) -> dict[str, object]:
+    from tmf_research.validation.ablation import AblationComparison
+
+    if not isinstance(value, AblationComparison):
+        raise TypeError("ablation comparison evidence is required")
+    return {
+        "removed_group": value.removed_group,
+        "full_model_folds": [asdict(item) for item in value.full_model_folds],
+        "removed_model_folds": [asdict(item) for item in value.removed_model_folds],
+        "full_model_gain_ratio": value.full_model_gain_ratio,
+        "fold_stability": value.fold_stability,
+    }

@@ -4,12 +4,15 @@ from datetime import UTC, datetime, timedelta
 import unittest
 
 from tmf_research.models.provenance import Phase4SourceRow
+from tmf_research.models.calibration import fit_two_stage_calibrators
 from tmf_research.validation.folds import Phase5FoldPlanner, TemporalSample
 from tmf_research.validation.nested_walk_forward import (
-    FrozenSelection,
-    OuterEvaluationResult,
+    freeze_selection,
+    inner_selection_candidate,
     run_nested_walk_forward,
+    select_on_inner_validation,
 )
+from tests.unit.test_calibration import validation_predictions
 
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -59,23 +62,23 @@ class WalkForwardContractTests(unittest.TestCase):
                 inner_validation_size=3, minimum_outer_train_size=12,
             )
 
-    def test_runner_gives_selector_no_outer_rows_and_evaluates_frozen_choice(self) -> None:
+    def test_runner_rejects_a_sealed_selection_from_a_different_fold_manifest(self) -> None:
         planned = Phase5FoldPlanner().plan(
             samples(), outer_test_size=3, inner_validation_size=3,
             minimum_outer_train_size=12, step_size=3,
         )
+        predictions = validation_predictions()
+        calibration = fit_two_stage_calibrators(predictions, bin_count=1, minimum_bin_size=1)
+        foreign = freeze_selection(select_on_inner_validation((inner_selection_candidate(
+            "foreign", predictions, calibration, parameters={"l2": 1.0},
+        ),)))
 
-        def select(selector: object) -> FrozenSelection:
-            self.assertFalse(hasattr(selector, "outer_test"))
-            return FrozenSelection("candidate", "0" * 64)
-
-        outer_ids = iter(fold.evaluation.outer_fold_id for fold in planned)
-
-        def evaluate(selection: FrozenSelection, outer: tuple[object, ...]) -> OuterEvaluationResult:
-            self.assertTrue(outer)
-            return OuterEvaluationResult(next(outer_ids), selection.candidate_id, {"net_ev": 0.1})
-
-        self.assertEqual(len(run_nested_walk_forward(planned, select=select, evaluate=evaluate)), len(planned))
+        with self.assertRaisesRegex(ValueError, "different planner fold manifest"):
+            run_nested_walk_forward(
+                planned,
+                select=lambda selector: foreign,
+                evaluate=lambda selection, outer: self.fail("foreign selection reached outer evaluation"),
+            )
 
 
 if __name__ == "__main__":

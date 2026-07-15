@@ -3,37 +3,34 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from enum import Enum
+from types import MappingProxyType
 
-from tmf_research.experiments.registry import DataProvenance, ModelStatus
+from tmf_research.experiments.registry import ModelStatus
+from tmf_research.models.provenance import NestedFoldManifest
 
 
 REQUIRED_REGIMES = frozenset({
-    "DAY",
-    "NIGHT",
-    "HIGH_VOLATILITY",
-    "MEDIUM_VOLATILITY",
-    "LOW_VOLATILITY",
-    "TRENDING",
-    "RANGING",
-    "EXPIRY_WEEK",
-    "NON_EXPIRY_WEEK",
-    "OPENING_30M",
-    "INTRADAY",
-    "CLOSING_30M",
+    "DAY", "NIGHT", "HIGH_VOLATILITY", "MEDIUM_VOLATILITY", "LOW_VOLATILITY",
+    "TRENDING", "RANGING", "EXPIRY_WEEK", "NON_EXPIRY_WEEK", "OPENING_30M",
+    "INTRADAY", "CLOSING_30M",
 })
+
+
+class ResearchStatus(str, Enum):
+    COMPLETE = "RESEARCH_COMPLETE"
+    INSUFFICIENT_DATA = "RESEARCH_INSUFFICIENT_DATA"
+    REJECTED = "RESEARCH_REJECTED"
 
 
 @dataclass(frozen=True, slots=True)
 class FoldEvidence:
-    fold_id: str
-    train_candidates: int
-    test_candidates: int
+    manifest: NestedFoldManifest
     trade_count: int
     long_count: int
     short_count: int
     train_ev: float
-    net_ev: float
+    test_ev: float
     baseline_net_ev: float
     baseline_brier: float
     baseline_log_loss: float
@@ -46,81 +43,102 @@ class FoldEvidence:
     test_profit_factor: float
     train_trade_frequency: float
     test_trade_frequency: float
+    train_accuracy: float
+    test_accuracy: float
 
     def __post_init__(self) -> None:
-        if not self.fold_id.strip() or any(
-            isinstance(value, bool) or value < 0
-            for value in (
-                self.train_candidates,
-                self.test_candidates,
-                self.trade_count,
-                self.long_count,
-                self.short_count,
-            )
-        ):
-            raise ValueError("invalid fold sample evidence")
+        if not isinstance(self.manifest, NestedFoldManifest):
+            raise TypeError("fold evidence requires a sealed planner manifest")
+        counts = (self.trade_count, self.long_count, self.short_count)
+        if any(isinstance(value, bool) or value < 0 for value in counts):
+            raise ValueError("trade counts must be non-negative integers")
+        if self.trade_count != self.long_count + self.short_count:
+            raise ValueError("trade count must equal LONG plus SHORT")
         numeric = (
-            self.net_ev,
-            self.train_ev,
-            self.baseline_net_ev,
-            self.baseline_brier,
-            self.baseline_log_loss,
-            self.net_pnl,
-            self.train_log_loss,
-            self.test_log_loss,
-            self.train_brier,
-            self.test_brier,
-            self.train_profit_factor,
-            self.test_profit_factor,
-            self.train_trade_frequency,
-            self.test_trade_frequency,
+            self.train_ev, self.test_ev, self.baseline_net_ev, self.baseline_brier,
+            self.baseline_log_loss, self.net_pnl, self.train_log_loss, self.test_log_loss,
+            self.train_brier, self.test_brier, self.train_profit_factor, self.test_profit_factor,
+            self.train_trade_frequency, self.test_trade_frequency, self.train_accuracy, self.test_accuracy,
         )
-        if any(not math.isfinite(value) for value in numeric):
-            raise ValueError("fold metrics must be finite")
+        if any(not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) for value in numeric):
+            raise ValueError("fold metrics must be finite numbers")
+        if any(value < 0.0 for value in (
+            self.baseline_brier, self.baseline_log_loss, self.train_log_loss, self.test_log_loss,
+            self.train_brier, self.test_brier, self.train_profit_factor, self.test_profit_factor,
+            self.train_trade_frequency, self.test_trade_frequency,
+        )) or any(not 0.0 <= value <= 1.0 for value in (self.train_accuracy, self.test_accuracy)):
+            raise ValueError("loss/frequency/accuracy metrics are outside valid ranges")
+
+    @property
+    def fold_id(self) -> str:
+        return self.manifest.outer_fold_id
+
+    @property
+    def manifest_hash(self) -> str:
+        return self.manifest.content_hash
+
+    @property
+    def train_candidates(self) -> int:
+        return self.manifest.inner_train.count + self.manifest.inner_validation.count
+
+    @property
+    def test_candidates(self) -> int:
+        return self.manifest.outer_test.count
 
     @property
     def sample_sufficient(self) -> bool:
         return (
-            self.train_candidates >= 5_000
-            and self.test_candidates >= 500
-            and self.trade_count >= 30
-            and self.long_count >= 10
-            and self.short_count >= 10
+            self.train_candidates >= 5_000 and self.test_candidates >= 500
+            and self.trade_count >= 30 and self.long_count >= 10 and self.short_count >= 10
         )
 
     @property
-    def fold_status(self) -> Literal["VALID", "INSUFFICIENT_SAMPLE"]:
+    def fold_status(self) -> str:
         return "VALID" if self.sample_sufficient else "INSUFFICIENT_SAMPLE"
 
 
 @dataclass(frozen=True, slots=True)
 class GeneralizationGap:
     fold_id: str
+    manifest_hash: str
     log_loss: float
     brier: float
     expected_value: float
     profit_factor: float
     trade_frequency: float
+    accuracy: float
     high_risk_reasons: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.fold_id.strip() or len(self.manifest_hash) != 64:
+            raise ValueError("gap requires fold/manifest identity")
+        if any(not math.isfinite(value) for value in (
+            self.log_loss, self.brier, self.expected_value, self.profit_factor,
+            self.trade_frequency, self.accuracy,
+        )):
+            raise ValueError("generalization gap metrics must be finite")
 
 
 def generalization_gap(fold: FoldEvidence) -> GeneralizationGap:
     reasons = []
-    if fold.train_ev > 0.0 and fold.net_ev < 0.0:
-        reasons.append("TRAIN_POSITIVE_TEST_DEGRADATION")
+    if fold.train_ev > 0.0 and fold.test_ev < 0.0:
+        reasons.append("TRAIN_POSITIVE_TEST_NEGATIVE_EV")
     if fold.train_profit_factor > max(1.0, 1.5 * fold.test_profit_factor):
         reasons.append("PROFIT_FACTOR_GAP")
     if fold.train_brier + 0.05 < fold.test_brier:
         reasons.append("CALIBRATION_GAP")
     if fold.train_trade_frequency > max(0.01, 2.0 * fold.test_trade_frequency):
         reasons.append("TRADE_FREQUENCY_GAP")
+    if fold.train_accuracy > fold.test_accuracy and fold.test_ev < fold.train_ev:
+        reasons.append("ACCURACY_UP_NET_EV_DOWN")
     return GeneralizationGap(
-        fold.fold_id,
+        fold.fold_id, fold.manifest_hash,
         fold.test_log_loss - fold.train_log_loss,
         fold.test_brier - fold.train_brier,
-        fold.net_ev - fold.train_ev,
+        fold.test_ev - fold.train_ev,
         fold.train_profit_factor - fold.test_profit_factor,
         fold.train_trade_frequency - fold.test_trade_frequency,
+        fold.train_accuracy - fold.test_accuracy,
         tuple(reasons),
     )
 
@@ -131,41 +149,35 @@ class StabilityDimensions:
     months: Mapping[str, float]
     directions: Mapping[str, float]
     target_codes: Mapping[str, float]
+    total_net_pnl: float
 
     def __post_init__(self) -> None:
         if not REQUIRED_REGIMES.issubset(self.regimes):
             raise ValueError("all specified market regimes must be reported")
         if set(self.directions) != {"LONG", "SHORT"} or not self.months or not self.target_codes:
-            raise ValueError("month, direction, and target-code stability evidence is required")
-        for mapping in (self.regimes, self.months, self.directions, self.target_codes):
-            if any(not key.strip() or not math.isfinite(value) for key, value in mapping.items()):
-                raise ValueError("stability dimensions must be finite")
-        object.__setattr__(self, "regimes", dict(self.regimes))
-        object.__setattr__(self, "months", dict(self.months))
-        object.__setattr__(self, "directions", dict(self.directions))
-        object.__setattr__(self, "target_codes", dict(self.target_codes))
-
-
-@dataclass(frozen=True, slots=True)
-class ApprovalGates:
-    calibration: bool
-    costs: bool
-    event_independence: bool
-    train_test_gap: bool
-    coefficient_stability: bool
-    parameter_robustness: bool
-    regime_stability: bool
-    target_code_stability: bool
-    ablations_complete: bool
-    search_budget_clean: bool
-    all_rules_frozen: bool
-    locked_holdout_status: Literal["NOT_RUN", "PASSED", "FAILED", "CONTAMINATED"]
+            raise ValueError("month, direction, and target-code contribution evidence is required")
+        if not math.isfinite(self.total_net_pnl):
+            raise ValueError("total net PnL must be finite")
+        for values in (self.regimes, self.months, self.directions, self.target_codes):
+            if any(
+                not key.strip() or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+                for key, value in values.items()
+            ):
+                raise ValueError("stability dimensions must be finite numeric mappings")
+        for name, values in (("months", self.months), ("directions", self.directions), ("target_codes", self.target_codes)):
+            if not math.isclose(sum(values.values()), self.total_net_pnl, rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError(f"{name} contributions must reconcile to total net PnL")
+        object.__setattr__(self, "regimes", MappingProxyType(dict(self.regimes)))
+        object.__setattr__(self, "months", MappingProxyType(dict(self.months)))
+        object.__setattr__(self, "directions", MappingProxyType(dict(self.directions)))
+        object.__setattr__(self, "target_codes", MappingProxyType(dict(self.target_codes)))
 
 
 @dataclass(frozen=True, slots=True)
 class ModelDecision:
-    research_status: Literal["RESEARCH_COMPLETE", "RESEARCH_INSUFFICIENT_DATA", "RESEARCH_REJECTED"]
+    research_status: ResearchStatus
     model_status: ModelStatus
+    evidence_hash: str
     valid_outer_folds: int
     positive_fold_ratio: float
     baseline_outperformance_ratio: float
@@ -176,124 +188,71 @@ class ModelDecision:
     direction_concentration: float | None
     reasons: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.research_status, ResearchStatus) or not isinstance(self.model_status, ModelStatus):
+            raise TypeError("model decisions require exact status enums")
+        if len(self.evidence_hash) != 64:
+            raise ValueError("model decision evidence hash is required")
+        if isinstance(self.valid_outer_folds, bool) or not isinstance(self.valid_outer_folds, int) or self.valid_outer_folds < 0:
+            raise ValueError("valid outer fold count must be a non-negative integer")
+        ratios = (
+            self.positive_fold_ratio, self.baseline_outperformance_ratio,
+            self.brier_noninferiority_ratio, self.log_loss_noninferiority_ratio,
+        )
+        concentrations = (self.fold_concentration, self.month_concentration, self.direction_concentration)
+        if any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in ratios):
+            raise ValueError("decision ratios must be finite and bounded")
+        if any(value is not None and (not math.isfinite(value) or not 0.0 <= value <= 1.0) for value in concentrations):
+            raise ValueError("decision concentrations must be finite and bounded")
+        if any(not reason.strip() for reason in self.reasons):
+            raise ValueError("decision reasons must be non-empty codes")
 
-def decide_model_status(
+
+def _core_reasons(
     folds: Sequence[FoldEvidence],
     dimensions: StabilityDimensions,
-    gates: ApprovalGates,
-    *,
-    data_provenance: DataProvenance,
-) -> ModelDecision:
-    if data_provenance not in ("REAL_READONLY_MARKET_DATA", "SYNTHETIC_TEST_ONLY"):
-        raise ValueError("unknown data provenance")
+) -> tuple[tuple[FoldEvidence, ...], dict[str, float | None], tuple[str, ...]]:
+    manifest_hashes = tuple(fold.manifest_hash for fold in folds)
+    fold_ids = tuple(fold.fold_id for fold in folds)
+    if len(set(manifest_hashes)) != len(manifest_hashes) or len(set(fold_ids)) != len(fold_ids):
+        raise ValueError("outer fold IDs and planner manifests must be unique")
     valid = tuple(fold for fold in folds if fold.sample_sufficient)
+    if not math.isclose(dimensions.total_net_pnl, sum(fold.net_pnl for fold in valid), rel_tol=1e-9, abs_tol=1e-9):
+        raise ValueError("fold PnL must reconcile to stability contribution total")
     if len(valid) < 5:
-        return ModelDecision(
-            "RESEARCH_INSUFFICIENT_DATA",
-            "REJECTED_INSUFFICIENT_DATA",
-            len(valid),
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            None,
-            None,
-            None,
-            ("FEWER_THAN_FIVE_VALID_OUTER_FOLDS",),
-        )
-    positive_ratio = sum(fold.net_ev >= 0.0 for fold in valid) / len(valid)
-    baseline_ratio = sum(fold.net_ev > fold.baseline_net_ev for fold in valid) / len(valid)
-    brier_ratio = sum(fold.test_brier <= fold.baseline_brier for fold in valid) / len(valid)
-    log_loss_ratio = sum(fold.test_log_loss <= fold.baseline_log_loss for fold in valid) / len(valid)
-    total = sum(fold.net_pnl for fold in valid)
+        return valid, {
+            "positive": 0.0, "baseline": 0.0, "brier": 0.0, "log_loss": 0.0,
+            "fold": None, "month": None, "direction": None,
+        }, ("FEWER_THAN_FIVE_VALID_OUTER_FOLDS",)
+    positive = sum(fold.test_ev >= 0.0 for fold in valid) / len(valid)
+    baseline = sum(fold.test_ev > fold.baseline_net_ev for fold in valid) / len(valid)
+    brier = sum(fold.test_brier <= fold.baseline_brier for fold in valid) / len(valid)
+    log_loss = sum(fold.test_log_loss <= fold.baseline_log_loss for fold in valid) / len(valid)
+    total = dimensions.total_net_pnl
     fold_concentration = _concentration({fold.fold_id: fold.net_pnl for fold in valid}, total)
     month_concentration = _concentration(dimensions.months, total)
     direction_concentration = _concentration(dimensions.directions, total)
     reasons: list[str] = []
     if total <= 0.0:
         reasons.append("NON_POSITIVE_TOTAL_OUTER_NET_PNL")
-    if positive_ratio < 0.70:
+    if positive < 0.70:
         reasons.append("NON_NEGATIVE_FOLD_RATIO_BELOW_70_PERCENT")
-    if baseline_ratio < 0.70:
+    if baseline < 0.70:
         reasons.append("BASELINE_OUTPERFORMANCE_BELOW_70_PERCENT")
-    if brier_ratio < 0.50:
-        reasons.append("BRIER_WORSE_THAN_BASELINE_IN_MAJORITY")
-    if log_loss_ratio < 0.50:
-        reasons.append("LOG_LOSS_WORSE_THAN_BASELINE_IN_MAJORITY")
+    if brier <= 0.50:
+        reasons.append("BRIER_NOT_NONINFERIOR_IN_STRICT_MAJORITY")
+    if log_loss <= 0.50:
+        reasons.append("LOG_LOSS_NOT_NONINFERIOR_IN_STRICT_MAJORITY")
     if fold_concentration is None or fold_concentration > 0.40:
         reasons.append("FOLD_CONCENTRATION_ABOVE_40_PERCENT")
     if month_concentration is None or month_concentration > 0.30:
         reasons.append("MONTH_CONCENTRATION_ABOVE_30_PERCENT")
     if direction_concentration is None or direction_concentration > 0.85:
         reasons.append("DIRECTION_CONCENTRATION_ABOVE_85_PERCENT")
-    gate_values = {
-        "CALIBRATION_GATE_FAILED": gates.calibration,
-        "COST_GATE_FAILED": gates.costs,
-        "EVENT_CONCENTRATION_GATE_FAILED": gates.event_independence,
-        "GENERALIZATION_GAP_GATE_FAILED": gates.train_test_gap,
-        "COEFFICIENT_STABILITY_GATE_FAILED": gates.coefficient_stability,
-        "PARAMETER_FRAGILITY_GATE_FAILED": gates.parameter_robustness,
-        "REGIME_STABILITY_GATE_FAILED": gates.regime_stability,
-        "TARGET_CODE_STABILITY_GATE_FAILED": gates.target_code_stability,
-        "ABLATION_GATE_FAILED": gates.ablations_complete,
-        "SEARCH_BUDGET_GATE_FAILED": gates.search_budget_clean,
-        "FROZEN_RULES_GATE_FAILED": gates.all_rules_frozen,
-    }
-    reasons.extend(name for name, passed in gate_values.items() if not passed)
-    if gates.locked_holdout_status == "CONTAMINATED":
-        reasons.append("LOCKED_HOLDOUT_CONTAMINATED")
-    elif gates.locked_holdout_status == "FAILED":
-        reasons.append("LOCKED_HOLDOUT_FAILED")
-    if reasons:
-        status: ModelStatus = (
-            "LOCKED_TEST_FAILED"
-            if gates.locked_holdout_status in ("FAILED", "CONTAMINATED")
-            else "REJECTED_OVERFIT_RISK"
-        )
-        return ModelDecision(
-            "RESEARCH_REJECTED",
-            status,
-            len(valid),
-            positive_ratio,
-            baseline_ratio,
-            brier_ratio,
-            log_loss_ratio,
-            fold_concentration,
-            month_concentration,
-            direction_concentration,
-            tuple(reasons),
-        )
-    if data_provenance == "SYNTHETIC_TEST_ONLY":
-        return ModelDecision(
-            "RESEARCH_COMPLETE",
-            "CANDIDATE",
-            len(valid),
-            positive_ratio,
-            baseline_ratio,
-            brier_ratio,
-            log_loss_ratio,
-            fold_concentration,
-            month_concentration,
-            direction_concentration,
-            ("SYNTHETIC_TEST_ONLY_CANNOT_APPROVE",),
-        )
-    if gates.locked_holdout_status == "NOT_RUN":
-        final_status: ModelStatus = "LOCKED_TEST_PENDING"
-    else:
-        final_status = "APPROVED_FOR_PAPER"
-    return ModelDecision(
-        "RESEARCH_COMPLETE",
-        final_status,
-        len(valid),
-        positive_ratio,
-        baseline_ratio,
-        brier_ratio,
-        log_loss_ratio,
-        fold_concentration,
-        month_concentration,
-        direction_concentration,
-        (),
-    )
+    return valid, {
+        "positive": positive, "baseline": baseline, "brier": brier, "log_loss": log_loss,
+        "fold": fold_concentration, "month": month_concentration, "direction": direction_concentration,
+    }, tuple(reasons)
 
 
 def _concentration(contributions: Mapping[str, float], total: float) -> float | None:

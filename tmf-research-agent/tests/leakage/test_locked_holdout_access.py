@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from tmf_research.validation.locked_holdout import HoldoutAccessError, HoldoutRow, LockedHoldout
+from tmf_research.validation.locked_holdout import select_locked_holdout
 
 
 class LockedHoldoutAccessTests(unittest.TestCase):
@@ -10,7 +11,10 @@ class LockedHoldoutAccessTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             vault = LockedHoldout.create(
                 Path(directory) / "holdout",
-                (HoldoutRow("1", "2026-01-01", {"secret": 1}),),
+                select_locked_holdout(tuple(
+                    HoldoutRow(str(index), f"2026-{1 + index // 28:02d}-{1 + index % 28:02d}", {"secret": index})
+                    for index in range(100)
+                )),
             )
             self.assertFalse(hasattr(vault, "rows"))
             self.assertFalse(hasattr(vault, "read"))

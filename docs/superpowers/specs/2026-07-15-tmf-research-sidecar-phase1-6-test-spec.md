@@ -1,8 +1,8 @@
 # TMF Research Sidecar Phase 1–6 Test Specification
 
-**Target path:** `docs/superpowers/specs/2026-07-15-tmf-research-sidecar-phase1-6-test-spec.md`  
-**Authority:** `docs/txresearch.md` v1.1.0  
-**Existing baseline:** Phase 0 tests remain mandatory and run first  
+**Target path:** `docs/superpowers/specs/2026-07-15-tmf-research-sidecar-phase1-6-test-spec.md`
+**Authority:** `docs/txresearch.md` v1.1.0
+**Existing baseline:** Phase 0 tests remain mandatory and run first
 **Framework:** deterministic Python 3.11+ `unittest`; offline CI makes no network calls
 
 ## 1. Acceptance semantics

@@ -10,6 +10,8 @@
 
 **Authority:** `docs/txresearch.md` v1.1.0 and `docs/superpowers/specs/2026-07-15-tmf-research-sidecar-phase1-6-test-spec.md`.
 
+**Stop condition:** Do not mark Phase 1–6 software-complete until Task 13 has fresh evidence for every offline gate and records all credentialed/real-data gaps without upgrading them to PASS.
+
 ---
 
 ## Locked boundaries and phase gates

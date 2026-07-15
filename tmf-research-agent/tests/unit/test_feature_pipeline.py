@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
 from tmf_research.features.definitions import FeatureContext, default_feature_manifest
@@ -147,6 +148,27 @@ class FeaturePipelineTests(unittest.TestCase):
                 states=(),
                 decision_time=incomplete.bar_end,
                 context=context(),
+            )
+
+    def test_forbidden_transform_or_future_fit_scope_fails_closed(self) -> None:
+        complete = bar(0, 100.0)
+        pipeline = FeaturePipeline(default_feature_manifest())
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            pipeline.compute(
+                bars=(complete,),
+                states=(),
+                decision_time=complete.bar_end,
+                context=replace(context(), forbidden_transforms=("CENTERED_WINDOW",)),
+            )
+        with self.assertRaisesRegex(ValueError, "prior train"):
+            pipeline.compute(
+                bars=(complete,),
+                states=(),
+                decision_time=complete.bar_end,
+                context=replace(
+                    context(),
+                    large_trade_threshold_fit_end=complete.bar_end + timedelta(seconds=1),
+                ),
             )
 
 

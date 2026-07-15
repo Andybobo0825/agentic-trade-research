@@ -24,6 +24,10 @@ class QuoteJoiner:
             raise ValueError("max_quote_age cannot be negative")
         self._max_quote_age = max_quote_age
 
+    @property
+    def max_quote_age(self) -> timedelta:
+        return self._max_quote_age
+
     def join(
         self,
         tick: TickEvent,

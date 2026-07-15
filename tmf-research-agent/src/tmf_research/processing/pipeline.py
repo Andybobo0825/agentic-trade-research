@@ -77,7 +77,9 @@ class ProcessingPipeline:
                 key=lambda event: (event.exchange_datetime, event.event_id),
             )
         )
-        aggregator = OneSecondAggregator()
+        aggregator = OneSecondAggregator(
+            max_bidask_age=self._quote_joiner.max_quote_age,
+        )
         states: list[OneSecondState] = []
         previous: OneSecondState | None = None
         second = start_second

@@ -21,6 +21,7 @@ class OneSecondState:
     unknown_volume: int
     last_bid: float | None
     last_ask: float | None
+    bidask_available: bool
     spread: float | None
     midpoint: float | None
     microprice: float | None
@@ -42,6 +43,11 @@ class OneSecondState:
 
 class OneSecondAggregator:
     """Builds causal one-second states without inventing empty-second trades."""
+
+    def __init__(self, *, max_bidask_age: timedelta | None = None) -> None:
+        if max_bidask_age is not None and max_bidask_age < timedelta(0):
+            raise ValueError("max_bidask_age cannot be negative")
+        self._max_bidask_age = max_bidask_age
 
     def aggregate(
         self,
@@ -106,22 +112,6 @@ class OneSecondAggregator:
         )
         last_bid = bid_prices[0] if bid_prices else None
         last_ask = ask_prices[0] if ask_prices else None
-        spread = (
-            last_ask - last_bid
-            if last_bid is not None and last_ask is not None
-            else None
-        )
-        midpoint = (
-            (last_bid + last_ask) / 2.0
-            if last_bid is not None and last_ask is not None
-            else None
-        )
-        underlying_price = _underlying(last_tick, last_quote, previous)
-        basis = (
-            midpoint - underlying_price
-            if midpoint is not None and underlying_price is not None
-            else previous.basis if previous is not None and not prices else None
-        )
         last_tick_at = (
             last_tick.exchange_datetime
             if last_tick is not None
@@ -131,6 +121,38 @@ class OneSecondAggregator:
             last_quote.exchange_datetime
             if last_quote is not None
             else previous.last_bidask_at if previous is not None else None
+        )
+        last_tick_age_ms = _age_ms(end, last_tick_at)
+        last_bidask_age_ms = _age_ms(end, last_bidask_at)
+        bidask_available = (
+            last_bidask_age_ms is not None
+            and (
+                self._max_bidask_age is None
+                or last_bidask_age_ms
+                <= self._max_bidask_age.total_seconds() * 1000.0
+            )
+        )
+        spread = (
+            last_ask - last_bid
+            if bidask_available and last_bid is not None and last_ask is not None
+            else None
+        )
+        midpoint = (
+            (last_bid + last_ask) / 2.0
+            if bidask_available and last_bid is not None and last_ask is not None
+            else None
+        )
+        underlying_price = _underlying(last_tick, last_quote, previous)
+        basis = (
+            last_tick.close - underlying_price
+            if last_tick is not None and underlying_price is not None
+            else (
+                previous.basis
+                if previous is not None
+                else midpoint - underlying_price
+                if midpoint is not None and underlying_price is not None
+                else None
+            )
         )
         return OneSecondState(
             second=second,
@@ -146,21 +168,33 @@ class OneSecondAggregator:
             unknown_volume=unknown_volume,
             last_bid=last_bid,
             last_ask=last_ask,
+            bidask_available=bidask_available,
             spread=spread,
             midpoint=midpoint,
-            microprice=_microprice(
-                last_bid,
-                last_ask,
-                bid_volumes,
-                ask_volumes,
+            microprice=(
+                _microprice(last_bid, last_ask, bid_volumes, ask_volumes)
+                if bidask_available
+                else None
             ),
-            level1_imbalance=_imbalance(bid_volumes, ask_volumes, 1),
-            level3_imbalance=_imbalance(bid_volumes, ask_volumes, 3),
-            level5_imbalance=_imbalance(bid_volumes, ask_volumes, 5),
+            level1_imbalance=(
+                _imbalance(bid_volumes, ask_volumes, 1)
+                if bidask_available
+                else None
+            ),
+            level3_imbalance=(
+                _imbalance(bid_volumes, ask_volumes, 3)
+                if bidask_available
+                else None
+            ),
+            level5_imbalance=(
+                _imbalance(bid_volumes, ask_volumes, 5)
+                if bidask_available
+                else None
+            ),
             underlying_price=underlying_price,
             basis=basis,
-            last_tick_age_ms=_age_ms(end, last_tick_at),
-            last_bidask_age_ms=_age_ms(end, last_bidask_at),
+            last_tick_age_ms=last_tick_age_ms,
+            last_bidask_age_ms=last_bidask_age_ms,
             notional=notional,
             last_tick_at=last_tick_at,
             last_bidask_at=last_bidask_at,

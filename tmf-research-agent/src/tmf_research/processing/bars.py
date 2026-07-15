@@ -138,7 +138,7 @@ class BarAggregator:
                 else None
             ),
             bidask_coverage_ratio=sum(
-                state.last_bid is not None and state.last_ask is not None
+                state.bidask_available
                 for state in states
             )
             / expected,

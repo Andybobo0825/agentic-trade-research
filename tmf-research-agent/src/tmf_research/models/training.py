@@ -4,7 +4,14 @@ import math
 from dataclasses import dataclass
 
 from tmf_research.models.logistic import ModelTrainingSample, TwoStageLogisticModel, _fit_two_stage_logistic
-from tmf_research.models.provenance import InnerTrainDataset, canonical_hash
+from tmf_research.models.provenance import (
+    InnerTrainDataset,
+    InnerValidationDataset,
+    InnerValidationPredictions,
+    _generated_prediction,
+    _generated_predictions,
+    canonical_hash,
+)
 from tmf_research.models.scaler import FoldPreprocessor
 
 
@@ -50,14 +57,25 @@ class Phase4TrainingSpec:
             raise ValueError("formal model permits at most 10 missing indicators")
         if not set(self.large_trade_features).issubset(self.raw_feature_order):
             raise ValueError("large-trade features must be declared")
-        if not math.isfinite(self.l2) or self.l2 <= 0.0:
+        if not _is_finite_real(self.l2) or self.l2 <= 0.0:
             raise ValueError("formal model requires positive L2 regularization")
-        if tuple(key for key, _ in self.class_weights) != (0, 1) or any(not math.isfinite(value) or value <= 0.0 for _, value in self.class_weights):
+        if (
+            tuple(key for key, _ in self.class_weights) != (0, 1)
+            or any(not _is_int(key) for key, _ in self.class_weights)
+            or any(
+                not _is_finite_real(value) or value <= 0.0
+                for _, value in self.class_weights
+            )
+        ):
             raise ValueError("class weights must be finite and positive")
-        if self.max_iterations <= 0 or not math.isfinite(self.tolerance) or self.tolerance <= 0.0:
+        if not _is_int(self.max_iterations) or self.max_iterations <= 0:
             raise ValueError("invalid fixed convergence configuration")
-        if not math.isfinite(self.learning_rate) or self.learning_rate <= 0.0:
+        if not _is_finite_real(self.tolerance) or self.tolerance <= 0.0:
+            raise ValueError("invalid fixed convergence configuration")
+        if not _is_finite_real(self.learning_rate) or self.learning_rate <= 0.0:
             raise ValueError("learning rate must be finite and positive")
+        if not _is_int(self.random_seed):
+            raise ValueError("random seed must be an exact integer")
 
     @property
     def raw_feature_order(self) -> tuple[str, ...]:
@@ -92,6 +110,48 @@ class Phase4TrainingResult:
     preprocessor: FoldPreprocessor
     model: TwoStageLogisticModel
     specification_hash: str
+
+    def predict_inner_validation(
+        self,
+        dataset: InnerValidationDataset,
+    ) -> InnerValidationPredictions:
+        if not isinstance(dataset, InnerValidationDataset):
+            raise ValueError("only sealed inner-validation datasets can be scored")
+        if dataset.validation_range.parent_provenance != self.preprocessor.provenance:
+            raise ValueError("inner-validation parent training provenance mismatch")
+        if self.model.record.provenance != self.preprocessor.provenance:
+            raise ValueError("model training provenance mismatch")
+        if self.model.record.preprocessor_hash != self.preprocessor.content_hash:
+            raise ValueError("model preprocessor provenance mismatch")
+        generated = []
+        for row in dataset.rows:
+            if tuple(row.features) != self.preprocessor.feature_order:
+                raise ValueError("inner-validation feature order mismatch")
+            transformed = self.preprocessor.transform(row.features)
+            if not transformed.is_eligible:
+                raise ValueError("inner-validation row is not eligible for model calibration")
+            p_trade = self.model.trade_model.predict_probability(transformed.values)
+            trade_outcome = int(row.label in ("LONG", "SHORT"))
+            p_long = (
+                self.model.direction_model.predict_probability(transformed.values)
+                if trade_outcome
+                else None
+            )
+            direction_outcome = int(row.label == "LONG") if trade_outcome else None
+            generated.append(_generated_prediction(
+                available_at=row.available_at,
+                p_trade=p_trade,
+                trade_outcome=trade_outcome,
+                p_long_given_trade=p_long,
+                direction_outcome=direction_outcome,
+                net_return=row.net_return,
+            ))
+        return _generated_predictions(
+            provenance=dataset.provenance,
+            preprocessor_hash=self.preprocessor.content_hash,
+            model_hash=self.model.content_hash,
+            rows=generated,
+        )
 
 
 def train_phase4_model(dataset: InnerTrainDataset, specification: Phase4TrainingSpec) -> Phase4TrainingResult:
@@ -128,3 +188,15 @@ def train_phase4_model(dataset: InnerTrainDataset, specification: Phase4Training
         random_seed=specification.random_seed,
     )
     return Phase4TrainingResult(preprocessor, model, specification.content_hash)
+
+
+def _is_finite_real(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)

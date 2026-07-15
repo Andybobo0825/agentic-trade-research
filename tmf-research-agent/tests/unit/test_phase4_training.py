@@ -3,12 +3,26 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow
+from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow, NestedFoldManifest
 from tmf_research.models.training import Phase4TrainingSpec, train_phase4_model
 
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 END = datetime(2026, 2, 1, tzinfo=timezone.utc)
+
+
+def fold_manifest(dataset_hash: str = "d" * 64) -> NestedFoldManifest:
+    return NestedFoldManifest.plan(
+        outer_fold_id="outer-1",
+        inner_fold_id="inner-1",
+        dataset_hash=dataset_hash,
+        train_start=START,
+        train_end=END,
+        validation_start=END + timedelta(minutes=1),
+        validation_end=END + timedelta(hours=1),
+        outer_test_start=END + timedelta(hours=2),
+        outer_test_end=END + timedelta(hours=3),
+    )
 
 
 def inner_train_dataset() -> InnerTrainDataset:
@@ -21,10 +35,7 @@ def inner_train_dataset() -> InnerTrainDataset:
         InnerTrainRow(START + timedelta(days=6), {"return_1m": 9.0, "basis": 50.0}, "LONG", is_complete=False),
     )
     return InnerTrainDataset.create(
-        fold_id="outer-1/inner-1",
-        dataset_hash="d" * 64,
-        fit_start=START,
-        fit_end=END,
+        manifest=fold_manifest(),
         rows=rows,
     )
 
@@ -61,10 +72,7 @@ class Phase4TrainingTests(unittest.TestCase):
     def test_outer_or_future_rows_cannot_form_an_inner_train_capability(self) -> None:
         with self.assertRaisesRegex(ValueError, "fit interval"):
             InnerTrainDataset.create(
-                fold_id="outer-1/inner-1",
-                dataset_hash="d" * 64,
-                fit_start=START,
-                fit_end=END,
+                manifest=fold_manifest(),
                 rows=(InnerTrainRow(END + timedelta(microseconds=1), {"return_1m": 1.0}, "LONG"),),
             )
 
@@ -93,10 +101,7 @@ class Phase4TrainingTests(unittest.TestCase):
             for row in inner_train_dataset().rows
         )
         expanded = InnerTrainDataset.create(
-            fold_id="outer-1/inner-1",
-            dataset_hash="d" * 64,
-            fit_start=START,
-            fit_end=END,
+            manifest=fold_manifest(),
             rows=rows,
         )
 

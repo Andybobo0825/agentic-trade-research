@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from tmf_research.models.logistic import BinaryLogisticModel
+from tmf_research.models.scaler import FoldPreprocessor
 
 
 Signal = Literal["NO_TRADE", "LONG", "SHORT"]
@@ -44,18 +45,34 @@ def baseline_3(observation: BaselineObservation) -> Signal:
 
 @dataclass(frozen=True, slots=True)
 class ReturnOnlyBaseline:
+    preprocessor: FoldPreprocessor
     model: BinaryLogisticModel
 
     def __post_init__(self) -> None:
-        if not self.model.feature_order or any(not name.startswith("return_") for name in self.model.feature_order):
+        if not self.preprocessor.feature_order or any(
+            not name.startswith("return_")
+            for name in self.preprocessor.feature_order
+        ):
             raise ValueError("baseline four may use only price return features")
+        if self.model.feature_order != self.preprocessor.output_feature_order:
+            raise ValueError("baseline four preprocessing representation mismatch")
+        if self.model.record.provenance != self.preprocessor.provenance:
+            raise ValueError("baseline four training provenance mismatch")
+        if self.model.record.preprocessor_hash != self.preprocessor.content_hash:
+            raise ValueError("baseline four preprocessor hash mismatch")
 
     @property
     def feature_order(self) -> tuple[str, ...]:
-        return self.model.feature_order
+        return self.preprocessor.feature_order
 
     def predict(self, observation: BaselineObservation) -> Signal:
-        probability = self.model.predict_probability(observation.returns)
+        if len(observation.returns) != len(self.preprocessor.feature_order):
+            raise ValueError("baseline four return dimension mismatch")
+        row = dict(zip(self.preprocessor.feature_order, observation.returns, strict=True))
+        transformed = self.preprocessor.transform(row)
+        if not transformed.is_eligible:
+            return "NO_TRADE"
+        probability = self.model.predict_probability(transformed.values)
         if abs(probability - 0.5) <= 1e-15:
             return "NO_TRADE"
         return "LONG" if probability > 0.5 else "SHORT"

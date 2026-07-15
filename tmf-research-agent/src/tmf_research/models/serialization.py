@@ -114,6 +114,8 @@ class ModelBundle:
             raise ValueError("direction model feature order mismatch")
         if self.model.record.preprocessor_hash != self.preprocessor.content_hash:
             raise ValueError("model and preprocessor provenance mismatch")
+        if self.model.record.provenance != self.preprocessor.provenance:
+            raise ValueError("model and fold-manifest provenance mismatch")
         if self.metadata.training_data_hash != self.model.record.train_hash:
             raise ValueError("metadata training data provenance mismatch")
         if (

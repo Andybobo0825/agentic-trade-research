@@ -5,7 +5,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from tmf_research.models.provenance import InnerValidationPredictions, TrainingProvenance, validate_sha256
+from tmf_research.models.provenance import (
+    InnerValidationPredictions,
+    InnerValidationProvenance,
+    TrainingProvenance,
+    validate_sha256,
+)
 
 
 class Calibrator(Protocol):
@@ -121,7 +126,7 @@ class BinaryCalibrationSelection:
 class TwoStageCalibrator:
     trade_calibrator: Calibrator
     direction_calibrator: Calibrator
-    provenance: TrainingProvenance
+    validation_provenance: InnerValidationProvenance
     preprocessor_hash: str
     model_hash: str
     validation_hash: str
@@ -132,6 +137,10 @@ class TwoStageCalibrator:
         validate_sha256(self.model_hash, "model hash")
         validate_sha256(self.validation_hash, "validation hash")
 
+    @property
+    def provenance(self) -> TrainingProvenance:
+        return self.validation_provenance.parent_provenance
+
     def calibrate(self, p_trade: float, p_long_given_trade: float) -> tuple[float, float]:
         return (
             self.trade_calibrator.calibrate(p_trade),
@@ -141,7 +150,8 @@ class TwoStageCalibrator:
     def to_dict(self) -> dict[str, object]:
         return {
             "trade": self.trade_calibrator.to_dict(), "direction": self.direction_calibrator.to_dict(),
-            "provenance": self.provenance.to_dict(), "preprocessor_hash": self.preprocessor_hash,
+            "validation_provenance": self.validation_provenance.to_dict(),
+            "preprocessor_hash": self.preprocessor_hash,
             "model_hash": self.model_hash, "validation_hash": self.validation_hash,
             "insufficient_evidence": self.insufficient_evidence,
         }
@@ -151,7 +161,9 @@ class TwoStageCalibrator:
         return cls(
             trade_calibrator=calibrator_from_dict(_mapping(payload["trade"])),
             direction_calibrator=calibrator_from_dict(_mapping(payload["direction"])),
-            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            validation_provenance=InnerValidationProvenance.from_dict(
+                _mapping(payload["validation_provenance"])
+            ),
             preprocessor_hash=str(payload["preprocessor_hash"]), model_hash=str(payload["model_hash"]),
             validation_hash=str(payload["validation_hash"]), insufficient_evidence=_boolean(payload["insufficient_evidence"]),
         )
@@ -171,6 +183,8 @@ def fit_two_stage_calibrators(
     bin_count: int = 10,
     minimum_bin_size: int = 20,
 ) -> TwoStageCalibrationSelection:
+    if not isinstance(predictions, InnerValidationPredictions):
+        raise ValueError("calibration requires sealed generated inner-validation predictions")
     trade_samples = tuple(
         _CalibrationSample(row.p_trade, row.trade_outcome, row.net_return)
         for row in predictions.rows

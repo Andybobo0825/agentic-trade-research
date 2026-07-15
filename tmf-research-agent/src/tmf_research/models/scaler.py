@@ -32,7 +32,18 @@ class StandardScaler:
             raise ValueError("scaler dimension mismatch")
         if any(not math.isfinite(value) for value in values):
             raise ValueError("scaler input must be finite")
-        return tuple((float(value) - mean) / deviation for value, mean, deviation in zip(values, self.means, self.standard_deviations, strict=True))
+        transformed = tuple(
+            (float(value) - mean) / deviation
+            for value, mean, deviation in zip(
+                values,
+                self.means,
+                self.standard_deviations,
+                strict=True,
+            )
+        )
+        if any(not math.isfinite(value) for value in transformed):
+            raise ValueError("scaler output must be finite")
+        return transformed
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,8 +153,20 @@ class FoldPreprocessor:
         if not imputed.is_eligible:
             return PreprocessingResult((), self.output_feature_order, False, "NO_TRADE", imputed.reasons)
         original_dimension = len(self.feature_order)
-        clipped = self.outlier_limits.clip(self.feature_order, imputed.values[:original_dimension]) + imputed.values[original_dimension:]
-        scaled = self.scaler.transform(clipped)
+        try:
+            clipped = self.outlier_limits.clip(
+                self.feature_order,
+                imputed.values[:original_dimension],
+            ) + imputed.values[original_dimension:]
+            scaled = self.scaler.transform(clipped)
+        except (ArithmeticError, ValueError):
+            return PreprocessingResult(
+                (),
+                self.output_feature_order,
+                False,
+                "NO_TRADE",
+                ("NONFINITE_TRANSFORM",),
+            )
         if any(not math.isfinite(value) for value in scaled):
             return PreprocessingResult((), self.output_feature_order, False, "NO_TRADE", ("NONFINITE_TRANSFORM",))
         return PreprocessingResult(scaled, self.output_feature_order, True, None, ())
@@ -157,13 +180,19 @@ class FoldPreprocessor:
     def from_dict(cls, payload: Mapping[str, object]) -> FoldPreprocessor:
         imputer = MedianImputer.from_dict(_mapping(payload["imputer"]))
         scaler_payload = _mapping(payload["scaler"])
+        scaler_feature_order = tuple(_strings(scaler_payload["feature_order"]))
+        scaler_means = tuple(_floats(scaler_payload["means"]))
+        scaler_deviations = tuple(_floats(scaler_payload["standard_deviations"]))
+        if _integer(scaler_payload["dimension"]) != len(scaler_feature_order):
+            raise ValueError("declared scaler dimension mismatch")
         outlier_payload = _mapping(payload["outlier_limits"])
         large_payload = _mapping(payload["large_trade_thresholds"])
         instance = cls(
             imputer=imputer,
             scaler=StandardScaler(
-                tuple(_strings(scaler_payload["feature_order"])), tuple(_floats(scaler_payload["means"])),
-                tuple(_floats(scaler_payload["standard_deviations"])),
+                scaler_feature_order,
+                scaler_means,
+                scaler_deviations,
             ),
             outlier_limits=OutlierLimits(tuple((str(item[0]), _number(item[1]), _number(item[2])) for item in _triples(outlier_payload["limits"]))),
             large_trade_thresholds=LargeTradeThresholds(tuple((str(item[0]), _number(item[1])) for item in _pairs(large_payload["thresholds"]))),
@@ -252,3 +281,9 @@ def _number(value: object) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
         raise ValueError("expected finite number")
     return float(value)
+
+
+def _integer(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("expected integer")
+    return value

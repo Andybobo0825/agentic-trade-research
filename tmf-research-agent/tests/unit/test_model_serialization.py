@@ -97,6 +97,12 @@ class ModelSerializationTests(unittest.TestCase):
         corruptions = (
             ("calibrator.json", {"trade": {"method": "ISOTONIC", "upper_bounds": [], "values": []}}),
             ("trade_model.json", "ZERO_L2"),
+            ("trade_model.json", "NAN_TOLERANCE"),
+            ("trade_model.json", "BOOL_RANDOM_SEED"),
+            ("scaler.json", "SCALER_DIMENSION"),
+            ("scaler.json", "IMPUTER_INPUT_DIMENSION"),
+            ("scaler.json", "IMPUTER_OUTPUT_DIMENSION"),
+            ("calibrator.json", "OUTER_TEST_CALIBRATION_ROLE"),
         )
         with TemporaryDirectory() as directory:
             tampered_root = Path(directory) / "tampered"
@@ -111,6 +117,18 @@ class ModelSerializationTests(unittest.TestCase):
                 payload = json.loads((root / filename).read_text(encoding="utf-8"))
                 if corruption == "ZERO_L2":
                     payload["model"]["l2"] = 0.0
+                elif corruption == "NAN_TOLERANCE":
+                    payload["model"]["tolerance"] = float("nan")
+                elif corruption == "BOOL_RANDOM_SEED":
+                    payload["model"]["random_seed"] = True
+                elif corruption == "SCALER_DIMENSION":
+                    payload["scaler"]["dimension"] = 999
+                elif corruption == "IMPUTER_INPUT_DIMENSION":
+                    payload["imputer"]["input_dimension"] = 999
+                elif corruption == "IMPUTER_OUTPUT_DIMENSION":
+                    payload["imputer"]["output_dimension"] = 999
+                elif corruption == "OUTER_TEST_CALIBRATION_ROLE":
+                    payload["validation_provenance"]["validation_range"]["fold"]["role"] = "OUTER_TEST"
                 else:
                     payload.update(corruption)
                 (root / filename).write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 from datetime import timedelta
 
 from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow
 from tmf_research.models.training import InteractionRole, Phase4TrainingSpec, train_phase4_model
 
-from tests.unit.test_phase4_training import END, START, inner_train_dataset, training_spec
+from tests.unit.test_phase4_training import START, fold_manifest, inner_train_dataset, training_spec
 
 
 class LogisticTests(unittest.TestCase):
@@ -15,6 +16,31 @@ class LogisticTests(unittest.TestCase):
             InnerTrainRow(START + timedelta(days=1), {"x": 0.0}, "UNKNOWN")  # type: ignore[arg-type]
         with self.assertRaisesRegex(ValueError, "L2"):
             Phase4TrainingSpec(primary_features=("x",), required_features=("x",), l2=0.0)
+
+    def test_training_config_rejects_bool_fractional_and_nonfinite_values(self) -> None:
+        invalid = (
+            {"l2": True},
+            {"max_iterations": True},
+            {"max_iterations": 10.5},
+            {"random_seed": False},
+            {"random_seed": 1.5},
+            {"tolerance": float("nan")},
+            {"learning_rate": float("inf")},
+            {"class_weights": ((False, 1.0), (True, 1.0))},
+        )
+        for values in invalid:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                Phase4TrainingSpec(
+                    primary_features=("x",),
+                    required_features=("x",),
+                    **values,
+                )
+
+        model = train_phase4_model(inner_train_dataset(), training_spec()).model.trade_model
+        with self.assertRaisesRegex(ValueError, "convergence"):
+            replace(model, tolerance=float("nan"))
+        with self.assertRaisesRegex(ValueError, "random seed"):
+            replace(model, random_seed=True)
 
     def test_rejects_formal_feature_role_budget_overflow(self) -> None:
         with self.assertRaisesRegex(ValueError, "30"):
@@ -46,7 +72,7 @@ class LogisticTests(unittest.TestCase):
             interactions=(interaction,), max_iterations=5,
         )
         dataset = InnerTrainDataset.create(
-            fold_id="outer-1/inner-1", dataset_hash="e" * 64, fit_start=START, fit_end=END,
+            manifest=fold_manifest("e" * 64),
             rows=(
                 InnerTrainRow(START + timedelta(days=1), {"return_1m": -1.0, "quote": 1.0, "return_x_quote": -1.0}, "NO_TRADE"),
                 InnerTrainRow(START + timedelta(days=2), {"return_1m": -0.5, "quote": 1.0, "return_x_quote": -0.5}, "SHORT"),

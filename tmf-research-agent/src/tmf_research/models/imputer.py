@@ -104,6 +104,11 @@ class MedianImputer:
             provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
             content_hash=str(payload["content_hash"]),
         )
+        if (
+            _integer(payload["input_dimension"]) != instance.input_dimension
+            or _integer(payload["output_dimension"]) != instance.output_dimension
+        ):
+            raise ValueError("declared imputer dimension mismatch")
         expected = instance.to_dict()
         expected.pop("content_hash")
         expected.pop("input_dimension")
@@ -141,3 +146,9 @@ def _number(value: object) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
         raise ValueError("expected finite number")
     return float(value)
+
+
+def _integer(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("expected integer")
+    return value

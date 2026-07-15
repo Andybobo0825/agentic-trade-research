@@ -6,12 +6,12 @@ from datetime import timedelta
 from tmf_research.models.provenance import InnerTrainDataset, InnerTrainRow
 from tmf_research.models.scaler import FoldPreprocessor, StandardScaler
 
-from tests.unit.test_phase4_training import END, START
+from tests.unit.test_phase4_training import START, fold_manifest
 
 
 def scaler_dataset() -> InnerTrainDataset:
     return InnerTrainDataset.create(
-        fold_id="outer-1/inner-1", dataset_hash="c" * 64, fit_start=START, fit_end=END,
+        manifest=fold_manifest("c" * 64),
         rows=(
             InnerTrainRow(START + timedelta(days=1), {"return_1m": -1.0, "large_volume": 1.0}, "NO_TRADE"),
             InnerTrainRow(START + timedelta(days=2), {"return_1m": 0.0, "large_volume": 2.0}, "SHORT"),
@@ -41,6 +41,29 @@ class ScalerTests(unittest.TestCase):
             StandardScaler(("x", "y"), (0.0,), (1.0,))
         with self.assertRaisesRegex(ValueError, "deviation"):
             StandardScaler(("x",), (0.0,), (0.0,))
+
+        fitted = FoldPreprocessor.fit_inner_train(
+            scaler_dataset(),
+            feature_order=("return_1m", "large_volume"),
+            required_features=("return_1m",),
+        )
+        for section, field in (
+            ("scaler", "dimension"),
+            ("imputer", "input_dimension"),
+            ("imputer", "output_dimension"),
+        ):
+            with self.subTest(section=section, field=field):
+                payload = fitted.to_dict()
+                nested = payload[section]
+                assert isinstance(nested, dict)
+                nested[field] = 999
+                with self.assertRaisesRegex(ValueError, "declared.*dimension"):
+                    FoldPreprocessor.from_dict(payload)
+
+    def test_scaler_rejects_finite_inputs_that_overflow_arithmetic(self) -> None:
+        scaler = StandardScaler(("x",), (-1e308,), (1e-308,))
+        with self.assertRaisesRegex(ValueError, "finite"):
+            scaler.transform((1e308,))
 
     def test_runtime_nonfinite_feature_fails_closed_without_nan(self) -> None:
         fitted = FoldPreprocessor.fit_inner_train(

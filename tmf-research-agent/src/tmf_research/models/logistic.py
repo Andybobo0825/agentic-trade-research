@@ -45,12 +45,8 @@ class BinaryTrainingRecord:
     iterations: int
     converged: bool
     final_loss: float
-    fold_id: str
-    dataset_hash: str
-    train_hash: str
+    provenance: TrainingProvenance
     preprocessor_hash: str
-    fit_start: str
-    fit_end: str
 
     def __post_init__(self) -> None:
         if self.sample_count <= 0 or sum(count for _, count in self.class_counts) != self.sample_count:
@@ -63,11 +59,27 @@ class BinaryTrainingRecord:
             raise ValueError("training record loss history must be finite")
         if not math.isfinite(self.final_loss) or self.final_loss != self.loss_history[-1]:
             raise ValueError("training record final loss is inconsistent")
-        TrainingProvenance.from_dict({
-            "fold_id": self.fold_id, "dataset_hash": self.dataset_hash, "train_hash": self.train_hash,
-            "fit_start": self.fit_start, "fit_end": self.fit_end,
-        })
         _sha256(self.preprocessor_hash, "preprocessor hash")
+
+    @property
+    def fold_id(self) -> str:
+        return self.provenance.fold_id
+
+    @property
+    def dataset_hash(self) -> str:
+        return self.provenance.dataset_hash
+
+    @property
+    def train_hash(self) -> str:
+        return self.provenance.train_hash
+
+    @property
+    def fit_start(self) -> str:
+        return self.provenance.fit_start.isoformat()
+
+    @property
+    def fit_end(self) -> str:
+        return self.provenance.fit_end.isoformat()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -77,12 +89,8 @@ class BinaryTrainingRecord:
             "iterations": self.iterations,
             "converged": self.converged,
             "final_loss": self.final_loss,
-            "fold_id": self.fold_id,
-            "dataset_hash": self.dataset_hash,
-            "train_hash": self.train_hash,
+            "provenance": self.provenance.to_dict(),
             "preprocessor_hash": self.preprocessor_hash,
-            "fit_start": self.fit_start,
-            "fit_end": self.fit_end,
         }
 
     @classmethod
@@ -94,9 +102,8 @@ class BinaryTrainingRecord:
             iterations=_integer(payload["iterations"]),
             converged=_boolean(payload["converged"]),
             final_loss=_number(payload["final_loss"]),
-            fold_id=str(payload["fold_id"]), dataset_hash=str(payload["dataset_hash"]),
-            train_hash=str(payload["train_hash"]), preprocessor_hash=str(payload["preprocessor_hash"]),
-            fit_start=str(payload["fit_start"]), fit_end=str(payload["fit_end"]),
+            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            preprocessor_hash=str(payload["preprocessor_hash"]),
         )
 
 
@@ -119,14 +126,30 @@ class BinaryLogisticModel:
             raise ValueError("model feature order must be non-empty and unique")
         if len(self.feature_order) != len(self.coefficients):
             raise ValueError("model coefficient dimension mismatch")
-        if any(not math.isfinite(value) for value in (*self.coefficients, self.intercept)):
+        if any(not _is_finite_real(value) for value in (*self.coefficients, self.intercept)):
             raise ValueError("model coefficients must be finite")
-        if not math.isfinite(self.l2) or self.l2 <= 0.0:
+        if not _is_finite_real(self.l2) or self.l2 <= 0.0:
             raise ValueError("formal model requires positive L2 regularization")
-        if tuple(key for key, _ in self.class_weights) != (0, 1) or any(not math.isfinite(value) or value <= 0.0 for _, value in self.class_weights):
+        if (
+            tuple(key for key, _ in self.class_weights) != (0, 1)
+            or any(not _is_int(key) for key, _ in self.class_weights)
+            or any(
+                not _is_finite_real(value) or value <= 0.0
+                for _, value in self.class_weights
+            )
+        ):
             raise ValueError("model class weights must be positive for both classes")
-        if self.max_iterations <= 0 or self.tolerance <= 0.0 or self.learning_rate <= 0.0:
+        if not _is_int(self.max_iterations) or self.max_iterations <= 0:
             raise ValueError("model convergence configuration is invalid")
+        if (
+            not _is_finite_real(self.tolerance)
+            or self.tolerance <= 0.0
+            or not _is_finite_real(self.learning_rate)
+            or self.learning_rate <= 0.0
+        ):
+            raise ValueError("model convergence configuration is invalid")
+        if not _is_int(self.random_seed):
+            raise ValueError("model random seed must be an exact integer")
         if len(self.classes) != 2 or len(set(self.classes)) != 2:
             raise ValueError("model classes must contain two distinct values")
 
@@ -172,9 +195,7 @@ class TwoStageTrainingRecord:
     excluded_ambiguous: int
     excluded_incomplete: int
     excluded_required_missing: int
-    fold_id: str
-    dataset_hash: str
-    train_hash: str
+    provenance: TrainingProvenance
     preprocessor_hash: str
     model_a_target: str = "TRADE_VS_NO_TRADE"
     model_b_target: str = "LONG_VS_SHORT_TRADE_ONLY"
@@ -186,16 +207,26 @@ class TwoStageTrainingRecord:
             raise ValueError("two-stage eligible count is invalid")
         if self.model_a_target != "TRADE_VS_NO_TRADE" or self.model_b_target != "LONG_VS_SHORT_TRADE_ONLY":
             raise ValueError("two-stage targets are invalid")
-        _sha256(self.dataset_hash, "dataset hash")
-        _sha256(self.train_hash, "train hash")
         _sha256(self.preprocessor_hash, "preprocessor hash")
+
+    @property
+    def fold_id(self) -> str:
+        return self.provenance.fold_id
+
+    @property
+    def dataset_hash(self) -> str:
+        return self.provenance.dataset_hash
+
+    @property
+    def train_hash(self) -> str:
+        return self.provenance.train_hash
 
     def to_dict(self) -> dict[str, object]:
         return {
             "input_count": self.input_count, "eligible_count": self.eligible_count,
             "excluded_ambiguous": self.excluded_ambiguous, "excluded_incomplete": self.excluded_incomplete,
             "excluded_required_missing": self.excluded_required_missing,
-            "fold_id": self.fold_id, "dataset_hash": self.dataset_hash, "train_hash": self.train_hash,
+            "provenance": self.provenance.to_dict(),
             "preprocessor_hash": self.preprocessor_hash,
             "model_a_target": self.model_a_target, "model_b_target": self.model_b_target,
         }
@@ -206,8 +237,8 @@ class TwoStageTrainingRecord:
             input_count=_integer(payload["input_count"]), eligible_count=_integer(payload["eligible_count"]),
             excluded_ambiguous=_integer(payload["excluded_ambiguous"]), excluded_incomplete=_integer(payload["excluded_incomplete"]),
             excluded_required_missing=_integer(payload["excluded_required_missing"]),
-            fold_id=str(payload["fold_id"]), dataset_hash=str(payload["dataset_hash"]),
-            train_hash=str(payload["train_hash"]), preprocessor_hash=str(payload["preprocessor_hash"]),
+            provenance=TrainingProvenance.from_dict(_mapping(payload["provenance"])),
+            preprocessor_hash=str(payload["preprocessor_hash"]),
             model_a_target=str(payload["model_a_target"]), model_b_target=str(payload["model_b_target"]),
         )
 
@@ -226,9 +257,7 @@ class TwoStageLogisticModel:
             raise ValueError("two-stage classes are invalid")
         for binary in (self.trade_model, self.direction_model):
             if (
-                binary.record.fold_id != self.record.fold_id
-                or binary.record.dataset_hash != self.record.dataset_hash
-                or binary.record.train_hash != self.record.train_hash
+                binary.record.provenance != self.record.provenance
                 or binary.record.preprocessor_hash != self.record.preprocessor_hash
             ):
                 raise ValueError("two-stage training provenance mismatch")
@@ -283,8 +312,7 @@ def _fit_two_stage_logistic(
         excluded_ambiguous=sum(sample.label == "AMBIGUOUS" for sample in samples),
         excluded_incomplete=sum(not sample.is_complete for sample in samples),
         excluded_required_missing=excluded_required_missing,
-        fold_id=provenance.fold_id, dataset_hash=provenance.dataset_hash,
-        train_hash=provenance.train_hash, preprocessor_hash=preprocessor_hash,
+        provenance=provenance, preprocessor_hash=preprocessor_hash,
     )
     return TwoStageLogisticModel(trade_model, direction_model, record)
 
@@ -307,16 +335,24 @@ def _fit_binary_logistic(
         raise ValueError("logistic training requires samples")
     if not feature_order or len(feature_order) != len(set(feature_order)) or len(feature_order) > 45:
         raise ValueError("fixed feature order must contain at most 45 declared features")
-    if not math.isfinite(l2) or l2 <= 0.0:
+    if not _is_finite_real(l2) or l2 <= 0.0:
         raise ValueError("formal model requires positive L2 regularization")
-    if max_iterations <= 0 or not math.isfinite(tolerance) or tolerance <= 0.0 or not math.isfinite(learning_rate) or learning_rate <= 0.0:
+    if not _is_int(max_iterations) or max_iterations <= 0:
+        raise ValueError("invalid logistic training configuration")
+    if (
+        not _is_finite_real(tolerance)
+        or tolerance <= 0.0
+        or not _is_finite_real(learning_rate)
+        or learning_rate <= 0.0
+        or not _is_int(random_seed)
+    ):
         raise ValueError("invalid logistic training configuration")
     if any(len(sample.values) != len(feature_order) for sample in samples):
         raise ValueError("training feature dimension mismatch")
     if {sample.target for sample in samples} != {0, 1}:
         raise ValueError("logistic training requires both classes")
     weights = {0: float(class_weights[0]), 1: float(class_weights[1])}
-    if any(not math.isfinite(value) or value <= 0.0 for value in weights.values()):
+    if any(not _is_finite_real(value) or value <= 0.0 for value in weights.values()):
         raise ValueError("class weights must be finite and positive")
     coefficients = [0.0] * len(feature_order)
     intercept = 0.0
@@ -349,8 +385,7 @@ def _fit_binary_logistic(
         sample_count=len(samples),
         class_counts=((0, sum(sample.target == 0 for sample in samples)), (1, sum(sample.target == 1 for sample in samples))),
         loss_history=tuple(history), iterations=len(history), converged=converged, final_loss=history[-1],
-        fold_id=provenance.fold_id, dataset_hash=provenance.dataset_hash, train_hash=provenance.train_hash,
-        preprocessor_hash=preprocessor_hash, fit_start=provenance.fit_start.isoformat(), fit_end=provenance.fit_end.isoformat(),
+        provenance=provenance, preprocessor_hash=preprocessor_hash,
     )
     return BinaryLogisticModel(
         feature_order, tuple(coefficients), intercept, l2, tuple(sorted(weights.items())),
@@ -425,3 +460,15 @@ def _boolean(value: object) -> bool:
 def _sha256(value: str, name: str) -> None:
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError(f"{name} must be lowercase SHA-256")
+
+
+def _is_finite_real(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)

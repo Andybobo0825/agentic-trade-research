@@ -15,6 +15,72 @@ NOW = datetime(2026, 7, 15, 8, 45, tzinfo=timezone.utc)
 
 
 class RawStoreTests(unittest.TestCase):
+    def test_rejects_path_components_that_escape_the_raw_root(self) -> None:
+        event = TickEvent(
+            event_id="tick-1",
+            received_at=NOW,
+            exchange_datetime=NOW,
+            alias_code="TMFR1",
+            target_code="TMF202607",
+            delivery_month="202607",
+            code="TMF202607",
+            close=23000.0,
+            volume=1,
+            simtrade=False,
+            raw_payload={},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "raw"
+            store = AppendOnlyRawStore(root, writer_version="phase1-v1")
+
+            with self.assertRaisesRegex(ValueError, "event_type"):
+                store.append_segment(
+                    "../../escape",
+                    [event],
+                    segment_id="segment-1",
+                    created_at=NOW,
+                )
+            with self.assertRaisesRegex(ValueError, "segment_id"):
+                store.append_segment(
+                    "tick",
+                    [event],
+                    segment_id="../../escape",
+                    created_at=NOW,
+                )
+
+            self.assertFalse((Path(directory) / "escape").exists())
+
+    def test_rejects_duplicate_event_ids_across_segments(self) -> None:
+        event = TickEvent(
+            event_id="tick-1",
+            received_at=NOW,
+            exchange_datetime=NOW,
+            alias_code="TMFR1",
+            target_code="TMF202607",
+            delivery_month="202607",
+            code="TMF202607",
+            close=23000.0,
+            volume=1,
+            simtrade=False,
+            raw_payload={},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            store = AppendOnlyRawStore(Path(directory), writer_version="phase1-v1")
+            store.append_segment(
+                "tick",
+                [event],
+                segment_id="segment-1",
+                created_at=NOW,
+            )
+
+            with self.assertRaisesRegex(FileExistsError, "duplicate event_id"):
+                store.append_segment(
+                    "tick",
+                    [event],
+                    segment_id="segment-2",
+                    created_at=NOW,
+                )
+
     def test_writes_immutable_ndjson_segment_and_canonical_manifest(self) -> None:
         event = TickEvent(
             event_id="tick-1",

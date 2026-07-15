@@ -19,7 +19,9 @@ class LabelParameterLeakageTests(unittest.TestCase):
             candidate_id="candidate",
             decision_time=NOW,
             entry_state=state(),
-            future_bars=(future_bar(0, high=103.0, low=98.0),),
+            future_bars=tuple(
+                future_bar(index, high=103.0, low=98.0) for index in range(5)
+            ),
             atr=2.0,
             parameters=parameters(),
         )
@@ -28,7 +30,7 @@ class LabelParameterLeakageTests(unittest.TestCase):
             decision_time=NOW,
             entry_state=state(),
             future_bars=(
-                future_bar(0, high=103.0, low=98.0),
+                *(future_bar(index, high=103.0, low=98.0) for index in range(5)),
                 future_bar(6, high=999999.0, low=-999999.0),
             ),
             atr=2.0,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from tmf_research.features.basis import basis_features
 from tmf_research.features.definitions import FeatureContext, FeatureManifest, FeatureRow
@@ -24,17 +24,15 @@ class FeaturePipeline:
         *,
         bars: tuple[Bar, ...],
         states: tuple[OneSecondState, ...],
-        decision_time: object,
+        decision_time: datetime,
         context: FeatureContext,
     ) -> FeatureRow:
-        from datetime import datetime
-
-        if not isinstance(decision_time, datetime):
-            raise TypeError("decision_time must be datetime")
         if decision_time.tzinfo is None or decision_time.utcoffset() is None:
             raise ValueError("decision_time must be timezone-aware")
         if context.forbidden_transforms:
             raise ValueError("centered windows, backward fill, and global transforms are forbidden")
+        if context.large_trade_threshold_fit_end > decision_time:
+            raise ValueError("large trade threshold must be fit on prior train evidence")
         eligible = tuple(sorted((bar for bar in bars if bar.bar_end <= decision_time), key=lambda item: item.bar_end))
         ending = tuple(bar for bar in eligible if bar.bar_end == decision_time)
         if ending and not ending[-1].is_complete:
@@ -50,9 +48,7 @@ class FeaturePipeline:
         values["return_1m"] = returns(closes, 1)
         values["return_5m"] = returns(closes, 5)
         ema5 = ema(closes, 5)
-        ema20 = ema(closes, 20)
         values["ema_distance_5"] = latest_close - ema5 if latest_close is not None and ema5 is not None else None
-        values["ema_distance_20"] = latest_close - ema20 if latest_close is not None and ema20 is not None else None
         values["consecutive_up_bars"] = consecutive_up(complete)
         body, upper = candle_ratios(latest)
         values["body_to_range_ratio"] = body
@@ -70,7 +66,7 @@ class FeaturePipeline:
         values.update(book(causal_states))
         values.update(basis_features(causal_states))
         values.update(vol)
-        values.update(structure_features(latest_close, atr, context))
+        values.update(structure_features(complete, atr, context))
         values.update(time_features(decision_time, context))
         primary_names = {item.name for item in self._manifest.primary_features}
         if set(values) != primary_names:
@@ -94,4 +90,3 @@ class FeaturePipeline:
             values=values,
             missing_indicators=missing,
         )
-

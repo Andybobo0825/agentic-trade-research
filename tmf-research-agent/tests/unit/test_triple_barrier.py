@@ -83,7 +83,9 @@ class TripleBarrierTests(unittest.TestCase):
             candidate_id="vertical",
             decision_time=NOW,
             entry_state=state(),
-            future_bars=(future_bar(0, high=103.0, low=98.0),),
+            future_bars=tuple(
+                future_bar(index, high=103.0, low=98.0) for index in range(5)
+            ),
             atr=2.0,
             parameters=parameters(),
         )
@@ -99,6 +101,7 @@ class TripleBarrierTests(unittest.TestCase):
         self.assertEqual(long.vertical_barrier, NOW + timedelta(minutes=5))
         self.assertEqual(long.label_version, "barrier-v1")
         self.assertEqual(long.horizon, "5m")
+        self.assertEqual(len(long.content_hash), 64)
 
     def test_label_parameters_must_be_fit_before_decision(self) -> None:
         with self.assertRaisesRegex(ValueError, "fit interval"):

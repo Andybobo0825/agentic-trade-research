@@ -87,6 +87,7 @@ def context() -> FeatureContext:
         opening_range_high=107.0,
         opening_range_low=101.0,
         large_trade_threshold=1,
+        large_trade_threshold_fit_end=START - timedelta(days=1),
     )
 
 

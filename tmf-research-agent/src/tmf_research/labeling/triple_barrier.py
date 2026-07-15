@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -64,6 +66,23 @@ class LabelRecord:
     label_version: str
     parameter_fit_start: datetime
     parameter_fit_end: datetime
+    content_hash: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.evidence_available_at < self.decision_time:
+            raise ValueError("label evidence cannot precede decision")
+        payload = {
+            name: getattr(self, name).isoformat() if isinstance(getattr(self, name), datetime) else getattr(self, name)
+            for name in (
+                "candidate_id", "decision_time", "evidence_available_at", "outcome_time", "horizon",
+                "entry_bid", "entry_ask", "entry_spread", "atr_at_entry", "upper_barrier", "lower_barrier",
+                "vertical_barrier", "label", "first_touch", "maximum_favorable_excursion",
+                "maximum_adverse_excursion", "estimated_cost", "label_version", "parameter_fit_start",
+                "parameter_fit_end",
+            )
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        object.__setattr__(self, "content_hash", hashlib.sha256(encoded).hexdigest())
 
     @property
     def training_eligible(self) -> bool:
@@ -112,6 +131,9 @@ class TripleBarrierLabeler:
         outcome_time = vertical
         inspected: list[Bar] = []
         for bar in eligible:
+            expected_start = decision_time + timedelta(minutes=len(inspected))
+            if bar.bar_start != expected_start:
+                raise ValueError("label horizon has incomplete bars")
             inspected.append(bar)
             touches_upper = bar.high is not None and bar.high >= upper
             touches_lower = bar.low is not None and bar.low <= lower
@@ -124,6 +146,8 @@ class TripleBarrierLabeler:
             if touches_lower:
                 label, first_touch, outcome_time = "SHORT", "LOWER", bar.bar_end
                 break
+        if first_touch == "VERTICAL" and len(inspected) != parameters.horizon_minutes:
+            raise ValueError("label horizon has incomplete bars")
         highs = tuple(bar.high for bar in inspected if bar.high is not None)
         lows = tuple(bar.low for bar in inspected if bar.low is not None)
         mfe = max((value - quote.ask for value in highs), default=0.0)
@@ -155,4 +179,3 @@ class TripleBarrierLabeler:
 def _require_aware(value: datetime, name: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")
-

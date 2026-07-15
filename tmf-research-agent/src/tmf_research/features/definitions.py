@@ -105,11 +105,13 @@ class FeatureContext:
     opening_range_high: float | None
     opening_range_low: float | None
     large_trade_threshold: int
+    large_trade_threshold_fit_end: datetime
     forbidden_transforms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_aware(self.session_start, "session_start")
         _require_aware(self.session_end, "session_end")
+        _require_aware(self.large_trade_threshold_fit_end, "large_trade_threshold_fit_end")
         if self.session not in ("DAY", "NIGHT"):
             raise ValueError("feature context requires DAY or NIGHT session")
         if self.large_trade_threshold < 0:
@@ -159,14 +161,14 @@ class FeatureRow:
 
 def default_feature_manifest() -> FeatureManifest:
     grouped: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("price", ("return_1m", "return_5m", "ema_distance_5", "ema_distance_20", "consecutive_up_bars", "body_to_range_ratio", "upper_wick_ratio")),
+        ("price", ("return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars", "body_to_range_ratio", "upper_wick_ratio")),
         ("vwap", ("session_vwap", "rolling_vwap_5m", "price_to_session_vwap_atr", "vwap_slope_5m")),
         ("flow", ("aggressive_buy_volume_10s", "aggressive_sell_volume_10s", "trade_imbalance_10s", "unknown_trade_ratio", "large_trade_ratio")),
         ("orderbook", ("spread_points", "midpoint", "microprice", "microprice_minus_midpoint", "level1_book_imbalance", "quote_update_rate")),
         ("basis", ("basis_points", "basis_change_10s", "basis_change_1m")),
         ("volatility", ("true_range_1m", "atr_5m", "realized_vol_5m", "range_expansion_ratio")),
         ("structure", ("distance_previous_day_high_atr", "distance_previous_day_low_atr", "distance_previous_close_atr", "distance_night_high_atr", "break_previous_high", "false_breakout_high")),
-        ("time", ("session_day", "session_night", "minutes_from_session_open", "minutes_to_session_close", "days_to_expiry")),
+        ("time", ("session_day", "session_night", "minutes_from_session_open", "minutes_to_session_close", "days_to_expiry", "is_rollover_day")),
     )
     definitions = tuple(
         FeatureDefinition(name=name, group=group, mechanism=f"{group} market mechanism")
@@ -200,4 +202,3 @@ def _require_aware(value: datetime, name: str) -> None:
 def _hash(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-

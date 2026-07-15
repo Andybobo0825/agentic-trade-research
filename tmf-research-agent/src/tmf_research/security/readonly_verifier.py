@@ -318,6 +318,14 @@ def _raw_api_capability(
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
+        and node.func.id == "vars"
+        and node.args
+        and _is_raw_api_reference(node.args[0], aliases)
+    ):
+        return "<dynamic>"
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
         and node.func.id in ("getattr", "hasattr")
         and node.args
         and _is_raw_api_reference(node.args[0], aliases)

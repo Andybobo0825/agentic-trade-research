@@ -189,10 +189,11 @@ def _scan_ast(relative: Path, tree: ast.AST) -> set[ReadonlyFinding]:
     is_adapter = relative == _ALLOWED_ADAPTER_PATH
     is_paper = _is_paper_boundary(relative)
     findings: set[ReadonlyFinding] = set()
+    raw_api_aliases = _raw_api_aliases(tree) if is_adapter else frozenset()
 
     for node in ast.walk(tree):
         if is_adapter:
-            capability = _raw_api_capability(node)
+            capability = _raw_api_capability(node, raw_api_aliases)
             if (
                 capability is not None
                 and capability not in _ALLOWED_RAW_API_CAPABILITIES
@@ -308,15 +309,18 @@ def _scan_ast(relative: Path, tree: ast.AST) -> set[ReadonlyFinding]:
     return findings
 
 
-def _raw_api_capability(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Attribute) and _is_raw_api_reference(node.value):
+def _raw_api_capability(
+    node: ast.AST,
+    aliases: frozenset[str],
+) -> str | None:
+    if isinstance(node, ast.Attribute) and _is_raw_api_reference(node.value, aliases):
         return node.attr
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id in ("getattr", "hasattr")
         and node.args
-        and _is_raw_api_reference(node.args[0])
+        and _is_raw_api_reference(node.args[0], aliases)
     ):
         if len(node.args) < 2:
             return "<dynamic>"
@@ -324,13 +328,41 @@ def _raw_api_capability(node: ast.AST) -> str | None:
     return None
 
 
-def _is_raw_api_reference(node: ast.AST) -> bool:
+def _is_raw_api_reference(node: ast.AST, aliases: frozenset[str]) -> bool:
     return (
         isinstance(node, ast.Name)
-        and node.id == "_api"
+        and node.id in aliases
         or isinstance(node, ast.Attribute)
         and node.attr == "_api"
     )
+
+
+def _raw_api_aliases(tree: ast.AST) -> frozenset[str]:
+    aliases = {
+        node.arg
+        for node in ast.walk(tree)
+        if isinstance(node, ast.arg)
+        and node.arg in ("api", "raw_api", "shioaji_api", "_api")
+    }
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            value: ast.AST | None = None
+            targets: list[ast.AST] = []
+            if isinstance(node, ast.Assign):
+                value = node.value
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign):
+                value = node.value
+                targets = [node.target]
+            if value is None or not _is_raw_api_reference(value, frozenset(aliases)):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in aliases:
+                    aliases.add(target.id)
+                    changed = True
+    return frozenset(aliases)
 
 
 def _forbidden_node_symbol(node: ast.AST) -> str | None:

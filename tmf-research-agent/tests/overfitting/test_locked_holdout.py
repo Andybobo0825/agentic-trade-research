@@ -100,6 +100,7 @@ class LockedHoldoutContractTests(unittest.TestCase):
             restarted = LockedHoldout(root)
             evidence = restarted.approval_evidence(frozen)
             self.assertEqual(evidence.status, "PASSED")
+            self.assertEqual(evaluation.terminal_anchor_hash, evidence.terminal_anchor_hash)
             with self.assertRaises(HoldoutAccessError):
                 restarted.mark_rerun_attempt()
             self.assertTrue(restarted.contaminated)
@@ -148,6 +149,26 @@ class LockedHoldoutContractTests(unittest.TestCase):
                 vault.mark_rerun_attempt()
             with self.assertRaisesRegex(HoldoutAccessError, "stale|current"):
                 evidence.assert_current()
+
+    def test_restoring_pre_contamination_state_cannot_revoke_the_rerun_revocation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "holdout"
+            vault = LockedHoldout.create(root, select_locked_holdout(rows()))
+            frozen = candidate()
+            vault.freeze(frozen)
+            self.assertEqual(evaluate(vault, frozen).status, "PASSED")
+            evidence = vault.approval_evidence(frozen)
+            approved_state = (root / "holdout.state.json").read_bytes()
+            with self.assertRaises(HoldoutAccessError):
+                vault.mark_rerun_attempt()
+            audit_files = tuple((root.parent / f".{root.name}.phase5-holdout-audit" / "anchors").glob("*.json"))
+            self.assertGreaterEqual(len(audit_files), 6)
+            (root / "holdout.state.json").write_bytes(approved_state)
+            with self.assertRaises(HoldoutAccessError):
+                LockedHoldout(root)
+            with self.assertRaises(HoldoutAccessError):
+                evidence.assert_current()
+            self.assertFalse(vault.approval_eligible(frozen))
 
 
 if __name__ == "__main__":

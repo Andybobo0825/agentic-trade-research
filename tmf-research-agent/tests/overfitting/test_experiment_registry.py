@@ -103,6 +103,30 @@ class ExperimentRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "external terminal anchor"):
                 ExperimentRegistry(root)
 
+    def test_failed_tail_cannot_be_erased_by_restoring_the_old_mutable_terminal_too(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "registry"
+            registry = ExperimentRegistry.preregister(root, definition())
+            registry.append_attempt(attempt("success"))
+            audit_root = root.parent / f".{root.name}.phase5-audit"
+            old_terminal = (audit_root / "terminal.json").read_bytes()
+            registry.append_attempt(attempt("failed", status="FAILED"))
+            self.assertEqual(len(tuple((audit_root / "anchors").glob("*.json"))), 3)
+            lines = (root / "attempts.jsonl").read_text().splitlines()
+            (root / "attempts.jsonl").write_text(lines[0] + "\n")
+            sorted((root / "checkpoints").glob("*.json"))[-1].unlink()
+            first_checkpoint = sorted((root / "checkpoints").glob("*.json"))[0]
+            state = json.loads((root / "state.json").read_text())
+            state.update({
+                "attempt_count": 1,
+                "chain_head": json.loads(lines[0])["entry_hash"],
+                "checkpoint_hash": first_checkpoint.stem.split("-", 1)[1],
+            })
+            (root / "state.json").write_text(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n")
+            (audit_root / "terminal.json").write_bytes(old_terminal)
+            with self.assertRaises(ValueError):
+                ExperimentRegistry(root)
+
     def test_previously_issued_evidence_rechecks_the_registry_not_only_the_terminal_file(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "registry"

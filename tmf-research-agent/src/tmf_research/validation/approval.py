@@ -11,6 +11,7 @@ from tmf_research.experiments.registry import (
     ExperimentRegistryEvidence,
     ModelStatus,
 )
+from tmf_research.experiments.comparison import require_canonical_fold_periods
 from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
 from tmf_research.models.calibration import TwoStageCalibrationSelection
 from tmf_research.models.provenance import NestedFoldManifest
@@ -205,6 +206,11 @@ def assemble_phase5_evidence(
         raise ValueError("experiment comparison context does not match the exact outer fold plan")
     if experiment.comparison.dataset_version != data_provenance.dataset_version:
         raise ValueError("experiment comparison context does not match data provenance")
+    require_canonical_fold_periods(
+        experiment.train_period,
+        experiment.comparison.evaluation_period,
+        tuple(fold.manifest for fold in fold_values),
+    )
     data_provenance.assert_current()
     if data_provenance.kind is DataProvenanceKind.SYNTHETIC_TEST_ONLY and holdout is not None:
         raise ValueError("synthetic evidence cannot consume a production locked holdout")
@@ -214,6 +220,18 @@ def assemble_phase5_evidence(
             raise ValueError("holdout freeze and experiment candidate hashes do not match")
         if holdout.cost_model_hash != experiment.comparison.cost_assumption_hash:
             raise ValueError("holdout evaluation cost model does not match experiment context")
+        fold_dataset_hashes = {fold.manifest.dataset_hash for fold in fold_values}
+        if len(fold_dataset_hashes) != 1:
+            raise ValueError("promotion cannot mix outer folds from unrelated dataset lineages")
+        expected_lineage = _hash({
+            "raw_dataset_hash": data_provenance.dataset_hash,
+            "fold_dataset_hash": next(iter(fold_dataset_hashes)),
+            "fold_manifest_hashes": [fold.manifest_hash for fold in fold_values],
+            "holdout_selection_hash": holdout.selection_hash,
+            "holdout_data_hash": holdout.data_hash,
+        })
+        if data_provenance.promotion_lineage_hash != expected_lineage:
+            raise ValueError("raw, fold, and locked holdout dataset lineage is not authoritatively bound")
     _validate_report_stability(
         fold_values, report_values, gap_values, dimensions,
         coefficient_values, sensitivity_values,
@@ -245,6 +263,7 @@ class ApprovalCapability:
     holdout_state_hash: str
     holdout_evaluation_hash: str
     holdout_cost_model_hash: str
+    holdout_terminal_anchor_hash: str
     experiment_checkpoint_hash: str
     experiment_terminal_anchor_hash: str
     candidate_hashes: Mapping[str, str]
@@ -261,6 +280,7 @@ class ApprovalCapability:
         for value in (
             self.evidence_hash, self.data_provenance_hash, self.holdout_state_hash,
             self.holdout_evaluation_hash, self.holdout_cost_model_hash,
+            self.holdout_terminal_anchor_hash,
             self.experiment_checkpoint_hash, self.experiment_terminal_anchor_hash,
             *self.candidate_hashes.values(), *self.fold_manifest_hashes,
         ):
@@ -339,6 +359,7 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
         ("holdout_state_hash", bundle.holdout.state_hash),
         ("holdout_evaluation_hash", bundle.holdout.evaluation_hash),
         ("holdout_cost_model_hash", bundle.holdout.cost_model_hash),
+        ("holdout_terminal_anchor_hash", bundle.holdout.terminal_anchor_hash),
         ("experiment_checkpoint_hash", bundle.experiment.checkpoint_hash),
         ("experiment_terminal_anchor_hash", bundle.experiment.terminal_anchor_hash),
         ("candidate_hashes", MappingProxyType(dict(bundle.experiment.candidate_hashes))),
@@ -451,6 +472,7 @@ def _phase5_payload(
             experiment.experiment_id, experiment.definition_hash, experiment.search_manifest_hash,
             experiment.attempt_count, experiment.chain_head, experiment.checkpoint_hash,
             experiment.terminal_anchor_hash,
+            experiment.train_period,
             experiment.comparison.dataset_version, experiment.comparison.outer_fold_plan_hash,
             experiment.comparison.cost_assumption_hash, experiment.comparison.label_version,
             experiment.comparison.evaluation_period,
@@ -459,7 +481,8 @@ def _phase5_payload(
         "holdout": None if holdout is None else [
             holdout.selection_hash, holdout.candidate_hash, holdout.model_hash,
             holdout.data_hash, holdout.state_hash, holdout.evaluation_hash,
-            holdout.cost_model_hash, dict(holdout.candidate_hashes), holdout.epoch, holdout.status,
+            holdout.cost_model_hash, holdout.terminal_anchor_hash,
+            dict(holdout.candidate_hashes), holdout.epoch, holdout.status,
         ],
         "provenance": data_provenance.content_hash,
     }

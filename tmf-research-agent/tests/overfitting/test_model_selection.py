@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from tmf_research.experiments.comparison import canonical_fold_periods
 from tmf_research.experiments.registry import ExperimentRegistry, ModelStatus
 from tmf_research.models.calibration import CalibrationMetrics
 from tmf_research.validation.approval import Phase5DecisionResult, assemble_phase5_evidence, decide_phase5
@@ -252,6 +253,33 @@ class ModelSelectionTests(unittest.TestCase):
                     calibrations=values[7], experiment=registry.evidence(), holdout=None,
                     data_provenance=synthetic_provenance(),
                 )
+
+    def test_preregistered_periods_must_match_actual_fold_temporal_coverage(self) -> None:
+        values = complete_fold_evidence()
+        provenance = synthetic_provenance()
+        aligned = aligned_definition(definition(), values[0], provenance)
+        exact_train, exact_evaluation = canonical_fold_periods(tuple(fold.manifest for fold in values[0]))
+        self.assertEqual(aligned.train_period, exact_train)
+        self.assertEqual(aligned.comparison.evaluation_period, exact_evaluation)
+        self.assertTrue(exact_train.startswith(values[0][0].manifest.inner_train.start.isoformat()))
+        self.assertTrue(exact_evaluation.endswith(values[0][-1].manifest.outer_test.end.isoformat()))
+        cases = (
+            replace(aligned, train_period="1900-01-01/1900-12-31"),
+            replace(aligned, comparison=replace(
+                aligned.comparison, evaluation_period="1900-01-01/1900-12-31",
+            )),
+        )
+        for index, mismatched in enumerate(cases):
+            with self.subTest(index=index), TemporaryDirectory() as directory:
+                registry = ExperimentRegistry.preregister(Path(directory) / "registry", mismatched)
+                registry.append_attempt(attempt(f"wrong-period-{index}"))
+                with self.assertRaisesRegex(ValueError, "temporal|period"):
+                    assemble_phase5_evidence(
+                        folds=values[0], reports=values[1], gaps=values[2], dimensions=values[3],
+                        ablations=values[4], coefficients=values[5], sensitivities=values[6],
+                        calibrations=values[7], experiment=registry.evidence(), holdout=None,
+                        data_provenance=provenance,
+                    )
 
 
 if __name__ == "__main__":

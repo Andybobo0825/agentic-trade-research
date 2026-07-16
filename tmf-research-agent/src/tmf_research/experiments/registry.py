@@ -11,7 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, cast
 
-from tmf_research.experiments.comparison import ComparisonContext
+from tmf_research.experiments.comparison import ComparisonContext, require_canonical_fold_periods
 from tmf_research.experiments.search_budget import SearchSpaceManifest
 from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
 
@@ -197,6 +197,7 @@ class ExperimentRegistryEvidence:
     chain_head: str
     checkpoint_hash: str
     parameter_space: SearchSpaceManifest
+    train_period: str
     comparison: ComparisonContext
     candidate_hashes: Mapping[str, str]
     terminal_anchor_hash: str
@@ -210,7 +211,7 @@ class ExperimentRegistryEvidence:
     def __post_init__(self) -> None:
         if self._seal is not _EXPERIMENT_EVIDENCE_SEAL:
             raise TypeError("experiment evidence must be issued by a verified immutable registry")
-        if not self.experiment_id.strip() or self.attempt_count < 0:
+        if not self.experiment_id.strip() or not self.train_period.strip() or self.attempt_count < 0:
             raise ValueError("invalid experiment evidence")
         for name, value in (
             ("definition", self.definition_hash), ("search", self.search_manifest_hash),
@@ -229,6 +230,8 @@ class ExperimentRegistryEvidence:
         registry = ExperimentRegistry(self._registry_root)
         state = _object(self._registry_root / "state.json")
         terminal = _object(self._audit_root / "terminal.json")
+        anchors = _read_external_anchors(self._audit_root)
+        latest_anchor = anchors[-1]
         comparison = _mapping(registry._definition["comparison"])
         if (
             registry.definition_hash != self.definition_hash
@@ -244,7 +247,7 @@ class ExperimentRegistryEvidence:
                     "label_version", "evaluation_period",
                 )
             )
-            or _hash(terminal) != self.terminal_anchor_hash
+            or _hash(latest_anchor) != self.terminal_anchor_hash
             or terminal.get("experiment_id") != self.experiment_id
             or terminal.get("definition_hash") != self.definition_hash
             or terminal.get("attempt_count") != self.attempt_count
@@ -273,6 +276,7 @@ class ExperimentRegistry:
         if audit_root.exists():
             raise FileExistsError(audit_root)
         audit_root.mkdir(parents=True)
+        (audit_root / "anchors").mkdir()
         root.mkdir(parents=True)
         definition_payload = definition.to_dict()
         _write_exclusive(root / "definition.json", _canonical(definition_payload))
@@ -296,13 +300,15 @@ class ExperimentRegistry:
             "checkpoint_hash": genesis_hash,
         }
         _write_exclusive(root / "state.json", _canonical(state))
-        _write_exclusive(audit_root / "terminal.json", _canonical({
+        terminal = {
             "experiment_id": definition.experiment_id,
             "definition_hash": _hash(definition_payload),
             "attempt_count": 0,
             "chain_head": "0" * 64,
             "checkpoint_hash": genesis_hash,
-        }))
+        }
+        _write_exclusive(audit_root / "terminal.json", _canonical(terminal))
+        _append_external_anchor(audit_root, terminal)
         return cls(root)
 
     @property
@@ -357,19 +363,21 @@ class ExperimentRegistry:
         _write_exclusive(self._root / "checkpoints" / checkpoint_name, _canonical(checkpoint_body))
         state["checkpoint_hash"] = checkpoint_hash
         _replace(self._root / "state.json", _canonical(state))
-        _replace(self._audit_root / "terminal.json", _canonical({
+        terminal = {
             "experiment_id": self._definition["experiment_id"],
             "definition_hash": self.definition_hash,
             "attempt_count": state["attempt_count"],
             "chain_head": state["chain_head"],
             "checkpoint_hash": checkpoint_hash,
-        }))
+        }
+        _replace(self._audit_root / "terminal.json", _canonical(terminal))
+        _append_external_anchor(self._audit_root, terminal)
         self._verify()
 
     def evidence(self) -> ExperimentRegistryEvidence:
         self._verify()
         state = _object(self._root / "state.json")
-        terminal = _object(self._audit_root / "terminal.json")
+        terminal_anchor = _read_external_anchors(self._audit_root)[-1]
         comparison_payload = _mapping(self._definition["comparison"])
         instance = object.__new__(ExperimentRegistryEvidence)
         values: dict[str, object] = {
@@ -380,6 +388,7 @@ class ExperimentRegistry:
             "chain_head": str(state["chain_head"]),
             "checkpoint_hash": str(state["checkpoint_hash"]),
             "parameter_space": self._space,
+            "train_period": str(self._definition["train_period"]),
             "comparison": ComparisonContext(
                 str(comparison_payload["dataset_version"]),
                 str(comparison_payload["outer_fold_plan_hash"]),
@@ -391,7 +400,7 @@ class ExperimentRegistry:
                 str(name): str(value)
                 for name, value in sorted(_mapping(self._definition["candidate_hashes"]).items())
             }),
-            "terminal_anchor_hash": _hash(terminal),
+            "terminal_anchor_hash": _hash(terminal_anchor),
             "_registry_root": self._root,
             "_audit_root": self._audit_root,
             "_seal": _EXPERIMENT_EVIDENCE_SEAL,
@@ -434,6 +443,13 @@ class ExperimentRegistry:
         authoritative_count = 0
         authoritative_head = str(genesis["journal_root"])
         previous_checkpoint = genesis_hash
+        expected_terminals: list[dict[str, object]] = [{
+            "experiment_id": self._definition["experiment_id"],
+            "definition_hash": self.definition_hash,
+            "attempt_count": 0,
+            "chain_head": authoritative_head,
+            "checkpoint_hash": previous_checkpoint,
+        }]
         checkpoints = tuple(sorted((self._root / "checkpoints").glob("*.json")))
         for expected_sequence, checkpoint_file in enumerate(checkpoints, start=1):
             checkpoint = _object(checkpoint_file)
@@ -450,6 +466,13 @@ class ExperimentRegistry:
             authoritative_count = expected_sequence
             authoritative_head = str(checkpoint["chain_head"])
             previous_checkpoint = checkpoint_hash
+            expected_terminals.append({
+                "experiment_id": self._definition["experiment_id"],
+                "definition_hash": self.definition_hash,
+                "attempt_count": authoritative_count,
+                "chain_head": authoritative_head,
+                "checkpoint_hash": previous_checkpoint,
+            })
         if (
             authoritative_count != len(attempts)
             or authoritative_head != previous
@@ -460,15 +483,14 @@ class ExperimentRegistry:
             raise ValueError("attempt deletion/truncation detected")
         try:
             terminal = _object(self._audit_root / "terminal.json")
+            anchors = _read_external_anchors(self._audit_root)
         except (OSError, ValueError) as error:
             raise ValueError("external terminal anchor is missing or invalid") from error
-        if terminal != {
-            "experiment_id": self._definition["experiment_id"],
-            "definition_hash": self.definition_hash,
-            "attempt_count": authoritative_count,
-            "chain_head": authoritative_head,
-            "checkpoint_hash": previous_checkpoint,
-        }:
+        anchored_terminals = tuple(
+            {key: value for key, value in anchor.items() if key not in {"sequence", "previous_anchor_hash"}}
+            for anchor in anchors
+        )
+        if terminal != expected_terminals[-1] or anchored_terminals != tuple(expected_terminals):
             raise ValueError("external terminal anchor rejects registry rollback")
 
 
@@ -514,6 +536,7 @@ REQUIRED_METADATA = (
     "holdout_state_hash",
     "holdout_evaluation_hash",
     "holdout_cost_model_hash",
+    "holdout_terminal_anchor_hash",
     "candidate_hashes",
 )
 
@@ -557,6 +580,7 @@ class RegistryPublication:
     phase4_bundle_hash: str
     phase5_evidence_hash: str
     publication_hash: str
+    _phase5_evidence: object
     _seal: object
 
     def __new__(cls, *_args: object, **_kwargs: object) -> RegistryPublication:
@@ -646,6 +670,11 @@ def build_registry_publication(
         raise ValueError("Phase 4 bundle and immutable experiment registry disagree")
     if bundle.metadata.label_version != evidence.experiment.comparison.label_version:
         raise ValueError("Phase 4 bundle and immutable experiment comparison label disagree")
+    require_canonical_fold_periods(
+        evidence.experiment.train_period,
+        evidence.experiment.comparison.evaluation_period,
+        tuple(fold.manifest for fold in evidence.folds),
+    )
     phase4_hash = phase4_bundle_evidence_hash(bundle)
     candidate_hashes = phase4_candidate_hashes(bundle)
     if dict(evidence.experiment.candidate_hashes) != dict(candidate_hashes):
@@ -663,6 +692,7 @@ def build_registry_publication(
             or decision_result.approval.holdout_state_hash != evidence.holdout.state_hash
             or decision_result.approval.holdout_evaluation_hash != evidence.holdout.evaluation_hash
             or decision_result.approval.holdout_cost_model_hash != evidence.holdout.cost_model_hash
+            or decision_result.approval.holdout_terminal_anchor_hash != evidence.holdout.terminal_anchor_hash
             or decision_result.approval.experiment_checkpoint_hash != evidence.experiment.checkpoint_hash
             or decision_result.approval.experiment_terminal_anchor_hash != evidence.experiment.terminal_anchor_hash
             or dict(decision_result.approval.candidate_hashes) != dict(candidate_hashes)
@@ -699,6 +729,7 @@ def build_registry_publication(
         "holdout_state_hash": None if evidence.holdout is None else evidence.holdout.state_hash,
         "holdout_evaluation_hash": None if evidence.holdout is None else evidence.holdout.evaluation_hash,
         "holdout_cost_model_hash": None if evidence.holdout is None else evidence.holdout.cost_model_hash,
+        "holdout_terminal_anchor_hash": None if evidence.holdout is None else evidence.holdout.terminal_anchor_hash,
         "candidate_hashes": dict(candidate_hashes),
     }
     instance = object.__new__(RegistryPublication)
@@ -706,6 +737,7 @@ def build_registry_publication(
         ("metadata", MappingProxyType(metadata)), ("artifacts", MappingProxyType(artifacts)),
         ("phase4_bundle_hash", phase4_hash), ("phase5_evidence_hash", evidence.content_hash),
         ("publication_hash", _hash({"metadata": metadata, "artifacts": artifacts})),
+        ("_phase5_evidence", evidence),
         ("_seal", _PUBLICATION_SEAL),
     ):
         object.__setattr__(instance, name, value)
@@ -717,6 +749,16 @@ def publish_model_registry(root: Path, publication: RegistryPublication) -> str:
     if not isinstance(publication, RegistryPublication):
         raise TypeError("publish_model_registry requires a sealed RegistryPublication")
     publication.__post_init__()
+    from tmf_research.validation.approval import Phase5EvidenceBundle, decide_phase5
+
+    if not isinstance(publication._phase5_evidence, Phase5EvidenceBundle):
+        raise TypeError("registry publication lost its authoritative Phase 5 evidence")
+    current_decision = decide_phase5(publication._phase5_evidence).decision
+    if (
+        current_decision.evidence_hash != publication.phase5_evidence_hash
+        or current_decision.model_status.value != publication.metadata["model_status"]
+    ):
+        raise ValueError("registry publication evidence is stale or no longer current")
     metadata = publication.metadata
     artifacts = publication.artifacts
     if root.exists():
@@ -749,6 +791,7 @@ def publish_model_registry(root: Path, publication: RegistryPublication) -> str:
         or metadata["holdout_state_hash"] is None
         or metadata["holdout_evaluation_hash"] is None
         or metadata["holdout_cost_model_hash"] is None
+        or metadata["holdout_terminal_anchor_hash"] is None
     ):
         raise ValueError("approved publication metadata does not satisfy the derived production gates")
     root.mkdir(parents=True)
@@ -792,6 +835,7 @@ def validate_model_registry(
             or metadata["holdout_state_hash"] is None
             or metadata["holdout_evaluation_hash"] is None
             or metadata["holdout_cost_model_hash"] is None
+            or metadata["holdout_terminal_anchor_hash"] is None
         ):
             return RegistryValidation("NO_TRADE", ("APPROVAL_PROVENANCE_INVALID",), actual)
         fold_metrics = _object(root / "fold_metrics.json")
@@ -888,7 +932,10 @@ def _validate_metadata(metadata: Mapping[str, object]) -> None:
         "experiment_checkpoint_hash", "experiment_terminal_anchor_hash",
     ):
         _sha256(str(metadata[name]), name)
-    for name in ("holdout_state_hash", "holdout_evaluation_hash", "holdout_cost_model_hash"):
+    for name in (
+        "holdout_state_hash", "holdout_evaluation_hash", "holdout_cost_model_hash",
+        "holdout_terminal_anchor_hash",
+    ):
         if metadata[name] is not None:
             _sha256(str(metadata[name]), name)
     candidate_hashes = metadata["candidate_hashes"]
@@ -968,6 +1015,37 @@ def _git_commit(value: str) -> bool:
 
 def _external_audit_root(root: Path) -> Path:
     return root.parent / f".{root.name}.phase5-audit"
+
+
+def _append_external_anchor(audit_root: Path, terminal: Mapping[str, object]) -> str:
+    existing = _read_external_anchors(audit_root) if tuple((audit_root / "anchors").glob("*.json")) else ()
+    sequence = len(existing)
+    previous = "0" * 64 if not existing else _hash(existing[-1])
+    anchor = {"sequence": sequence, "previous_anchor_hash": previous, **dict(terminal)}
+    anchor_hash = _hash(anchor)
+    _write_exclusive(audit_root / "anchors" / f"{sequence:08d}-{anchor_hash}.json", _canonical(anchor))
+    return anchor_hash
+
+
+def _read_external_anchors(audit_root: Path) -> tuple[dict[str, object], ...]:
+    files = tuple(sorted((audit_root / "anchors").glob("*.json")))
+    if not files:
+        raise ValueError("external append-only audit is empty")
+    previous = "0" * 64
+    anchors: list[dict[str, object]] = []
+    for sequence, path in enumerate(files):
+        anchor = _object(path)
+        anchor_hash = _hash(anchor)
+        if (
+            path.name != f"{sequence:08d}-{anchor_hash}.json"
+            or _integer(anchor.get("sequence")) != sequence
+            or anchor.get("previous_anchor_hash") != previous
+            or _integer(anchor.get("attempt_count")) != sequence
+        ):
+            raise ValueError("external append-only terminal audit is invalid")
+        previous = anchor_hash
+        anchors.append(anchor)
+    return tuple(anchors)
 
 
 def _fold_report_payload(value: object) -> dict[str, object]:

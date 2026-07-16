@@ -216,6 +216,7 @@ class LockedHoldoutEvaluation:
     net_ev: float
     event_concentration: float
     cost_model_hash: str
+    terminal_anchor_hash: str
     reasons: tuple[str, ...]
     _root: Path
     _seal: object
@@ -226,7 +227,7 @@ class LockedHoldoutEvaluation:
     def __post_init__(self) -> None:
         if self._seal is not _EVALUATION_SEAL or self.status not in ("PASSED", "FAILED"):
             raise TypeError("invalid holdout evaluation authority")
-        for value in (self.candidate_hash, self.evaluation_hash, self.cost_model_hash):
+        for value in (self.candidate_hash, self.evaluation_hash, self.cost_model_hash, self.terminal_anchor_hash):
             _sha256(value, "evaluation")
         if any(not math.isfinite(value) for value in (self.brier_score, self.log_loss, self.expected_calibration_error, self.net_pnl, self.net_ev, self.event_concentration)):
             raise ValueError("holdout evaluation metrics must be finite")
@@ -236,6 +237,7 @@ class LockedHoldoutEvaluation:
             raise HoldoutAccessError("holdout evaluation authority is invalid")
         LockedHoldout(self._root)
         state = _read_state(self._root)
+        terminal_anchor = _read_holdout_anchors(self._root)[-1]
         path = self._root / f"holdout.evaluation.{self.evaluation_hash}.json"
         if (
             state.get("status") != "EVALUATED"
@@ -244,6 +246,7 @@ class LockedHoldoutEvaluation:
             or state.get("evaluation_status") != self.status
             or not path.is_file() or _hash(_object(path)) != self.evaluation_hash
             or _approval_state_hash(state) != state.get("approval_state_hash")
+            or _hash(terminal_anchor) != self.terminal_anchor_hash
         ):
             raise HoldoutAccessError("holdout evaluation is stale or no longer current")
 
@@ -257,6 +260,7 @@ class LockedHoldoutApprovalEvidence:
     state_hash: str
     evaluation_hash: str
     cost_model_hash: str
+    terminal_anchor_hash: str
     candidate_hashes: Mapping[str, str]
     epoch: int
     status: Literal["PASSED"]
@@ -274,6 +278,7 @@ class LockedHoldoutApprovalEvidence:
             ("data", self.data_hash), ("state", self.state_hash),
             ("evaluation", self.evaluation_hash),
             ("cost_model", self.cost_model_hash),
+            ("terminal_anchor", self.terminal_anchor_hash),
         ):
             _sha256(value, name)
         if set(self.candidate_hashes) != set(REQUIRED_FREEZE_COMPONENTS):
@@ -282,10 +287,12 @@ class LockedHoldoutApprovalEvidence:
     def assert_current(self) -> None:
         LockedHoldout(self._root)
         state = _read_state(self._root)
+        terminal_anchor = _read_holdout_anchors(self._root)[-1]
         if (
             state.get("status") != "EVALUATED" or state.get("evaluation_status") != "PASSED"
             or state.get("epoch") != self.epoch or state.get("evaluation_hash") != self.evaluation_hash
             or _approval_state_hash(state) != self.state_hash or state.get("approval_state_hash") != self.state_hash
+            or _hash(terminal_anchor) != self.terminal_anchor_hash
         ):
             raise HoldoutAccessError("locked holdout approval evidence is stale or not current")
 
@@ -314,6 +321,11 @@ class LockedHoldout:
             raise ValueError("locked holdout selection must be revalidated before persistence")
         if root.exists():
             raise FileExistsError(root)
+        audit_root = _external_holdout_audit_root(root)
+        if audit_root.exists():
+            raise FileExistsError(audit_root)
+        audit_root.mkdir(parents=True)
+        (audit_root / "anchors").mkdir()
         root.mkdir(parents=True)
         data = _canonical([row.to_dict() for row in selection.holdout])
         manifest = selection.to_manifest()
@@ -348,6 +360,7 @@ class LockedHoldout:
             "contamination_reasons": [],
         }
         _write_state(root / "holdout.state.json", state, exclusive=True)
+        _append_holdout_anchor(root, state)
         return cls(root)
 
     @property
@@ -489,7 +502,8 @@ class LockedHoldout:
         state["approval_state_hash"] = None
         state["approval_state_hash"] = _approval_state_hash(state)
         self._save(state)
-        return _sealed_evaluation(self._root, payload, evaluation_hash)
+        terminal_anchor_hash = _hash(_read_holdout_anchors(self._root)[-1])
+        return _sealed_evaluation(self._root, payload, evaluation_hash, terminal_anchor_hash)
 
     def assert_candidate_unchanged(self, candidate: FrozenCandidate) -> None:
         self._verify_files(contaminate=True)
@@ -517,6 +531,7 @@ class LockedHoldout:
             state_hash=_approval_state_hash(state),
             evaluation_hash=str(state["evaluation_hash"]),
             cost_model_hash=str(evaluation["cost_model_hash"]),
+            terminal_anchor_hash=_hash(_read_holdout_anchors(self._root)[-1]),
             candidate_hashes=MappingProxyType(dict(candidate.hashes)),
             epoch=_integer(state["epoch"]),
             _root=self._root,
@@ -546,6 +561,7 @@ class LockedHoldout:
     def _verify_files(self, *, contaminate: bool) -> None:
         try:
             state = self._state()
+            _verify_holdout_audit(self._root, state)
             genesis_files = tuple(self._root.glob("holdout.genesis.*.json"))
             if len(genesis_files) != 1:
                 raise HoldoutAccessError("exactly one immutable holdout genesis is required")
@@ -604,6 +620,7 @@ class LockedHoldout:
         return cast(dict[str, object], state)
 
     def _save(self, state: Mapping[str, object]) -> None:
+        _append_holdout_anchor(self._root, state)
         _write_state(self._root / "holdout.state.json", state, exclusive=False)
 
     def _contaminate(self, reason: str) -> None:
@@ -612,11 +629,20 @@ class LockedHoldout:
         except (OSError, ValueError, HoldoutAccessError):
             return
         reasons = [str(value) for value in _list(state["contamination_reasons"])]
+        try:
+            latest = _read_holdout_anchors(self._root)[-1]
+            reasons.extend(
+                value for value in (str(item) for item in _list(latest["contamination_reasons"]))
+                if value not in reasons
+            )
+            latest_epoch = _integer(latest["epoch"])
+        except (OSError, ValueError, HoldoutAccessError):
+            latest_epoch = _integer(state.get("epoch", 0))
         if reason not in reasons:
             reasons.append(reason)
         state["contamination_reasons"] = reasons
         state["status"] = "CONTAMINATED"
-        state["epoch"] = _integer(state.get("epoch", 0)) + 1
+        state["epoch"] = max(_integer(state.get("epoch", 0)), latest_epoch) + 1
         state["approval_state_hash"] = None
         self._save(state)
 
@@ -666,7 +692,12 @@ def _sealed_approval(**values: object) -> LockedHoldoutApprovalEvidence:
     return instance
 
 
-def _sealed_evaluation(root: Path, payload: Mapping[str, object], evaluation_hash: str) -> LockedHoldoutEvaluation:
+def _sealed_evaluation(
+    root: Path,
+    payload: Mapping[str, object],
+    evaluation_hash: str,
+    terminal_anchor_hash: str,
+) -> LockedHoldoutEvaluation:
     instance = object.__new__(LockedHoldoutEvaluation)
     values: dict[str, object] = {
         "candidate_hash": payload["candidate_hash"], "evaluation_hash": evaluation_hash,
@@ -677,6 +708,7 @@ def _sealed_evaluation(root: Path, payload: Mapping[str, object], evaluation_has
         "net_pnl": payload["net_pnl"], "net_ev": payload["net_ev"],
         "event_concentration": payload["event_concentration"],
         "cost_model_hash": payload["cost_model_hash"],
+        "terminal_anchor_hash": terminal_anchor_hash,
         "reasons": tuple(str(value) for value in _list(payload["reasons"])),
         "_root": root, "_seal": _EVALUATION_SEAL,
     }
@@ -699,6 +731,84 @@ def _trade_payload(value: HoldoutTrade) -> list[object]:
 
 def _approval_state_hash(state: Mapping[str, object]) -> str:
     return _hash({key: value for key, value in state.items() if key != "approval_state_hash"})
+
+
+def _external_holdout_audit_root(root: Path) -> Path:
+    return root.parent / f".{root.name}.phase5-holdout-audit"
+
+
+def _append_holdout_anchor(root: Path, state: Mapping[str, object]) -> str:
+    audit_root = _external_holdout_audit_root(root)
+    anchor_files = tuple((audit_root / "anchors").glob("*.json"))
+    existing = _read_holdout_anchors(root) if anchor_files else ()
+    sequence = len(existing)
+    if not existing and (state.get("status") != "LOCKED" or state.get("epoch") != 0):
+        raise HoldoutAccessError("external holdout audit history cannot be recreated or shortened")
+    previous = "0" * 64 if not existing else _hash(existing[-1])
+    epoch = _integer(state["epoch"])
+    if existing:
+        latest = existing[-1]
+        if epoch < _integer(latest["epoch"]):
+            raise HoldoutAccessError("holdout epoch cannot move backwards")
+        if latest["status"] == "CONTAMINATED" and state["status"] != "CONTAMINATED":
+            raise HoldoutAccessError("holdout contamination is externally monotonic")
+    anchor = {
+        "sequence": sequence,
+        "previous_anchor_hash": previous,
+        "state_hash": _hash(state),
+        "epoch": epoch,
+        "status": state["status"],
+        "evaluation_hash": state.get("evaluation_hash"),
+        "contamination_reasons": list(_list(state["contamination_reasons"])),
+    }
+    anchor_hash = _hash(anchor)
+    _write_exclusive(
+        audit_root / "anchors" / f"{sequence:08d}-{anchor_hash}.json",
+        _canonical(anchor),
+    )
+    return anchor_hash
+
+
+def _read_holdout_anchors(root: Path) -> tuple[dict[str, object], ...]:
+    files = tuple(sorted((_external_holdout_audit_root(root) / "anchors").glob("*.json")))
+    if not files:
+        raise HoldoutAccessError("external holdout audit is empty")
+    previous = "0" * 64
+    contaminated = False
+    prior_epoch = -1
+    anchors: list[dict[str, object]] = []
+    for sequence, path in enumerate(files):
+        anchor = _object(path)
+        anchor_hash = _hash(anchor)
+        epoch = _integer(anchor.get("epoch"))
+        status = anchor.get("status")
+        if (
+            path.name != f"{sequence:08d}-{anchor_hash}.json"
+            or _integer(anchor.get("sequence")) != sequence
+            or anchor.get("previous_anchor_hash") != previous
+            or epoch < prior_epoch
+            or not isinstance(status, str)
+            or (contaminated and status != "CONTAMINATED")
+        ):
+            raise HoldoutAccessError("external append-only holdout audit is invalid")
+        _sha256(str(anchor.get("state_hash")), "holdout audit state")
+        _list(anchor.get("contamination_reasons"))
+        contaminated = contaminated or status == "CONTAMINATED"
+        prior_epoch = epoch
+        previous = anchor_hash
+        anchors.append(anchor)
+    return tuple(anchors)
+
+
+def _verify_holdout_audit(root: Path, state: Mapping[str, object]) -> None:
+    latest = _read_holdout_anchors(root)[-1]
+    if (
+        latest["state_hash"] != _hash(state)
+        or _integer(latest["epoch"]) != _integer(state["epoch"])
+        or latest["status"] != state["status"]
+        or latest["evaluation_hash"] != state.get("evaluation_hash")
+    ):
+        raise HoldoutAccessError("external holdout terminal anchor rejects state rollback")
 
 
 def _row(value: object) -> HoldoutRow:

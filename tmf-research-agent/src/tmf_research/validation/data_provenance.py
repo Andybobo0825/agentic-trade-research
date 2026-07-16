@@ -24,6 +24,7 @@ class DataProvenanceEvidence:
     dataset_hash: str
     source_contract_hash: str
     segment_manifest_hashes: tuple[str, ...]
+    promotion_lineage_hash: str | None
     content_hash: str
     _root: Path | None
     _manifests: tuple[Mapping[str, object], ...]
@@ -45,6 +46,8 @@ class DataProvenanceEvidence:
             raise ValueError("complete data provenance identity is required")
         for value in (self.dataset_hash, self.source_contract_hash, self.content_hash, *self.segment_manifest_hashes):
             _sha256(value)
+        if self.promotion_lineage_hash is not None:
+            _sha256(self.promotion_lineage_hash)
 
     def assert_current(self) -> None:
         if self.kind is DataProvenanceKind.SYNTHETIC_TEST_ONLY:
@@ -93,6 +96,7 @@ def _issue_real_data_provenance(
         "dataset_hash": _hash(list(manifest_hashes)),
         "source_contract_hash": _hash(source_contract),
         "segment_manifest_hashes": manifest_hashes,
+        "promotion_lineage_hash": None,
         "_root": root.resolve(),
         "_manifests": frozen,
         "_seal": _PROVENANCE_SEAL,
@@ -103,6 +107,7 @@ def _issue_real_data_provenance(
         "dataset_hash": values["dataset_hash"],
         "source_contract_hash": values["source_contract_hash"],
         "segment_manifest_hashes": manifest_hashes,
+        "promotion_lineage_hash": None,
     })
     return _make(values)
 
@@ -115,6 +120,7 @@ def _issue_synthetic_test_provenance(dataset_version: str = "synthetic-phase5-v1
         "dataset_hash": _hash([synthetic_manifest]),
         "source_contract_hash": _hash({"fixture_issuer": "tests.phase5_test_support"}),
         "segment_manifest_hashes": (synthetic_manifest,),
+        "promotion_lineage_hash": None,
         "_root": None,
         "_manifests": (),
         "_seal": _PROVENANCE_SEAL,
@@ -125,6 +131,7 @@ def _issue_synthetic_test_provenance(dataset_version: str = "synthetic-phase5-v1
         "dataset_hash": values["dataset_hash"],
         "source_contract_hash": values["source_contract_hash"],
         "segment_manifest_hashes": (synthetic_manifest,),
+        "promotion_lineage_hash": None,
     })
     return _make(values)
 

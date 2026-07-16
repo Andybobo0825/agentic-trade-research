@@ -9,7 +9,7 @@ import json
 from tmf_research.models.calibration import fit_two_stage_calibrators
 from tmf_research.models.provenance import Phase4SourceRow, TrainingLabel
 from tmf_research.models.training import train_phase4_model
-from tmf_research.experiments.comparison import ComparisonContext
+from tmf_research.experiments.comparison import ComparisonContext, canonical_fold_periods
 from tmf_research.experiments.registry import ExperimentDefinition
 from tmf_research.validation.ablation import (
     ABLATION_GROUPS,
@@ -55,10 +55,11 @@ def aligned_definition(
     fold_hash = hashlib.sha256(
         json.dumps([fold.manifest_hash for fold in folds], separators=(",", ":")).encode()
     ).hexdigest()
-    return replace(base, comparison=ComparisonContext(
+    train_period, evaluation_period = canonical_fold_periods(tuple(fold.manifest for fold in folds))
+    return replace(base, train_period=train_period, comparison=ComparisonContext(
         provenance.dataset_version, fold_hash,
         hashlib.sha256(b"phase5-complete-cost-model-v1").hexdigest(),
-        base.label_version, base.comparison.evaluation_period,
+        base.label_version, evaluation_period,
     ))
 
 

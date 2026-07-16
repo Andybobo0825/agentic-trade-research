@@ -9,7 +9,6 @@ import unittest
 from tmf_research.experiments.registry import (
     ExperimentRegistry,
     ModelStatus,
-    phase4_bundle_evidence_hash,
     phase4_candidate_hashes,
     RegistryPublication,
     SourceCommitEvidence,
@@ -35,7 +34,7 @@ from tests.unit.test_model_serialization import bundle
 
 
 class Phase5EvidencePipelineTests(unittest.TestCase):
-    def test_verified_real_data_and_passing_holdout_bind_every_approval_anchor(self) -> None:
+    def test_unrelated_real_raw_tick_cannot_promote_synthetic_fold_and_holdout_lineage(self) -> None:
         trained = bundle()
         values = complete_fold_evidence()
         candidate_hashes = phase4_candidate_hashes(trained)
@@ -65,30 +64,13 @@ class Phase5EvidencePipelineTests(unittest.TestCase):
             vault.freeze(frozen)
             self.assertEqual(evaluate(vault, frozen).status, "PASSED")
             holdout = vault.approval_evidence(frozen)
-            evidence = assemble_phase5_evidence(
-                folds=values[0], reports=values[1], gaps=values[2], dimensions=values[3],
-                ablations=values[4], coefficients=values[5], sensitivities=values[6],
-                calibrations=values[7], experiment=experiment.evidence(), holdout=holdout,
-                data_provenance=provenance,
-            )
-            result = decide_phase5(evidence)
-            self.assertEqual(result.decision.model_status, ModelStatus.APPROVED_FOR_PAPER)
-            self.assertIsNotNone(result.approval)
-            assert result.approval is not None
-            self.assertEqual(result.approval.holdout_evaluation_hash, holdout.evaluation_hash)
-            self.assertEqual(result.approval.experiment_terminal_anchor_hash, evidence.experiment.terminal_anchor_hash)
-            self.assertEqual(dict(result.approval.candidate_hashes), dict(candidate_hashes))
-            self.assertEqual(holdout.model_hash, phase4_bundle_evidence_hash(trained))
-            report = build_phase5_report(values[1], values[2], values[3], result.decision)
-            publication = build_registry_publication(
-                bundle=trained, report=report, evidence=evidence,
-                decision_result=result, code_commit=verified_source_commit("a" * 40),
-            )
-            root = base / "approved"
-            checksum = publish_model_registry(root, publication)
-            validation = validate_model_registry(root, checksum)
-        self.assertEqual(validation.reasons, ())
-        self.assertIsNone(validation.signal)
+            with self.assertRaisesRegex(ValueError, "lineage|dataset"):
+                assemble_phase5_evidence(
+                    folds=values[0], reports=values[1], gaps=values[2], dimensions=values[3],
+                    ablations=values[4], coefficients=values[5], sensitivities=values[6],
+                    calibrations=values[7], experiment=experiment.evidence(), holdout=holdout,
+                    data_provenance=provenance,
+                )
 
     def test_verified_real_data_with_four_folds_is_rejected_insufficient_data(self) -> None:
         values = subset_fold_evidence(4)
@@ -161,6 +143,9 @@ class Phase5EvidencePipelineTests(unittest.TestCase):
                 RegistryPublication()
             checksum = publish_model_registry(root, publication)
             validation = validate_model_registry(root, checksum)
+            experiment.append_attempt(attempt("post-build-attempt"))
+            with self.assertRaises(ValueError):
+                publish_model_registry(base / "stale-candidate", publication)
         self.assertEqual(validation.reasons, ())
         self.assertIsNone(validation.signal)
 

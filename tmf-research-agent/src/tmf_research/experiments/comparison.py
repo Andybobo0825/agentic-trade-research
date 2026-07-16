@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+from tmf_research.models.provenance import NestedFoldManifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,3 +43,27 @@ def require_comparable(left: ComparisonContext, right: ComparisonContext) -> Non
     )
     if mismatches:
         raise ValueError("experiments are incomparable: " + ",".join(mismatches))
+
+
+def canonical_fold_periods(manifests: Sequence[NestedFoldManifest]) -> tuple[str, str]:
+    values = tuple(manifests)
+    if not values or any(not isinstance(value, NestedFoldManifest) for value in values):
+        raise ValueError("canonical temporal coverage requires sealed fold manifests")
+    train_start = min(value.inner_train.start for value in values)
+    train_end = max(value.inner_validation.end for value in values)
+    evaluation_start = min(value.outer_test.start for value in values)
+    evaluation_end = max(value.outer_test.end for value in values)
+    return (
+        f"{train_start.isoformat()}/{train_end.isoformat()}",
+        f"{evaluation_start.isoformat()}/{evaluation_end.isoformat()}",
+    )
+
+
+def require_canonical_fold_periods(
+    train_period: str,
+    evaluation_period: str,
+    manifests: Sequence[NestedFoldManifest],
+) -> None:
+    expected_train, expected_evaluation = canonical_fold_periods(manifests)
+    if train_period != expected_train or evaluation_period != expected_evaluation:
+        raise ValueError("preregistered temporal periods do not match canonical fold coverage")

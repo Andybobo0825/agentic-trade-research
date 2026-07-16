@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -14,6 +15,9 @@ from typing import Literal, cast
 from tmf_research.experiments.comparison import ComparisonContext, require_canonical_fold_periods
 from tmf_research.experiments.search_budget import SearchSpaceManifest
 from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
+from tmf_research.infrastructure.trusted_witness import (
+    SqliteTrustedWitness, TrustedWitness, WitnessHead, WitnessMissing, witness_subject,
+)
 
 
 AttemptStatus = Literal["SUCCEEDED", "FAILED"]
@@ -203,6 +207,7 @@ class ExperimentRegistryEvidence:
     terminal_anchor_hash: str
     _registry_root: Path
     _audit_root: Path
+    _witness: TrustedWitness
     _seal: object
 
     def __new__(cls, *_args: object, **_kwargs: object) -> ExperimentRegistryEvidence:
@@ -227,7 +232,7 @@ class ExperimentRegistryEvidence:
             _sha256(value, name)
 
     def assert_current(self) -> None:
-        registry = ExperimentRegistry(self._registry_root)
+        registry = ExperimentRegistry(self._registry_root, witness=self._witness)
         state = _object(self._registry_root / "state.json")
         terminal = _object(self._audit_root / "terminal.json")
         anchors = _read_external_anchors(self._audit_root)
@@ -258,18 +263,23 @@ class ExperimentRegistryEvidence:
 
 
 class ExperimentRegistry:
-    __slots__ = ("_root", "_audit_root", "_definition", "_space")
+    __slots__ = ("_root", "_audit_root", "_definition", "_space", "_witness")
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, witness: TrustedWitness | None = None) -> None:
         self._root = root
+        self._witness = SqliteTrustedWitness() if witness is None else witness
+        _require_external_witness(self._witness, root)
         self._audit_root = _external_audit_root(root)
         definition_payload = _object(root / "definition.json")
         self._definition = definition_payload
         self._space = _space_from_payload(_mapping(definition_payload["parameter_space"]))
+        self._verify_witness()
         self._verify()
 
     @classmethod
-    def preregister(cls, root: Path, definition: ExperimentDefinition) -> ExperimentRegistry:
+    def preregister(
+        cls, root: Path, definition: ExperimentDefinition, *, witness: TrustedWitness | None = None,
+    ) -> ExperimentRegistry:
         if root.exists():
             raise FileExistsError(root)
         audit_root = _external_audit_root(root)
@@ -309,7 +319,12 @@ class ExperimentRegistry:
         }
         _write_exclusive(audit_root / "terminal.json", _canonical(terminal))
         _append_external_anchor(audit_root, terminal)
-        return cls(root)
+        authority = SqliteTrustedWitness() if witness is None else witness
+        _require_external_witness(authority, root)
+        subject = witness_subject("EXPERIMENT", secrets.token_bytes(32), genesis_hash)
+        receipt = authority.register(subject, genesis_hash)
+        _write_exclusive(root / "witness.receipt.json", _canonical(_receipt(receipt)))
+        return cls(root, witness=authority)
 
     @property
     def definition_hash(self) -> str:
@@ -320,6 +335,7 @@ class ExperimentRegistry:
         return tuple(self._read_attempts())
 
     def append_attempt(self, attempt: ExperimentAttempt) -> None:
+        self._verify_witness()
         self._verify()
         if any(existing["attempt_id"] == attempt.attempt_id for existing in self._read_attempts()):
             raise ValueError("attempt ids are append-only and unique")
@@ -373,8 +389,13 @@ class ExperimentRegistry:
         _replace(self._audit_root / "terminal.json", _canonical(terminal))
         _append_external_anchor(self._audit_root, terminal)
         self._verify()
+        expected = _witness_receipt(self._root)
+        advanced = self._witness.compare_and_swap(expected, checkpoint_hash)
+        _replace(self._root / "witness.receipt.json", _canonical(_receipt(advanced)))
+        self._verify_witness()
 
     def evidence(self) -> ExperimentRegistryEvidence:
+        self._verify_witness()
         self._verify()
         state = _object(self._root / "state.json")
         terminal_anchor = _read_external_anchors(self._audit_root)[-1]
@@ -403,6 +424,7 @@ class ExperimentRegistry:
             "terminal_anchor_hash": _hash(terminal_anchor),
             "_registry_root": self._root,
             "_audit_root": self._audit_root,
+            "_witness": self._witness,
             "_seal": _EXPERIMENT_EVIDENCE_SEAL,
         }
         for name, value in values.items():
@@ -492,6 +514,24 @@ class ExperimentRegistry:
         )
         if terminal != expected_terminals[-1] or anchored_terminals != tuple(expected_terminals):
             raise ValueError("external terminal anchor rejects registry rollback")
+
+    def _verify_witness(self) -> None:
+        receipt = _witness_receipt(self._root)
+        try:
+            current = self._witness.current(receipt.subject)
+        except WitnessMissing as error:
+            raise ValueError("trusted experiment witness is missing") from error
+        state = _object(self._root / "state.json")
+        local_count = _integer(state["attempt_count"])
+        local_head = str(state["checkpoint_hash"])
+        if current == receipt and (local_count, local_head) == (receipt.count, receipt.head):
+            return
+        if current.count == receipt.count + 1 and (local_count, local_head) == (current.count, current.head):
+            _replace(self._root / "witness.receipt.json", _canonical(_receipt(current)))
+            return
+        raise ValueError(
+            "trusted experiment witness rejects deletion, external terminal anchor rollback, or divergence"
+        )
 
 
 REGISTRY_FILES = (
@@ -1015,6 +1055,23 @@ def _git_commit(value: str) -> bool:
 
 def _external_audit_root(root: Path) -> Path:
     return root.parent / f".{root.name}.phase5-audit"
+
+
+def _require_external_witness(witness: TrustedWitness, artifact_root: Path) -> None:
+    location = witness.location
+    if location is not None and location.resolve().is_relative_to(artifact_root.resolve()):
+        raise ValueError("trusted witness must live outside the registry artifact root")
+
+
+def _receipt(head: WitnessHead) -> dict[str, object]:
+    return {"subject": head.subject, "count": head.count, "head": head.head}
+
+
+def _witness_receipt(root: Path) -> WitnessHead:
+    value = _object(root / "witness.receipt.json")
+    if set(value) != {"subject", "count", "head"}:
+        raise ValueError("experiment witness receipt is invalid")
+    return WitnessHead(str(value["subject"]), _integer(value["count"]), str(value["head"]))
 
 
 def _append_external_anchor(audit_root: Path, terminal: Mapping[str, object]) -> str:

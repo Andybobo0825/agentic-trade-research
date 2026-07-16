@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import shutil
 
 from tmf_research.validation.locked_holdout import (
     FrozenCandidate,
@@ -17,6 +18,7 @@ from tmf_research.validation.locked_holdout import (
     LockedHoldout,
     select_locked_holdout,
 )
+from tests.support.trusted_witness import MemoryTrustedWitness
 
 
 def rows(days: int = 100, per_day: int = 10) -> tuple[HoldoutRow, ...]:
@@ -56,6 +58,33 @@ def evaluate(vault: LockedHoldout, frozen: FrozenCandidate, *, losing: bool = Fa
 
 
 class LockedHoldoutContractTests(unittest.TestCase):
+    def test_full_vault_restore_and_missing_or_wrong_witness_remain_revoked(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "holdout"
+            witness = MemoryTrustedWitness()
+            vault = LockedHoldout.create(root, select_locked_holdout(rows()), witness=witness)
+            frozen = candidate()
+            vault.freeze(frozen)
+            evaluate(vault, frozen)
+            snapshot = base / "snapshot"
+            snapshot_audit = base / "snapshot-audit"
+            shutil.copytree(root, snapshot)
+            shutil.copytree(base / ".holdout.phase5-holdout-audit", snapshot_audit)
+            with self.assertRaises(HoldoutAccessError):
+                vault.mark_rerun_attempt()
+            shutil.rmtree(root)
+            shutil.rmtree(base / ".holdout.phase5-holdout-audit")
+            shutil.copytree(snapshot, root)
+            shutil.copytree(snapshot_audit, base / ".holdout.phase5-holdout-audit")
+            with self.assertRaises(HoldoutAccessError):
+                LockedHoldout(root, witness=witness)
+            with self.assertRaises(HoldoutAccessError):
+                LockedHoldout(root, witness=MemoryTrustedWitness())
+            (root / "witness.receipt.json").unlink()
+            with self.assertRaises((OSError, HoldoutAccessError)):
+                LockedHoldout(root, witness=witness)
+
     def test_holdout_evaluation_and_approval_capabilities_have_no_public_constructor(self) -> None:
         with self.assertRaises(TypeError):
             LockedHoldoutEvaluation()

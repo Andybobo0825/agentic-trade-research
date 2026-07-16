@@ -11,6 +11,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, cast
 
+from tmf_research.infrastructure.trusted_witness import (
+    SqliteTrustedWitness, TrustedWitness, WitnessHead, WitnessMissing, witness_subject,
+)
+
 
 HoldoutStatus = Literal["LOCKED", "FROZEN", "UNLOCKED", "CONSUMED", "EVALUATED", "CONTAMINATED"]
 REQUIRED_FREEZE_COMPONENTS = ("model", "features", "labels", "parameters", "thresholds", "rules")
@@ -219,6 +223,7 @@ class LockedHoldoutEvaluation:
     terminal_anchor_hash: str
     reasons: tuple[str, ...]
     _root: Path
+    _witness: TrustedWitness
     _seal: object
 
     def __new__(cls, *_args: object, **_kwargs: object) -> LockedHoldoutEvaluation:
@@ -235,7 +240,7 @@ class LockedHoldoutEvaluation:
     def assert_current(self) -> None:
         if self._seal is not _EVALUATION_SEAL:
             raise HoldoutAccessError("holdout evaluation authority is invalid")
-        LockedHoldout(self._root)
+        LockedHoldout(self._root, witness=self._witness)
         state = _read_state(self._root)
         terminal_anchor = _read_holdout_anchors(self._root)[-1]
         path = self._root / f"holdout.evaluation.{self.evaluation_hash}.json"
@@ -265,6 +270,7 @@ class LockedHoldoutApprovalEvidence:
     epoch: int
     status: Literal["PASSED"]
     _root: Path
+    _witness: TrustedWitness
     _seal: object
 
     def __new__(cls, *_args: object, **_kwargs: object) -> LockedHoldoutApprovalEvidence:
@@ -285,7 +291,7 @@ class LockedHoldoutApprovalEvidence:
             raise ValueError("holdout approval candidate hashes are incomplete")
 
     def assert_current(self) -> None:
-        LockedHoldout(self._root)
+        LockedHoldout(self._root, witness=self._witness)
         state = _read_state(self._root)
         terminal_anchor = _read_holdout_anchors(self._root)[-1]
         if (
@@ -300,14 +306,19 @@ class LockedHoldoutApprovalEvidence:
 class LockedHoldout:
     """Durable fail-closed capability for a canonical, sufficient terminal suffix."""
 
-    __slots__ = ("_root",)
+    __slots__ = ("_root", "_witness")
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, witness: TrustedWitness | None = None) -> None:
         self._root = root
+        self._witness = SqliteTrustedWitness() if witness is None else witness
+        _require_external_witness(self._witness, root)
+        self._verify_witness()
         self._verify_files(contaminate=True)
 
     @classmethod
-    def create(cls, root: Path, selection: HoldoutSelection) -> LockedHoldout:
+    def create(
+        cls, root: Path, selection: HoldoutSelection, *, witness: TrustedWitness | None = None,
+    ) -> LockedHoldout:
         if not isinstance(selection, HoldoutSelection):
             raise TypeError("LockedHoldout.create requires a canonical HoldoutSelection")
         if selection.status != "READY" or not selection.development or not selection.holdout:
@@ -361,7 +372,12 @@ class LockedHoldout:
         }
         _write_state(root / "holdout.state.json", state, exclusive=True)
         _append_holdout_anchor(root, state)
-        return cls(root)
+        authority = SqliteTrustedWitness() if witness is None else witness
+        _require_external_witness(authority, root)
+        subject = witness_subject("HOLDOUT", secrets.token_bytes(32), genesis_hash)
+        receipt = authority.register(subject, _hash(state))
+        _write_exclusive(root / "witness.receipt.json", _canonical(_receipt(receipt)))
+        return cls(root, witness=authority)
 
     @property
     def status(self) -> HoldoutStatus:
@@ -503,7 +519,9 @@ class LockedHoldout:
         state["approval_state_hash"] = _approval_state_hash(state)
         self._save(state)
         terminal_anchor_hash = _hash(_read_holdout_anchors(self._root)[-1])
-        return _sealed_evaluation(self._root, payload, evaluation_hash, terminal_anchor_hash)
+        return _sealed_evaluation(
+            self._root, payload, evaluation_hash, terminal_anchor_hash, self._witness,
+        )
 
     def assert_candidate_unchanged(self, candidate: FrozenCandidate) -> None:
         self._verify_files(contaminate=True)
@@ -535,6 +553,7 @@ class LockedHoldout:
             candidate_hashes=MappingProxyType(dict(candidate.hashes)),
             epoch=_integer(state["epoch"]),
             _root=self._root,
+            _witness=self._witness,
         )
 
     def approval_eligible(self, candidate: FrozenCandidate) -> bool:
@@ -620,8 +639,11 @@ class LockedHoldout:
         return cast(dict[str, object], state)
 
     def _save(self, state: Mapping[str, object]) -> None:
+        expected = _witness_receipt(self._root)
         _append_holdout_anchor(self._root, state)
         _write_state(self._root / "holdout.state.json", state, exclusive=False)
+        advanced = self._witness.compare_and_swap(expected, _hash(state))
+        _replace_receipt(self._root / "witness.receipt.json", advanced)
 
     def _contaminate(self, reason: str) -> None:
         try:
@@ -645,6 +667,21 @@ class LockedHoldout:
         state["epoch"] = max(_integer(state.get("epoch", 0)), latest_epoch) + 1
         state["approval_state_hash"] = None
         self._save(state)
+
+    def _verify_witness(self) -> None:
+        receipt = _witness_receipt(self._root)
+        try:
+            current = self._witness.current(receipt.subject)
+        except WitnessMissing as error:
+            raise HoldoutAccessError("trusted holdout witness is missing") from error
+        state = _read_state(self._root)
+        local_head = _hash(state)
+        if current == receipt and local_head == receipt.head:
+            return
+        if current.count == receipt.count + 1 and local_head == current.head:
+            _replace_receipt(self._root / "witness.receipt.json", current)
+            return
+        raise HoldoutAccessError("trusted holdout witness rejects local rollback or divergence")
 
 
 def _selection_payload(rows: tuple[HoldoutRow, ...], percentage: float, effective_days: int) -> dict[str, object]:
@@ -697,6 +734,7 @@ def _sealed_evaluation(
     payload: Mapping[str, object],
     evaluation_hash: str,
     terminal_anchor_hash: str,
+    witness: TrustedWitness,
 ) -> LockedHoldoutEvaluation:
     instance = object.__new__(LockedHoldoutEvaluation)
     values: dict[str, object] = {
@@ -710,7 +748,7 @@ def _sealed_evaluation(
         "cost_model_hash": payload["cost_model_hash"],
         "terminal_anchor_hash": terminal_anchor_hash,
         "reasons": tuple(str(value) for value in _list(payload["reasons"])),
-        "_root": root, "_seal": _EVALUATION_SEAL,
+        "_root": root, "_witness": witness, "_seal": _EVALUATION_SEAL,
     }
     for name, value in values.items():
         object.__setattr__(instance, name, value)
@@ -735,6 +773,31 @@ def _approval_state_hash(state: Mapping[str, object]) -> str:
 
 def _external_holdout_audit_root(root: Path) -> Path:
     return root.parent / f".{root.name}.phase5-holdout-audit"
+
+
+def _require_external_witness(witness: TrustedWitness, artifact_root: Path) -> None:
+    location = witness.location
+    if location is not None and location.resolve().is_relative_to(artifact_root.resolve()):
+        raise HoldoutAccessError("trusted witness must live outside the holdout vault")
+
+
+def _receipt(head: WitnessHead) -> dict[str, object]:
+    return {"subject": head.subject, "count": head.count, "head": head.head}
+
+
+def _witness_receipt(root: Path) -> WitnessHead:
+    value = _object(root / "witness.receipt.json")
+    if set(value) != {"subject", "count", "head"}:
+        raise HoldoutAccessError("holdout witness receipt is invalid")
+    return WitnessHead(str(value["subject"]), _integer(value["count"]), str(value["head"]))
+
+
+def _replace_receipt(path: Path, head: WitnessHead) -> None:
+    temporary = path.with_suffix(".tmp")
+    if temporary.exists():
+        temporary.unlink()
+    _write_exclusive(temporary, _canonical(_receipt(head)))
+    os.replace(temporary, path)
 
 
 def _append_holdout_anchor(root: Path, state: Mapping[str, object]) -> str:

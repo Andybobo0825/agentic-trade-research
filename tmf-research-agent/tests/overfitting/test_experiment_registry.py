@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal, cast
 import unittest
+import shutil
 
 from tmf_research.experiments.comparison import ComparisonContext, require_comparable
 from tmf_research.experiments.registry import (
@@ -20,6 +21,7 @@ from tmf_research.experiments.registry import (
 )
 from tests.overfitting.test_search_budget import space
 from tests.phase5_test_support import synthetic_provenance
+from tests.support.trusted_witness import MemoryTrustedWitness
 
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -56,6 +58,34 @@ def attempt(
 
 
 class ExperimentRegistryTests(unittest.TestCase):
+    def test_full_registry_restore_missing_wrong_witness_and_receipt_crash_fail_closed(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "registry"
+            witness = MemoryTrustedWitness()
+            registry = ExperimentRegistry.preregister(root, definition(), witness=witness)
+            registry.append_attempt(attempt("success"))
+            snapshot = base / "snapshot"
+            snapshot_audit = base / "snapshot-audit"
+            shutil.copytree(root, snapshot)
+            shutil.copytree(base / ".registry.phase5-audit", snapshot_audit)
+            old_receipt = (root / "witness.receipt.json").read_bytes()
+            registry.append_attempt(attempt("failed", status="FAILED"))
+            (root / "witness.receipt.json").write_bytes(old_receipt)
+            recovered = ExperimentRegistry(root, witness=witness)
+            self.assertEqual(recovered.evidence().attempt_count, 2)
+            shutil.rmtree(root)
+            shutil.rmtree(base / ".registry.phase5-audit")
+            shutil.copytree(snapshot, root)
+            shutil.copytree(snapshot_audit, base / ".registry.phase5-audit")
+            with self.assertRaises(ValueError):
+                ExperimentRegistry(root, witness=witness)
+            with self.assertRaises(ValueError):
+                ExperimentRegistry(root, witness=MemoryTrustedWitness())
+            (root / "witness.receipt.json").unlink()
+            with self.assertRaises((OSError, ValueError)):
+                ExperimentRegistry(root, witness=witness)
+
     def test_successes_and_failures_are_append_only_and_evidence_is_sealed(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "registry"

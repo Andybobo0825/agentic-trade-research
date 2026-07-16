@@ -49,6 +49,35 @@ def decode_bidask(record: Mapping[str, object]) -> BidAskEvent:
     )
 
 
+def validate_research_event(event: TickEvent | BidAskEvent) -> tuple[str, ...]:
+    """Return canonical fail-closed reasons for historical research semantics."""
+
+    reasons: list[str] = []
+    if event.simtrade:
+        reasons.append("SIMTRADE")
+    if event.session == "CLOSED" or not event.trading_date:
+        reasons.append("OUT_OF_SESSION")
+    if not event.target_code or event.code != event.target_code:
+        reasons.append("TARGET_MISMATCH")
+    if isinstance(event, TickEvent):
+        if event.close <= 0.0:
+            reasons.append("INVALID_PRICE")
+        if event.volume < 0:
+            reasons.append("NEGATIVE_VOLUME")
+    else:
+        if (
+            not event.bid_prices or not event.ask_prices
+            or len(event.bid_prices) != len(event.bid_volumes)
+            or len(event.ask_prices) != len(event.ask_volumes)
+            or any(value <= 0.0 for value in (*event.bid_prices, *event.ask_prices))
+            or any(value < 0 for value in (*event.bid_volumes, *event.ask_volumes))
+        ):
+            reasons.append("INVALID_DEPTH")
+        if event.bid_prices and event.ask_prices and event.ask_prices[0] < event.bid_prices[0]:
+            reasons.append("CROSSED_BOOK")
+    return tuple(reasons)
+
+
 def _text(record: Mapping[str, object], name: str) -> str:
     value = record.get(name)
     if not isinstance(value, str) or not value:

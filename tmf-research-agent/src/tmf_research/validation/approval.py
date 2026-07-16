@@ -13,7 +13,7 @@ from tmf_research.experiments.registry import (
 )
 from tmf_research.experiments.comparison import require_canonical_fold_periods
 from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
-from tmf_research.validation.dataset_lineage import DatasetLineageEvidence
+from tmf_research.validation.dataset_lineage import DatasetBuildResult, DatasetLineageEvidence
 from tmf_research.models.calibration import TwoStageCalibrationSelection
 from tmf_research.models.provenance import NestedFoldManifest
 from tmf_research.validation.ablation import ABLATION_GROUPS, AblationComparison
@@ -158,8 +158,17 @@ def assemble_phase5_evidence(
     experiment: ExperimentRegistryEvidence,
     holdout: LockedHoldoutApprovalEvidence | None,
     data_provenance: DataProvenanceEvidence,
-    dataset_lineage: DatasetLineageEvidence | None = None,
+    dataset_lineage: DatasetLineageEvidence | DatasetBuildResult | None = None,
 ) -> Phase5EvidenceBundle:
+    if isinstance(dataset_lineage, DatasetBuildResult):
+        dataset_build: DatasetBuildResult | None = dataset_lineage
+        authoritative_lineage: DatasetLineageEvidence | None = dataset_lineage.lineage
+    elif isinstance(dataset_lineage, DatasetLineageEvidence):
+        dataset_build = None
+        authoritative_lineage = dataset_lineage
+    else:
+        dataset_build = None
+        authoritative_lineage = None
     fold_values, report_values, gap_values = tuple(folds), tuple(reports), tuple(gaps)
     keys = tuple((fold.fold_id, fold.manifest_hash) for fold in fold_values)
     if not keys or len(set(keys)) != len(keys):
@@ -224,9 +233,12 @@ def assemble_phase5_evidence(
         if holdout.cost_model_hash != experiment.comparison.cost_assumption_hash:
             raise ValueError("holdout evaluation cost model does not match experiment context")
         if (
-            not isinstance(dataset_lineage, DatasetLineageEvidence)
-            or dataset_lineage.raw_dataset_hash != data_provenance.dataset_hash
-            or not dataset_lineage.binds(
+            dataset_build is None
+            or authoritative_lineage is None
+            or authoritative_lineage.raw_dataset_hash != data_provenance.dataset_hash
+            or tuple(value.manifest for value in dataset_build.fold_capabilities)
+            != tuple(value.manifest for value in fold_values)
+            or not authoritative_lineage.binds(
                 fold_values,
                 selection_hash=holdout.selection_hash,
                 data_hash=holdout.data_hash,
@@ -240,7 +252,7 @@ def assemble_phase5_evidence(
     payload = _phase5_payload(
         fold_values, report_values, gap_values, dimensions, ablation_values,
         coefficient_values, sensitivity_values, calibration_values,
-        experiment, holdout, data_provenance, dataset_lineage,
+        experiment, holdout, data_provenance, authoritative_lineage,
     )
     instance = object.__new__(Phase5EvidenceBundle)
     values: dict[str, object] = {
@@ -249,7 +261,7 @@ def assemble_phase5_evidence(
         "coefficients": coefficient_values, "sensitivities": sensitivity_values,
         "calibrations": calibration_values, "experiment": experiment,
         "holdout": holdout, "data_provenance": data_provenance,
-        "dataset_lineage": dataset_lineage,
+        "dataset_lineage": authoritative_lineage,
         "content_hash": _hash(payload), "_seal": _BUNDLE_SEAL,
     }
     for name, value in values.items():

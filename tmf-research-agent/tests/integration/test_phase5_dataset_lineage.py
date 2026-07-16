@@ -4,22 +4,202 @@ import inspect
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from io import StringIO
 from pathlib import Path
 
-from tmf_research.domain.events import BidAskEvent, TickEvent
+from tmf_research.domain.events import BidAskEvent, Session, TickEvent
 from tmf_research.infrastructure.raw_store import AppendOnlyRawStore, SegmentManifest
+from tmf_research.cli import main
 from tmf_research.validation.locked_holdout import LockedHoldout
 from tests.support.trusted_witness import MemoryTrustedWitness
 
 
 class Phase5DatasetLineageTests(unittest.TestCase):
-    def test_issuer_has_no_public_fabricated_dataset_or_return_inputs(self) -> None:
+    def test_quote_only_verified_input_fails_closed_without_indexing_ticks(self) -> None:
+        from tmf_research.features.context_builder import ResearchBuildSpec
         from tmf_research.validation.dataset_lineage import Phase5DatasetIssuer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_calendar(calendar, days=1, minutes=1)
+            when = datetime(2026, 1, 1, 8, 45, tzinfo=UTC)
+            store = AppendOnlyRawStore(root / "raw", writer_version="phase1-v1")
+            manifest = store.append_segment("bidask", (BidAskEvent(
+                event_id="quote-only", received_at=when, exchange_datetime=when,
+                alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+                code="TMF202607", bid_prices=(22_999.5,), bid_volumes=(1,),
+                ask_prices=(23_000.5,), ask_volumes=(1,), simtrade=False,
+                trading_date="2026-01-01", session="DAY", raw_payload={},
+            ),), segment_id="quotes", created_at=when)
+
+            result = Phase5DatasetIssuer().issue(
+                raw_store=store, manifests=(manifest,),
+                spec=ResearchBuildSpec(calendar=calendar),
+                holdout_root=root / "holdout", witness=MemoryTrustedWitness(),
+            )
+
+            self.assertEqual(result.status, "REJECTED_INSUFFICIENT_DATA")
+            self.assertFalse((root / "holdout").exists())
+
+    def test_phase5_status_reopens_the_same_ready_lineage_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_calendar(calendar, days=55, minutes=25)
+            _raw_market(root / "raw", days=55, minutes=25)
+            argv = [
+                "phase5-status", "--raw-root", str(root / "raw"),
+                "--calendar", str(calendar),
+                "--witness-db", str(root / "witness" / "heads.sqlite3"),
+            ]
+            first = StringIO()
+            second = StringIO()
+
+            self.assertEqual(main(argv, stdout=first), 0)
+            self.assertEqual(main(argv, stdout=second), 0)
+            self.assertEqual(first.getvalue(), '{"status":"READY"}\n')
+            self.assertEqual(second.getvalue(), first.getvalue())
+
+    def test_existing_lineage_version_mismatch_fails_closed_without_overwrite(self) -> None:
+        from tmf_research.features.context_builder import ResearchBuildSpec
+        from tmf_research.validation.dataset_lineage import DatasetValidationError, Phase5DatasetIssuer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_calendar(calendar, days=55, minutes=25)
+            store, manifests = _raw_market(root / "raw", days=55, minutes=25)
+            witness = MemoryTrustedWitness()
+            issuer = Phase5DatasetIssuer()
+            issuer.issue(
+                raw_store=store, manifests=manifests,
+                spec=ResearchBuildSpec(calendar=calendar),
+                holdout_root=root / "holdout", witness=witness,
+            )
+            receipt = (root / "holdout" / "dataset.lineage.json").read_bytes()
+            state = (root / "holdout" / "holdout.state.json").read_bytes()
+
+            with self.assertRaisesRegex(DatasetValidationError, "MISMATCH"):
+                issuer.issue(
+                    raw_store=store, manifests=manifests,
+                    spec=ResearchBuildSpec(calendar=calendar, feature_version="features-v2"),
+                    holdout_root=root / "holdout", witness=witness,
+                )
+
+            self.assertEqual((root / "holdout" / "dataset.lineage.json").read_bytes(), receipt)
+            self.assertEqual((root / "holdout" / "holdout.state.json").read_bytes(), state)
+
+    def test_strict_market_semantics_reject_every_invalid_price_volume_book_and_session(self) -> None:
+        from tmf_research.processing.raw_decoder import validate_research_event
+
+        when = datetime(2026, 1, 2, 8, 45, tzinfo=UTC)
+        tick = TickEvent(
+            event_id="tick", received_at=when, exchange_datetime=when,
+            alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+            code="TMF202607", close=23_000.0, volume=1, simtrade=False,
+            trading_date="2026-01-02", session="DAY", raw_payload={},
+        )
+        quote = BidAskEvent(
+            event_id="quote", received_at=when, exchange_datetime=when,
+            alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+            code="TMF202607", bid_prices=(22_999.5,), bid_volumes=(1,),
+            ask_prices=(23_000.5,), ask_volumes=(1,), simtrade=False,
+            trading_date="2026-01-02", session="DAY", raw_payload={},
+        )
+        invalid = (
+            replace(tick, close=0.0),
+            replace(tick, volume=-1),
+            replace(tick, simtrade=True),
+            replace(tick, session="CLOSED"),
+            replace(quote, bid_prices=(23_001.0,), ask_prices=(23_000.0,)),
+            replace(quote, bid_prices=(0.0,)),
+            replace(quote, bid_volumes=(-1,)),
+            replace(quote, target_code="TMF209912"),
+        )
+
+        for event in invalid:
+            with self.subTest(event=event.event_id, value=event):
+                self.assertTrue(validate_research_event(event))
+
+    def test_one_inconsistent_record_revokes_an_otherwise_sufficient_build(self) -> None:
+        from tmf_research.features.context_builder import ResearchBuildSpec
+        from tmf_research.validation.dataset_lineage import Phase5DatasetIssuer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_day_night_calendar(calendar, days=55, minutes=25)
+            store, manifests = _raw_day_night_market(
+                root / "raw", days=55, minutes=25,
+                false_night_dates=False, one_mismatched_record=True,
+                one_simtrade_record=True,
+            )
+            result = Phase5DatasetIssuer().issue(
+                raw_store=store, manifests=manifests,
+                spec=ResearchBuildSpec(calendar=calendar),
+                holdout_root=root / "holdout", witness=MemoryTrustedWitness(),
+            )
+
+            self.assertEqual(result.status, "REJECTED_INSUFFICIENT_DATA")
+            self.assertIn("RAW_SESSION_OR_EFFECTIVE_DATE_MISMATCH", result.rejection_reasons)
+            self.assertIn("SIMTRADE", result.rejection_reasons)
+            self.assertFalse((root / "holdout").exists())
+
+    def test_raw_declared_dates_cannot_inflate_resolved_effective_trading_days(self) -> None:
+        from tmf_research.features.context_builder import ResearchBuildSpec
+        from tmf_research.validation.dataset_lineage import Phase5DatasetIssuer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_day_night_calendar(calendar, days=30, minutes=25)
+            store, manifests = _raw_day_night_market(
+                root / "raw", days=30, minutes=25, false_night_dates=True,
+            )
+            evidence = Phase5DatasetIssuer().issue(
+                raw_store=store,
+                manifests=manifests,
+                spec=ResearchBuildSpec(calendar=calendar),
+                holdout_root=root / "holdout",
+                witness=MemoryTrustedWitness(),
+            )
+
+            self.assertEqual(evidence.status, "REJECTED_INSUFFICIENT_DATA")
+            self.assertFalse((root / "holdout").exists())
+
+    def test_correct_day_and_night_records_share_the_resolved_effective_date(self) -> None:
+        from tmf_research.features.context_builder import ResearchBuildSpec
+        from tmf_research.validation.dataset_lineage import Phase5DatasetIssuer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_day_night_calendar(calendar, days=55, minutes=25)
+            store, manifests = _raw_day_night_market(
+                root / "raw", days=55, minutes=25, false_night_dates=False,
+            )
+            evidence = Phase5DatasetIssuer().issue(
+                raw_store=store,
+                manifests=manifests,
+                spec=ResearchBuildSpec(calendar=calendar),
+                holdout_root=root / "holdout",
+                witness=MemoryTrustedWitness(),
+            )
+
+            self.assertEqual(evidence.status, "READY")
+            self.assertGreaterEqual(len(evidence.fold_manifests), 5)
+
+    def test_issuer_has_no_public_fabricated_dataset_or_return_inputs(self) -> None:
+        from tmf_research.validation.dataset_lineage import DatasetBuildResult, Phase5DatasetIssuer
 
         parameters = inspect.signature(Phase5DatasetIssuer.issue).parameters
         forbidden = {"rows", "folds", "returns", "net_returns", "callback", "builder"}
         self.assertTrue(forbidden.isdisjoint(parameters))
+        with self.assertRaises(TypeError):
+            DatasetBuildResult()
 
     def test_verified_raw_suffix_reaches_a_lineage_bound_locked_holdout(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec
@@ -49,6 +229,57 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             self.assertGreater(evidence.holdout_row_count, 0)
             self.assertEqual(LockedHoldout(root / "holdout", witness=witness).status, "LOCKED")
             evidence.assert_current()
+            self.assertEqual(
+                tuple(value.manifest for value in evidence.fold_capabilities),
+                evidence.fold_manifests,
+            )
+            development_ids = {value.source.row_id for value in evidence.development_samples}
+            self.assertTrue(development_ids)
+            self.assertTrue(all(
+                row_id in development_ids
+                for capability in evidence.fold_capabilities
+                for role in (capability.manifest.inner_train, capability.manifest.inner_validation, capability.manifest.outer_test)
+                for row_id, _row_hash in role.row_hashes
+            ))
+            self.assertTrue(development_ids.isdisjoint(evidence.lineage.holdout_row_ids))
+            from tmf_research.models.calibration import fit_two_stage_calibrators
+            from tmf_research.models.training import Phase4TrainingSpec, train_phase4_model
+
+            capability = evidence.fold_capabilities[0]
+            feature_order = tuple(capability.inner_train.rows[0].features)
+            required = tuple(
+                name for name in feature_order
+                if all(
+                    row.features[name] is not None
+                    for row in (*capability.inner_train.rows, *capability.inner_validation.rows)
+                )
+            )
+            self.assertLessEqual(len(feature_order) - len(required), 10)
+            trained = train_phase4_model(
+                capability.inner_train,
+                Phase4TrainingSpec(
+                    primary_features=feature_order,
+                    required_features=required,
+                    max_iterations=1,
+                ),
+            )
+            predictions = trained.predict_inner_validation(capability.inner_validation)
+            calibration = fit_two_stage_calibrators(
+                predictions, bin_count=1, minimum_bin_size=1,
+            )
+            self.assertEqual(
+                calibration.calibrator.provenance.manifest,
+                capability.manifest,
+            )
+            with self.assertRaisesRegex(ValueError, "inner-train capability"):
+                train_phase4_model(
+                    capability.outer_test,  # type: ignore[arg-type]
+                    Phase4TrainingSpec(
+                        primary_features=feature_order,
+                        required_features=required,
+                        max_iterations=1,
+                    ),
+                )
 
     def test_raw_mutation_revokes_previously_issued_lineage(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec
@@ -124,13 +355,14 @@ def _raw_market(
     for day in range(days):
         day_start = start + timedelta(days=day)
         for minute in range(minutes):
-            when = day_start + timedelta(minutes=minute)
+            when = day_start + timedelta(minutes=minute, seconds=59)
             price = 23_000.0 + day + (minute % 5)
             ticks.append(TickEvent(
                 event_id=f"tick-{day}-{minute}", received_at=when, exchange_datetime=when,
                 alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
                 code="TMF202607", close=price, volume=minute + 1, simtrade=False,
                 trading_date=when.date().isoformat(), session="DAY", raw_payload={},
+                tick_type=1 if minute % 2 == 0 else 2, underlying_price=price - 10.0,
             ))
             quotes.append(BidAskEvent(
                 event_id=f"quote-{day}-{minute}", received_at=when, exchange_datetime=when,
@@ -138,6 +370,7 @@ def _raw_market(
                 code="TMF202607", bid_prices=(price - 0.5,), bid_volumes=(5,),
                 ask_prices=(price + 0.5,), ask_volumes=(5,), simtrade=False,
                 trading_date=when.date().isoformat(), session="DAY", raw_payload={},
+                underlying_price=price - 10.0,
             ))
     created = start + timedelta(days=days)
     tick_manifest = store.append_segment("tick", ticks, segment_id="ticks", created_at=created)
@@ -159,3 +392,76 @@ def _write_calendar(path: Path, *, days: int, minutes: int) -> None:
     path.write_text(json.dumps({
         "version": "calendar-v1", "timezone": "UTC", "days": values,
     }), encoding="utf-8")
+
+
+def _write_day_night_calendar(path: Path, *, days: int, minutes: int) -> None:
+    first_effective = datetime(2026, 1, 2, 8, 45, tzinfo=UTC)
+    values = []
+    for index in range(days):
+        day = first_effective + timedelta(days=index)
+        night = day - timedelta(hours=17, minutes=45)
+        values.append({
+            "trading_date": day.date().isoformat(),
+            "day_open": day.time().replace(tzinfo=None).isoformat(timespec="minutes"),
+            "day_close": (day + timedelta(minutes=minutes)).time().replace(tzinfo=None).isoformat(timespec="minutes"),
+            "night_open": night.isoformat(),
+            "night_close": (night + timedelta(minutes=minutes)).isoformat(),
+        })
+    path.write_text(json.dumps({
+        "version": "calendar-day-night-v1", "timezone": "UTC", "days": values,
+    }), encoding="utf-8")
+
+
+def _raw_day_night_market(
+    root: Path,
+    *,
+    days: int,
+    minutes: int,
+    false_night_dates: bool,
+    one_mismatched_record: bool = False,
+    one_simtrade_record: bool = False,
+) -> tuple[AppendOnlyRawStore, tuple[SegmentManifest, ...]]:
+    store = AppendOnlyRawStore(root, writer_version="phase1-v1", dataset_version="dataset-v1")
+    ticks = []
+    quotes = []
+    first_effective = datetime(2026, 1, 2, 8, 45, tzinfo=UTC)
+    for day_index in range(days):
+        day_start = first_effective + timedelta(days=day_index)
+        night_start = day_start - timedelta(hours=17, minutes=45)
+        effective = day_start.date().isoformat()
+        claimed_night = f"2099-{1 + day_index // 28:02d}-{1 + day_index % 28:02d}" if false_night_dates else effective
+        session_values: tuple[tuple[Session, datetime, str], ...] = (
+            ("NIGHT", night_start, claimed_night),
+            ("DAY", day_start, effective),
+        )
+        for session, session_start, declared_date in session_values:
+            for minute in range(minutes):
+                when = session_start + timedelta(minutes=minute, seconds=59)
+                price = 23_000.0 + day_index + (minute % 5)
+                suffix = f"{day_index}-{session.lower()}-{minute}"
+                record_date = (
+                    "2098-12-31"
+                    if one_mismatched_record and day_index == 0 and session == "NIGHT" and minute == 0
+                    else declared_date
+                )
+                ticks.append(TickEvent(
+                    event_id=f"tick-{suffix}", received_at=when, exchange_datetime=when,
+                    alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+                    code="TMF202607", close=price, volume=minute + 1,
+                    simtrade=one_simtrade_record and day_index == 0 and session == "NIGHT" and minute == 0,
+                    trading_date=record_date, session=session, raw_payload={},
+                    tick_type=1 if minute % 2 == 0 else 2, underlying_price=price - 10.0,
+                ))
+                quotes.append(BidAskEvent(
+                    event_id=f"quote-{suffix}", received_at=when, exchange_datetime=when,
+                    alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+                    code="TMF202607", bid_prices=(price - 0.5,), bid_volumes=(5,),
+                    ask_prices=(price + 0.5,), ask_volumes=(5,), simtrade=False,
+                    trading_date=declared_date, session=session, raw_payload={},
+                    underlying_price=price - 10.0,
+                ))
+    created = first_effective + timedelta(days=days)
+    return store, (
+        store.append_segment("tick", ticks, segment_id="ticks", created_at=created),
+        store.append_segment("bidask", quotes, segment_id="quotes", created_at=created),
+    )

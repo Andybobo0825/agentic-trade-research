@@ -20,6 +20,10 @@ class ComparisonContext:
             self.evaluation_period,
         )):
             raise ValueError("complete comparison context is required")
+        for name in ("outer_fold_plan_hash", "cost_assumption_hash"):
+            value = getattr(self, name)
+            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise ValueError(f"{name} must be a SHA-256 hash")
 
 
 def require_comparable(left: ComparisonContext, right: ComparisonContext) -> None:

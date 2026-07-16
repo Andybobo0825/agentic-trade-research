@@ -49,6 +49,29 @@ class ReportTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             report.stability["positive_fold_ratio"] = 0.0  # type: ignore[index]
 
+    def test_confusion_counts_and_calibration_rows_are_typed_and_reconciled(self) -> None:
+        report = complete_fold_evidence()[1][0]
+        classification = dict(report.classification)
+        classification["confusion_matrix"] = ((200.0, 50), (50, 200))
+        with self.assertRaisesRegex(ValueError, "integer"):
+            FoldReport(
+                report.fold_id, report.manifest_hash, report.split_regions,
+                classification, report.trading, report.stability,
+            )
+        classification["confusion_matrix"] = ((200, 50), (50, 199))
+        with self.assertRaisesRegex(ValueError, "reconcile"):
+            FoldReport(
+                report.fold_id, report.manifest_hash, report.split_regions,
+                classification, report.trading, report.stability,
+            )
+        classification["confusion_matrix"] = ((200, 50), (50, 200))
+        classification["calibration_table"] = ({"garbage": object()},)
+        with self.assertRaisesRegex(ValueError, "calibration"):
+            FoldReport(
+                report.fold_id, report.manifest_hash, report.split_regions,
+                classification, report.trading, report.stability,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

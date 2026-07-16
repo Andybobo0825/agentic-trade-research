@@ -50,7 +50,7 @@ class FoldEvidence:
         if not isinstance(self.manifest, NestedFoldManifest):
             raise TypeError("fold evidence requires a sealed planner manifest")
         counts = (self.trade_count, self.long_count, self.short_count)
-        if any(isinstance(value, bool) or value < 0 for value in counts):
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts):
             raise ValueError("trade counts must be non-negative integers")
         if self.trade_count != self.long_count + self.short_count:
             raise ValueError("trade count must equal LONG plus SHORT")
@@ -150,27 +150,32 @@ class StabilityDimensions:
     directions: Mapping[str, float]
     target_codes: Mapping[str, float]
     total_net_pnl: float
+    events: Mapping[str, float]
+    cost_complete: bool
 
     def __post_init__(self) -> None:
         if not REQUIRED_REGIMES.issubset(self.regimes):
             raise ValueError("all specified market regimes must be reported")
-        if set(self.directions) != {"LONG", "SHORT"} or not self.months or not self.target_codes:
-            raise ValueError("month, direction, and target-code contribution evidence is required")
+        if set(self.directions) != {"LONG", "SHORT"} or not self.months or not self.target_codes or not self.events:
+            raise ValueError("month, direction, target-code, and event contribution evidence is required")
+        if not isinstance(self.cost_complete, bool):
+            raise ValueError("cost completeness must be an exact boolean")
         if not math.isfinite(self.total_net_pnl):
             raise ValueError("total net PnL must be finite")
-        for values in (self.regimes, self.months, self.directions, self.target_codes):
+        for values in (self.regimes, self.months, self.directions, self.target_codes, self.events):
             if any(
                 not key.strip() or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
                 for key, value in values.items()
             ):
                 raise ValueError("stability dimensions must be finite numeric mappings")
-        for name, values in (("months", self.months), ("directions", self.directions), ("target_codes", self.target_codes)):
+        for name, values in (("months", self.months), ("directions", self.directions), ("target_codes", self.target_codes), ("events", self.events)):
             if not math.isclose(sum(values.values()), self.total_net_pnl, rel_tol=1e-9, abs_tol=1e-9):
                 raise ValueError(f"{name} contributions must reconcile to total net PnL")
         object.__setattr__(self, "regimes", MappingProxyType(dict(self.regimes)))
         object.__setattr__(self, "months", MappingProxyType(dict(self.months)))
         object.__setattr__(self, "directions", MappingProxyType(dict(self.directions)))
         object.__setattr__(self, "target_codes", MappingProxyType(dict(self.target_codes)))
+        object.__setattr__(self, "events", MappingProxyType(dict(self.events)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +237,7 @@ def _core_reasons(
     fold_concentration = _concentration({fold.fold_id: fold.net_pnl for fold in valid}, total)
     month_concentration = _concentration(dimensions.months, total)
     direction_concentration = _concentration(dimensions.directions, total)
+    event_concentration = _concentration(dimensions.events, total)
     reasons: list[str] = []
     if total <= 0.0:
         reasons.append("NON_POSITIVE_TOTAL_OUTER_NET_PNL")
@@ -249,6 +255,14 @@ def _core_reasons(
         reasons.append("MONTH_CONCENTRATION_ABOVE_30_PERCENT")
     if direction_concentration is None or direction_concentration > 0.85:
         reasons.append("DIRECTION_CONCENTRATION_ABOVE_85_PERCENT")
+    if event_concentration is None or event_concentration > 0.40:
+        reasons.append("EVENT_CONCENTRATION_ABOVE_40_PERCENT")
+    if not dimensions.cost_complete:
+        reasons.append("INCOMPLETE_COST_MODEL")
+    if any(value < 0.0 for value in dimensions.regimes.values()):
+        reasons.append("NEGATIVE_REGIME_CONTRIBUTION")
+    if any(value < 0.0 for value in dimensions.target_codes.values()):
+        reasons.append("NEGATIVE_TARGET_CODE_CONTRIBUTION")
     return valid, {
         "positive": positive, "baseline": baseline, "brier": brier, "log_loss": log_loss,
         "fold": fold_concentration, "month": month_concentration, "direction": direction_concentration,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from pathlib import Path
 from tmf_research.collection.raw_writer import RawWriter
 from tmf_research.domain.events import TickEvent
 from tmf_research.infrastructure.raw_store import AppendOnlyRawStore, RawIntegrityError
+from tmf_research.validation.data_provenance import DataProvenanceEvidence
 
 
 NOW = datetime(2026, 7, 15, 8, 45, tzinfo=timezone.utc)
@@ -107,6 +109,31 @@ class RawStoreTests(unittest.TestCase):
                     "tick", [event], segment_id="partial", created_at=NOW
                 )
             self.assertEqual(partial.read_bytes(), partial_bytes)
+
+    def test_phase5_real_provenance_is_issued_only_from_current_catalogued_raw_segments(self) -> None:
+        event = TickEvent(
+            event_id="tick-provenance", received_at=NOW, exchange_datetime=NOW,
+            alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+            code="TMF202607", close=23000.0, volume=1, simtrade=False, raw_payload={},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = AppendOnlyRawStore(root, writer_version="phase1-v1", dataset_version="dataset-v1")
+            manifest = store.append_segment("tick", [event], segment_id="phase5", created_at=NOW)
+            provenance = store.phase5_provenance((manifest,))
+            self.assertEqual(provenance.kind.value, "REAL_READONLY_MARKET_DATA")
+            provenance.assert_current()
+            with self.assertRaises(TypeError):
+                DataProvenanceEvidence()
+            with self.assertRaises(TypeError):
+                copy.copy(provenance)
+            with self.assertRaises(TypeError):
+                copy.deepcopy(provenance)
+            segment = root / manifest.relative_path
+            segment.chmod(0o644)
+            segment.write_bytes(segment.read_bytes() + b"tampered\n")
+            with self.assertRaisesRegex(RawIntegrityError, "provenance"):
+                provenance.assert_current()
 
     def test_rejects_path_components_that_escape_the_raw_root(self) -> None:
         event = TickEvent(

@@ -4,13 +4,14 @@ import hashlib
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from types import MappingProxyType
 
 from tmf_research.experiments.registry import (
-    DataProvenance,
     ExperimentRegistryEvidence,
     ModelStatus,
 )
+from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
 from tmf_research.models.calibration import TwoStageCalibrationSelection
 from tmf_research.models.provenance import NestedFoldManifest
 from tmf_research.validation.ablation import ABLATION_GROUPS, AblationComparison
@@ -127,7 +128,7 @@ class Phase5EvidenceBundle:
     calibrations: tuple[CalibrationFoldEvidence, ...]
     experiment: ExperimentRegistryEvidence
     holdout: LockedHoldoutApprovalEvidence | None
-    data_provenance: DataProvenance
+    data_provenance: DataProvenanceEvidence
     content_hash: str
     _seal: object
 
@@ -153,7 +154,7 @@ def assemble_phase5_evidence(
     calibrations: Sequence[CalibrationFoldEvidence],
     experiment: ExperimentRegistryEvidence,
     holdout: LockedHoldoutApprovalEvidence | None,
-    data_provenance: DataProvenance,
+    data_provenance: DataProvenanceEvidence,
 ) -> Phase5EvidenceBundle:
     fold_values, report_values, gap_values = tuple(folds), tuple(reports), tuple(gaps)
     keys = tuple((fold.fold_id, fold.manifest_hash) for fold in fold_values)
@@ -170,6 +171,7 @@ def assemble_phase5_evidence(
             report.classification["log_loss"] != fold.test_log_loss
             or report.classification["brier_score"] != fold.test_brier
             or report.trading["trade_count"] != fold.trade_count
+            or report.trading["candidate_count"] != fold.test_candidates
             or report.trading["long_count"] != fold.long_count
             or report.trading["short_count"] != fold.short_count
             or report.trading["net_pnl"] != fold.net_pnl
@@ -195,10 +197,23 @@ def assemble_phase5_evidence(
         raise ValueError("calibration evidence must cover every planner fold")
     if not isinstance(experiment, ExperimentRegistryEvidence) or experiment.attempt_count <= 0:
         raise ValueError("verified immutable experiment attempts are required")
-    if data_provenance not in ("REAL_READONLY_MARKET_DATA", "SYNTHETIC_TEST_ONLY"):
-        raise ValueError("unknown Phase 5 data provenance")
-    if data_provenance == "SYNTHETIC_TEST_ONLY" and holdout is not None:
+    if not isinstance(data_provenance, DataProvenanceEvidence):
+        raise TypeError("Phase 5 evidence requires sealed data provenance")
+    experiment.assert_current()
+    expected_fold_plan_hash = _hash([fold.manifest_hash for fold in fold_values])
+    if experiment.comparison.outer_fold_plan_hash != expected_fold_plan_hash:
+        raise ValueError("experiment comparison context does not match the exact outer fold plan")
+    if experiment.comparison.dataset_version != data_provenance.dataset_version:
+        raise ValueError("experiment comparison context does not match data provenance")
+    data_provenance.assert_current()
+    if data_provenance.kind is DataProvenanceKind.SYNTHETIC_TEST_ONLY and holdout is not None:
         raise ValueError("synthetic evidence cannot consume a production locked holdout")
+    if holdout is not None:
+        holdout.assert_current()
+        if dict(holdout.candidate_hashes) != dict(experiment.candidate_hashes):
+            raise ValueError("holdout freeze and experiment candidate hashes do not match")
+        if holdout.cost_model_hash != experiment.comparison.cost_assumption_hash:
+            raise ValueError("holdout evaluation cost model does not match experiment context")
     _validate_report_stability(
         fold_values, report_values, gap_values, dimensions,
         coefficient_values, sensitivity_values,
@@ -226,8 +241,13 @@ def assemble_phase5_evidence(
 @dataclass(frozen=True, slots=True, init=False)
 class ApprovalCapability:
     evidence_hash: str
+    data_provenance_hash: str
     holdout_state_hash: str
+    holdout_evaluation_hash: str
+    holdout_cost_model_hash: str
     experiment_checkpoint_hash: str
+    experiment_terminal_anchor_hash: str
+    candidate_hashes: Mapping[str, str]
     fold_manifest_hashes: tuple[str, ...]
     model_status: ModelStatus
     _seal: object
@@ -238,9 +258,16 @@ class ApprovalCapability:
     def __post_init__(self) -> None:
         if self._seal is not _APPROVAL_SEAL or self.model_status is not ModelStatus.APPROVED_FOR_PAPER:
             raise TypeError("approval capability can only be issued by all derived Phase 5 gates")
-        for value in (self.evidence_hash, self.holdout_state_hash, self.experiment_checkpoint_hash, *self.fold_manifest_hashes):
+        for value in (
+            self.evidence_hash, self.data_provenance_hash, self.holdout_state_hash,
+            self.holdout_evaluation_hash, self.holdout_cost_model_hash,
+            self.experiment_checkpoint_hash, self.experiment_terminal_anchor_hash,
+            *self.candidate_hashes.values(), *self.fold_manifest_hashes,
+        ):
             if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
                 raise ValueError("approval capability requires complete provenance hashes")
+        if set(self.candidate_hashes) != {"model", "features", "labels", "parameters", "thresholds", "rules"}:
+            raise ValueError("approval capability requires every frozen candidate component")
         if len(self.fold_manifest_hashes) < 5 or len(set(self.fold_manifest_hashes)) != len(self.fold_manifest_hashes):
             raise ValueError("approval capability requires at least five unique outer fold manifests")
 
@@ -261,6 +288,10 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
     ))
     if authoritative_hash != bundle.content_hash:
         raise ValueError("Phase 5 evidence was mutated after provenance binding")
+    bundle.data_provenance.assert_current()
+    bundle.experiment.assert_current()
+    if bundle.holdout is not None:
+        bundle.holdout.assert_current()
     valid, ratios, core_reasons = _core_reasons(bundle.folds, bundle.dimensions)
     reasons = list(core_reasons)
     reasons.extend(
@@ -281,7 +312,7 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
     elif reasons:
         research = ResearchStatus.REJECTED
         status = ModelStatus.REJECTED_OVERFIT_RISK
-    elif bundle.data_provenance == "SYNTHETIC_TEST_ONLY":
+    elif bundle.data_provenance.kind is DataProvenanceKind.SYNTHETIC_TEST_ONLY:
         research = ResearchStatus.COMPLETE
         status = ModelStatus.CANDIDATE
         reasons.append("SYNTHETIC_TEST_ONLY_CANNOT_APPROVE")
@@ -304,8 +335,13 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
     approval = object.__new__(ApprovalCapability)
     for name, value in (
         ("evidence_hash", bundle.content_hash),
+        ("data_provenance_hash", bundle.data_provenance.content_hash),
         ("holdout_state_hash", bundle.holdout.state_hash),
+        ("holdout_evaluation_hash", bundle.holdout.evaluation_hash),
+        ("holdout_cost_model_hash", bundle.holdout.cost_model_hash),
         ("experiment_checkpoint_hash", bundle.experiment.checkpoint_hash),
+        ("experiment_terminal_anchor_hash", bundle.experiment.terminal_anchor_hash),
+        ("candidate_hashes", MappingProxyType(dict(bundle.experiment.candidate_hashes))),
         ("fold_manifest_hashes", tuple(fold.manifest_hash for fold in bundle.folds)),
         ("model_status", ModelStatus.APPROVED_FOR_PAPER),
         ("_seal", _APPROVAL_SEAL),
@@ -365,7 +401,7 @@ def _phase5_payload(
     calibrations: Sequence[CalibrationFoldEvidence],
     experiment: ExperimentRegistryEvidence,
     holdout: LockedHoldoutApprovalEvidence | None,
-    data_provenance: DataProvenance,
+    data_provenance: DataProvenanceEvidence,
 ) -> dict[str, object]:
     return {
         "folds": [{
@@ -381,7 +417,7 @@ def _phase5_payload(
         } for value in folds],
         "reports": [{
             "fold_id": value.fold_id, "manifest_hash": value.manifest_hash,
-            "split_regions": dict(value.split_regions), "classification": dict(value.classification),
+            "split_regions": dict(value.split_regions), "classification": _classification_payload(value.classification),
             "trading": dict(value.trading), "stability": dict(value.stability),
         } for value in reports],
         "gaps": [{
@@ -392,7 +428,8 @@ def _phase5_payload(
         "dimensions": {
             "regimes": dict(dimensions.regimes), "months": dict(dimensions.months),
             "directions": dict(dimensions.directions), "target_codes": dict(dimensions.target_codes),
-            "total_net_pnl": dimensions.total_net_pnl,
+            "events": dict(dimensions.events), "total_net_pnl": dimensions.total_net_pnl,
+            "cost_complete": dimensions.cost_complete,
         },
         "ablations": [{
             "group": value.removed_group,
@@ -413,12 +450,18 @@ def _phase5_payload(
         "experiment": [
             experiment.experiment_id, experiment.definition_hash, experiment.search_manifest_hash,
             experiment.attempt_count, experiment.chain_head, experiment.checkpoint_hash,
+            experiment.terminal_anchor_hash,
+            experiment.comparison.dataset_version, experiment.comparison.outer_fold_plan_hash,
+            experiment.comparison.cost_assumption_hash, experiment.comparison.label_version,
+            experiment.comparison.evaluation_period,
+            dict(experiment.candidate_hashes),
         ],
         "holdout": None if holdout is None else [
             holdout.selection_hash, holdout.candidate_hash, holdout.model_hash,
-            holdout.data_hash, holdout.state_hash, holdout.status,
+            holdout.data_hash, holdout.state_hash, holdout.evaluation_hash,
+            holdout.cost_model_hash, dict(holdout.candidate_hashes), holdout.epoch, holdout.status,
         ],
-        "provenance": data_provenance,
+        "provenance": data_provenance.content_hash,
     }
 
 
@@ -427,6 +470,14 @@ def _reported_concentration(values: Iterable[float], total: float) -> float:
     if total <= 0.0 or not numeric:
         return 0.0
     return max(max(0.0, value) / total for value in numeric)
+
+
+def _classification_payload(values: Mapping[str, object]) -> dict[str, object]:
+    payload = dict(values)
+    table = payload.get("calibration_table")
+    if isinstance(table, (tuple, list)):
+        payload["calibration_table"] = [asdict(value) for value in table]
+    return payload
 
 
 def _hash(value: object) -> str:

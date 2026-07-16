@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -14,11 +13,12 @@ from typing import Literal, cast
 
 from tmf_research.experiments.comparison import ComparisonContext
 from tmf_research.experiments.search_budget import SearchSpaceManifest
+from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
 
 
 AttemptStatus = Literal["SUCCEEDED", "FAILED"]
-DataProvenance = Literal["REAL_READONLY_MARKET_DATA", "SYNTHETIC_TEST_ONLY"]
 _EXPERIMENT_EVIDENCE_SEAL = object()
+_COMMIT_SEAL = object()
 class ModelStatus(str, Enum):
     DRAFT = "DRAFT"
     VALIDATING = "VALIDATING"
@@ -31,6 +31,31 @@ class ModelStatus(str, Enum):
     LOCKED_TEST_FAILED = "LOCKED_TEST_FAILED"
     APPROVED_FOR_PAPER = "APPROVED_FOR_PAPER"
     RETIRED = "RETIRED"
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class SourceCommitEvidence:
+    commit: str
+    content_hash: str
+    _seal: object
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> SourceCommitEvidence:
+        raise TypeError("source commit evidence must be issued by the commit verifier")
+
+    def __post_init__(self) -> None:
+        if self._seal is not _COMMIT_SEAL or not _git_commit(self.commit):
+            raise TypeError("invalid source commit evidence")
+        _sha256(self.content_hash, "source_commit_evidence")
+
+
+def verified_source_commit(commit: str) -> SourceCommitEvidence:
+    if not _git_commit(commit):
+        raise ValueError("source commit must be one full 40-character lowercase hexadecimal id")
+    instance = object.__new__(SourceCommitEvidence)
+    for name, value in (("commit", commit), ("content_hash", _hash({"commit": commit})), ("_seal", _COMMIT_SEAL)):
+        object.__setattr__(instance, name, value)
+    instance.__post_init__()
+    return instance
 
 
 MODEL_STATUSES = tuple(status.value for status in ModelStatus)
@@ -53,13 +78,16 @@ def transition_model_status(
     current: ModelStatus,
     target: ModelStatus,
     *,
-    data_provenance: DataProvenance,
+    data_provenance: DataProvenanceEvidence,
 ) -> ModelStatus:
     if not isinstance(current, ModelStatus) or not isinstance(target, ModelStatus):
         raise TypeError("model state must use the exact SPEC 42 enum")
+    if not isinstance(data_provenance, DataProvenanceEvidence):
+        raise TypeError("model transition requires sealed data provenance evidence")
+    data_provenance.assert_current()
     if target not in _ALLOWED_TRANSITIONS[current]:
         raise ValueError(f"forbidden model state transition: {current}->{target}")
-    if data_provenance == "SYNTHETIC_TEST_ONLY" and target in (ModelStatus.LOCKED_TEST_PENDING, ModelStatus.APPROVED_FOR_PAPER):
+    if data_provenance.kind is DataProvenanceKind.SYNTHETIC_TEST_ONLY and target in (ModelStatus.LOCKED_TEST_PENDING, ModelStatus.APPROVED_FOR_PAPER):
         raise ValueError("synthetic evidence cannot enter a production approval path")
     return target
 
@@ -78,6 +106,7 @@ class ExperimentDefinition:
     train_period: str
     locked_holdout_status: str
     comparison: ComparisonContext
+    candidate_hashes: Mapping[str, str]
 
     def __post_init__(self) -> None:
         if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
@@ -98,6 +127,13 @@ class ExperimentDefinition:
             raise ValueError("feature set is outside preregistered space")
         if not self.parameter_space.permits("model_families", self.model_family):
             raise ValueError("model family is outside preregistered space")
+        if self.label_version != self.comparison.label_version:
+            raise ValueError("experiment label version and comparison context must match")
+        if set(self.candidate_hashes) != {"model", "features", "labels", "parameters", "thresholds", "rules"}:
+            raise ValueError("experiment must preregister all frozen candidate component hashes")
+        for name, value in self.candidate_hashes.items():
+            _sha256(value, name)
+        object.__setattr__(self, "candidate_hashes", MappingProxyType(dict(sorted(self.candidate_hashes.items()))))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -124,6 +160,7 @@ class ExperimentDefinition:
                     "evaluation_period",
                 )
             },
+            "candidate_hashes": dict(self.candidate_hashes),
         }
 
 
@@ -160,6 +197,11 @@ class ExperimentRegistryEvidence:
     chain_head: str
     checkpoint_hash: str
     parameter_space: SearchSpaceManifest
+    comparison: ComparisonContext
+    candidate_hashes: Mapping[str, str]
+    terminal_anchor_hash: str
+    _registry_root: Path
+    _audit_root: Path
     _seal: object
 
     def __new__(cls, *_args: object, **_kwargs: object) -> ExperimentRegistryEvidence:
@@ -173,17 +215,51 @@ class ExperimentRegistryEvidence:
         for name, value in (
             ("definition", self.definition_hash), ("search", self.search_manifest_hash),
             ("chain", self.chain_head), ("checkpoint", self.checkpoint_hash),
+            ("terminal", self.terminal_anchor_hash),
         ):
             _sha256(value, name)
         if self.search_manifest_hash != self.parameter_space.canonical_hash:
             raise ValueError("experiment evidence search manifest mismatch")
+        if set(self.candidate_hashes) != {"model", "features", "labels", "parameters", "thresholds", "rules"}:
+            raise ValueError("experiment evidence candidate hashes are incomplete")
+        for name, value in self.candidate_hashes.items():
+            _sha256(value, name)
+
+    def assert_current(self) -> None:
+        registry = ExperimentRegistry(self._registry_root)
+        state = _object(self._registry_root / "state.json")
+        terminal = _object(self._audit_root / "terminal.json")
+        comparison = _mapping(registry._definition["comparison"])
+        if (
+            registry.definition_hash != self.definition_hash
+            or registry._space.canonical_hash != self.search_manifest_hash
+            or state.get("attempt_count") != self.attempt_count
+            or state.get("chain_head") != self.chain_head
+            or state.get("checkpoint_hash") != self.checkpoint_hash
+            or dict(_mapping(registry._definition["candidate_hashes"])) != dict(self.candidate_hashes)
+            or any(
+                comparison.get(name) != getattr(self.comparison, name)
+                for name in (
+                    "dataset_version", "outer_fold_plan_hash", "cost_assumption_hash",
+                    "label_version", "evaluation_period",
+                )
+            )
+            or _hash(terminal) != self.terminal_anchor_hash
+            or terminal.get("experiment_id") != self.experiment_id
+            or terminal.get("definition_hash") != self.definition_hash
+            or terminal.get("attempt_count") != self.attempt_count
+            or terminal.get("chain_head") != self.chain_head
+            or terminal.get("checkpoint_hash") != self.checkpoint_hash
+        ):
+            raise ValueError("external terminal anchor is stale or mismatched")
 
 
 class ExperimentRegistry:
-    __slots__ = ("_root", "_definition", "_space")
+    __slots__ = ("_root", "_audit_root", "_definition", "_space")
 
     def __init__(self, root: Path) -> None:
         self._root = root
+        self._audit_root = _external_audit_root(root)
         definition_payload = _object(root / "definition.json")
         self._definition = definition_payload
         self._space = _space_from_payload(_mapping(definition_payload["parameter_space"]))
@@ -193,6 +269,10 @@ class ExperimentRegistry:
     def preregister(cls, root: Path, definition: ExperimentDefinition) -> ExperimentRegistry:
         if root.exists():
             raise FileExistsError(root)
+        audit_root = _external_audit_root(root)
+        if audit_root.exists():
+            raise FileExistsError(audit_root)
+        audit_root.mkdir(parents=True)
         root.mkdir(parents=True)
         definition_payload = definition.to_dict()
         _write_exclusive(root / "definition.json", _canonical(definition_payload))
@@ -216,6 +296,13 @@ class ExperimentRegistry:
             "checkpoint_hash": genesis_hash,
         }
         _write_exclusive(root / "state.json", _canonical(state))
+        _write_exclusive(audit_root / "terminal.json", _canonical({
+            "experiment_id": definition.experiment_id,
+            "definition_hash": _hash(definition_payload),
+            "attempt_count": 0,
+            "chain_head": "0" * 64,
+            "checkpoint_hash": genesis_hash,
+        }))
         return cls(root)
 
     @property
@@ -270,11 +357,20 @@ class ExperimentRegistry:
         _write_exclusive(self._root / "checkpoints" / checkpoint_name, _canonical(checkpoint_body))
         state["checkpoint_hash"] = checkpoint_hash
         _replace(self._root / "state.json", _canonical(state))
+        _replace(self._audit_root / "terminal.json", _canonical({
+            "experiment_id": self._definition["experiment_id"],
+            "definition_hash": self.definition_hash,
+            "attempt_count": state["attempt_count"],
+            "chain_head": state["chain_head"],
+            "checkpoint_hash": checkpoint_hash,
+        }))
         self._verify()
 
     def evidence(self) -> ExperimentRegistryEvidence:
         self._verify()
         state = _object(self._root / "state.json")
+        terminal = _object(self._audit_root / "terminal.json")
+        comparison_payload = _mapping(self._definition["comparison"])
         instance = object.__new__(ExperimentRegistryEvidence)
         values: dict[str, object] = {
             "experiment_id": str(self._definition["experiment_id"]),
@@ -284,6 +380,20 @@ class ExperimentRegistry:
             "chain_head": str(state["chain_head"]),
             "checkpoint_hash": str(state["checkpoint_hash"]),
             "parameter_space": self._space,
+            "comparison": ComparisonContext(
+                str(comparison_payload["dataset_version"]),
+                str(comparison_payload["outer_fold_plan_hash"]),
+                str(comparison_payload["cost_assumption_hash"]),
+                str(comparison_payload["label_version"]),
+                str(comparison_payload["evaluation_period"]),
+            ),
+            "candidate_hashes": MappingProxyType({
+                str(name): str(value)
+                for name, value in sorted(_mapping(self._definition["candidate_hashes"]).items())
+            }),
+            "terminal_anchor_hash": _hash(terminal),
+            "_registry_root": self._root,
+            "_audit_root": self._audit_root,
             "_seal": _EXPERIMENT_EVIDENCE_SEAL,
         }
         for name, value in values.items():
@@ -348,6 +458,18 @@ class ExperimentRegistry:
             or state["checkpoint_hash"] != previous_checkpoint
         ):
             raise ValueError("attempt deletion/truncation detected")
+        try:
+            terminal = _object(self._audit_root / "terminal.json")
+        except (OSError, ValueError) as error:
+            raise ValueError("external terminal anchor is missing or invalid") from error
+        if terminal != {
+            "experiment_id": self._definition["experiment_id"],
+            "definition_hash": self.definition_hash,
+            "attempt_count": authoritative_count,
+            "chain_head": authoritative_head,
+            "checkpoint_hash": previous_checkpoint,
+        }:
+            raise ValueError("external terminal anchor rejects registry rollback")
 
 
 REGISTRY_FILES = (
@@ -386,8 +508,13 @@ REQUIRED_METADATA = (
     "data_provenance",
     "phase4_bundle_hash",
     "phase5_evidence_hash",
+    "data_provenance_hash",
     "experiment_checkpoint_hash",
+    "experiment_terminal_anchor_hash",
     "holdout_state_hash",
+    "holdout_evaluation_hash",
+    "holdout_cost_model_hash",
+    "candidate_hashes",
 )
 
 
@@ -462,13 +589,38 @@ def phase4_bundle_evidence_hash(bundle: object) -> str:
     return _hash({"metadata": bundle.metadata.to_dict(), "artifacts": core})
 
 
+def phase4_candidate_hashes(bundle: object) -> Mapping[str, str]:
+    from tmf_research.models.serialization import ModelBundle, phase5_registry_artifacts
+
+    if not isinstance(bundle, ModelBundle):
+        raise TypeError("Phase 4 ModelBundle is required")
+    artifacts = phase5_registry_artifacts(
+        bundle, fold_metrics={}, stability_report={}, ablation_report={}, overfitting_report={},
+    )
+    return MappingProxyType({
+        "model": phase4_bundle_evidence_hash(bundle),
+        "features": _hash({"names": artifacts["feature_names.json"], "manifest": artifacts["feature_manifest.json"]}),
+        "labels": _hash({"label_version": bundle.metadata.label_version}),
+        "parameters": _hash({
+            "scaler": artifacts["scaler.json"], "imputer": artifacts["imputer.json"],
+            "trade": artifacts["trade_model.json"], "direction": artifacts["direction_model.json"],
+            "calibrator": artifacts["calibrator.json"],
+        }),
+        "thresholds": _hash({"trade_probability": 0.5, "direction_probability": 0.5}),
+        "rules": _hash({
+            "instrument": bundle.metadata.instrument, "session": bundle.metadata.session,
+            "horizon": bundle.metadata.horizon, "research_signal": "NO_TRADE",
+        }),
+    })
+
+
 def build_registry_publication(
     *,
     bundle: object,
     report: object,
     evidence: object,
     decision_result: object,
-    code_commit: str,
+    code_commit: SourceCommitEvidence,
 ) -> RegistryPublication:
     from tmf_research.models.serialization import ModelBundle, phase5_registry_artifacts
     from tmf_research.validation.approval import Phase5DecisionResult, Phase5EvidenceBundle, decide_phase5
@@ -487,19 +639,33 @@ def build_registry_publication(
     )
     if report != authoritative_report or report.decision != decision or decision.evidence_hash != evidence.content_hash:
         raise ValueError("report, decision, and Phase 5 evidence hashes do not agree")
-    if not _git_commit(code_commit) or not _git_commit_exists(code_commit):
-        raise ValueError("code_commit must identify a real repository commit")
+    if not isinstance(code_commit, SourceCommitEvidence):
+        raise TypeError("publication requires sealed source commit evidence")
+    code_commit.__post_init__()
     if bundle.metadata.experiment_id != evidence.experiment.experiment_id:
         raise ValueError("Phase 4 bundle and immutable experiment registry disagree")
+    if bundle.metadata.label_version != evidence.experiment.comparison.label_version:
+        raise ValueError("Phase 4 bundle and immutable experiment comparison label disagree")
     phase4_hash = phase4_bundle_evidence_hash(bundle)
+    candidate_hashes = phase4_candidate_hashes(bundle)
+    if dict(evidence.experiment.candidate_hashes) != dict(candidate_hashes):
+        raise ValueError("experiment preregistration candidate hashes do not match the Phase 4 bundle")
     approved = decision.model_status is ModelStatus.APPROVED_FOR_PAPER
     if approved:
         if (
             decision_result.approval is None or evidence.holdout is None
-            or evidence.data_provenance != "REAL_READONLY_MARKET_DATA"
+            or evidence.data_provenance.kind is not DataProvenanceKind.REAL_READONLY_MARKET_DATA
             or decision.valid_outer_folds < 5
             or evidence.holdout.model_hash != phase4_hash
+            or dict(evidence.holdout.candidate_hashes) != dict(candidate_hashes)
             or decision_result.approval.evidence_hash != evidence.content_hash
+            or decision_result.approval.data_provenance_hash != evidence.data_provenance.content_hash
+            or decision_result.approval.holdout_state_hash != evidence.holdout.state_hash
+            or decision_result.approval.holdout_evaluation_hash != evidence.holdout.evaluation_hash
+            or decision_result.approval.holdout_cost_model_hash != evidence.holdout.cost_model_hash
+            or decision_result.approval.experiment_checkpoint_hash != evidence.experiment.checkpoint_hash
+            or decision_result.approval.experiment_terminal_anchor_hash != evidence.experiment.terminal_anchor_hash
+            or dict(decision_result.approval.candidate_hashes) != dict(candidate_hashes)
         ):
             raise ValueError("APPROVED_FOR_PAPER requires the derived approval capability and bound holdout/model evidence")
     elif decision_result.approval is not None:
@@ -516,7 +682,7 @@ def build_registry_publication(
     )
     metadata = {
         **bundle.metadata.to_dict(),
-        "code_commit": code_commit,
+        "code_commit": code_commit.commit,
         "outer_fold_count": decision.valid_outer_folds,
         "locked_holdout_status": (
             "PASSED" if approved
@@ -524,11 +690,16 @@ def build_registry_publication(
             else "NOT_RUN"
         ),
         "model_status": decision.model_status.value,
-        "data_provenance": evidence.data_provenance,
+        "data_provenance": evidence.data_provenance.kind.value,
         "phase4_bundle_hash": phase4_hash,
         "phase5_evidence_hash": evidence.content_hash,
+        "data_provenance_hash": evidence.data_provenance.content_hash,
         "experiment_checkpoint_hash": evidence.experiment.checkpoint_hash,
+        "experiment_terminal_anchor_hash": evidence.experiment.terminal_anchor_hash,
         "holdout_state_hash": None if evidence.holdout is None else evidence.holdout.state_hash,
+        "holdout_evaluation_hash": None if evidence.holdout is None else evidence.holdout.evaluation_hash,
+        "holdout_cost_model_hash": None if evidence.holdout is None else evidence.holdout.cost_model_hash,
+        "candidate_hashes": dict(candidate_hashes),
     }
     instance = object.__new__(RegistryPublication)
     for name, value in (
@@ -576,6 +747,8 @@ def publish_model_registry(root: Path, publication: RegistryPublication) -> str:
         or metadata["locked_holdout_status"] != "PASSED"
         or provenance != "REAL_READONLY_MARKET_DATA"
         or metadata["holdout_state_hash"] is None
+        or metadata["holdout_evaluation_hash"] is None
+        or metadata["holdout_cost_model_hash"] is None
     ):
         raise ValueError("approved publication metadata does not satisfy the derived production gates")
     root.mkdir(parents=True)
@@ -617,6 +790,8 @@ def validate_model_registry(
             or metadata["locked_holdout_status"] != "PASSED"
             or metadata["data_provenance"] != "REAL_READONLY_MARKET_DATA"
             or metadata["holdout_state_hash"] is None
+            or metadata["holdout_evaluation_hash"] is None
+            or metadata["holdout_cost_model_hash"] is None
         ):
             return RegistryValidation("NO_TRADE", ("APPROVAL_PROVENANCE_INVALID",), actual)
         fold_metrics = _object(root / "fold_metrics.json")
@@ -699,7 +874,7 @@ def _validate_metadata(metadata: Mapping[str, object]) -> None:
         "instrument", "session", "horizon", "feature_version", "label_version",
         "code_commit", "experiment_id", "locked_holdout_status", "schema_version",
         "model_status", "data_provenance", "phase4_bundle_hash", "phase5_evidence_hash",
-        "experiment_checkpoint_hash",
+        "data_provenance_hash", "experiment_checkpoint_hash", "experiment_terminal_anchor_hash",
     )
     if any(not isinstance(metadata[name], str) or not str(metadata[name]).strip() for name in string_fields):
         raise ValueError("model metadata strings must be present and non-empty")
@@ -708,10 +883,19 @@ def _validate_metadata(metadata: Mapping[str, object]) -> None:
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError(f"{name} must be timezone-aware")
     _sha256(str(metadata["training_data_hash"]), "training_data_hash")
-    for name in ("phase4_bundle_hash", "phase5_evidence_hash", "experiment_checkpoint_hash"):
+    for name in (
+        "phase4_bundle_hash", "phase5_evidence_hash", "data_provenance_hash",
+        "experiment_checkpoint_hash", "experiment_terminal_anchor_hash",
+    ):
         _sha256(str(metadata[name]), name)
-    if metadata["holdout_state_hash"] is not None:
-        _sha256(str(metadata["holdout_state_hash"]), "holdout_state_hash")
+    for name in ("holdout_state_hash", "holdout_evaluation_hash", "holdout_cost_model_hash"):
+        if metadata[name] is not None:
+            _sha256(str(metadata[name]), name)
+    candidate_hashes = metadata["candidate_hashes"]
+    if not isinstance(candidate_hashes, Mapping) or set(candidate_hashes) != {"model", "features", "labels", "parameters", "thresholds", "rules"}:
+        raise ValueError("candidate_hashes must bind every frozen candidate component")
+    for name, value in candidate_hashes.items():
+        _sha256(str(value), str(name))
     if not _git_commit(str(metadata["code_commit"])):
         raise ValueError("code_commit must be a full hexadecimal commit id")
     for name in ("random_seed", "outer_fold_count"):
@@ -779,18 +963,11 @@ def _valid_sha256(value: str) -> bool:
 
 
 def _git_commit(value: str) -> bool:
-    return len(value) in (40, 64) and all(character in "0123456789abcdef" for character in value)
+    return len(value) == 40 and all(character in "0123456789abcdef" for character in value)
 
 
-def _git_commit_exists(value: str) -> bool:
-    try:
-        result = subprocess.run(
-            ("git", "cat-file", "-e", f"{value}^{{commit}}"),
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
+def _external_audit_root(root: Path) -> Path:
+    return root.parent / f".{root.name}.phase5-audit"
 
 
 def _fold_report_payload(value: object) -> dict[str, object]:
@@ -798,9 +975,13 @@ def _fold_report_payload(value: object) -> dict[str, object]:
 
     if not isinstance(value, FoldReport):
         raise TypeError("fold report evidence is required")
+    classification = dict(value.classification)
+    table = classification.get("calibration_table")
+    if isinstance(table, (tuple, list)):
+        classification["calibration_table"] = [asdict(item) for item in table]
     return {
         "fold_id": value.fold_id, "manifest_hash": value.manifest_hash,
-        "split_regions": dict(value.split_regions), "classification": dict(value.classification),
+        "split_regions": dict(value.split_regions), "classification": classification,
         "trading": dict(value.trading), "stability": dict(value.stability),
     }
 
@@ -813,7 +994,8 @@ def _dimensions_payload(value: object) -> dict[str, object]:
     return {
         "regimes": dict(value.regimes), "months": dict(value.months),
         "directions": dict(value.directions), "target_codes": dict(value.target_codes),
-        "total_net_pnl": value.total_net_pnl,
+        "events": dict(value.events), "total_net_pnl": value.total_net_pnl,
+        "cost_complete": value.cost_complete,
     }
 
 

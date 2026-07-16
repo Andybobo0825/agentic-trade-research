@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+import hashlib
+import json
 
 from tmf_research.models.calibration import fit_two_stage_calibrators
 from tmf_research.models.provenance import Phase4SourceRow, TrainingLabel
 from tmf_research.models.training import train_phase4_model
+from tmf_research.experiments.comparison import ComparisonContext
+from tmf_research.experiments.registry import ExperimentDefinition
 from tmf_research.validation.ablation import (
     ABLATION_GROUPS,
     AblationComparison,
@@ -26,6 +30,7 @@ from tmf_research.validation.overfitting import (
     StabilityDimensions,
     generalization_gap,
 )
+from tmf_research.validation.metrics import CalibrationRow
 from tmf_research.validation.report import FoldReport
 from tmf_research.validation.stability import (
     CoefficientObservation,
@@ -33,8 +38,60 @@ from tmf_research.validation.stability import (
     FeatureRemovalEvidence,
     coefficient_stability,
 )
+from tmf_research.validation.data_provenance import DataProvenanceEvidence, _issue_synthetic_test_provenance
 from tests.phase4_test_support import TestPhase4FoldPlanner
 from tests.unit.test_phase4_training import training_spec
+
+
+def synthetic_provenance() -> DataProvenanceEvidence:
+    return _issue_synthetic_test_provenance("dataset-v1")
+
+
+def aligned_definition(
+    base: ExperimentDefinition,
+    folds: tuple[FoldEvidence, ...],
+    provenance: DataProvenanceEvidence,
+) -> ExperimentDefinition:
+    fold_hash = hashlib.sha256(
+        json.dumps([fold.manifest_hash for fold in folds], separators=(",", ":")).encode()
+    ).hexdigest()
+    return replace(base, comparison=ComparisonContext(
+        provenance.dataset_version, fold_hash,
+        hashlib.sha256(b"phase5-complete-cost-model-v1").hexdigest(),
+        base.label_version, base.comparison.evaluation_period,
+    ))
+
+
+def subset_fold_evidence(count: int) -> tuple[
+    tuple[FoldEvidence, ...], tuple[FoldReport, ...], tuple[GeneralizationGap, ...],
+    StabilityDimensions, tuple[AblationComparison, ...], tuple[FeatureCoefficientStability, ...],
+    tuple[SensitivityEvidence, ...], tuple[CalibrationFoldEvidence, ...],
+]:
+    values = complete_fold_evidence()
+    folds = values[0][:count]
+    ablations = compare_all_ablations(
+        values[4][0].full_model_folds[:count],
+        {value.removed_group: value.removed_model_folds[:count] for value in values[4]},
+    )
+    coefficient = values[5][0]
+    coefficients = coefficient_stability(
+        coefficient.observations[:count], coefficient.removal_evidence[:count],
+    )
+    total = 10.0 * count
+    dimensions = StabilityDimensions(
+        values[3].regimes, {f"m{index}": 10.0 for index in range(count)},
+        {"LONG": total / 2.0, "SHORT": total / 2.0},
+        {"TMF202607": total / 2.0, "TMF202608": total / 2.0}, total,
+        {f"event-{index}": 10.0 for index in range(count)}, True,
+    )
+    reports = tuple(
+        replace(report, stability={**report.stability, "fold_profit_concentration": 1.0 / count})
+        for report in values[1][:count]
+    )
+    return (
+        folds, reports, values[2][:count], dimensions, ablations,
+        coefficients, values[6][:count], values[7][:count],
+    )
 
 
 @lru_cache(maxsize=1)
@@ -119,6 +176,8 @@ def complete_fold_evidence() -> tuple[
         {"LONG": 30.0, "SHORT": 30.0},
         {"TMF202607": 30.0, "TMF202608": 30.0},
         60.0,
+        {f"event-{index}": 10.0 for index in range(6)},
+        True,
     )
     return (
         fold_values, tuple(reports), tuple(generalization_gap(value) for value in fold_values), dimensions,
@@ -142,9 +201,11 @@ def _report(fold: FoldEvidence) -> FoldReport:
             "log_loss": fold.test_log_loss, "brier_score": fold.test_brier, "roc_auc": 0.6,
             "precision": 0.5, "recall": 0.5, "f1": 0.5,
             "confusion_matrix": ((200, 50), (50, 200)),
-            "expected_calibration_error": 0.05, "calibration_table": (),
+            "expected_calibration_error": 0.05,
+            "calibration_table": (CalibrationRow(0.0, 1.0, 500, 0.5, 0.5, fold.test_ev, True),),
         },
         {
+            "candidate_count": fold.test_candidates,
             "trade_count": fold.trade_count, "long_count": fold.long_count, "short_count": fold.short_count,
             "win_rate": 0.6, "average_win": 2.0, "average_loss": -1.0,
             "average_net_points": fold.test_ev, "gross_pnl": 60.0, "net_pnl": fold.net_pnl,

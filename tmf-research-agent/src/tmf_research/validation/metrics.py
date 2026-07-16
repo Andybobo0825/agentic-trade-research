@@ -15,6 +15,24 @@ class CalibrationRow:
     average_net_pnl: float | None
     sufficient: bool
 
+    def __post_init__(self) -> None:
+        if (
+            any(not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) for value in (self.lower, self.upper))
+            or not 0.0 <= self.lower < self.upper <= 1.0
+            or isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 0
+            or not isinstance(self.sufficient, bool)
+        ):
+            raise ValueError("calibration row bounds/count/schema are invalid")
+        optional = (self.mean_probability, self.observed_rate, self.average_net_pnl)
+        if any(value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)) for value in optional):
+            raise ValueError("calibration row values must be finite")
+        if self.count == 0 and any(value is not None for value in optional):
+            raise ValueError("empty calibration row cannot carry estimates")
+        if self.count > 0 and any(value is None for value in optional):
+            raise ValueError("non-empty calibration row requires complete estimates")
+        if any(value is not None and not 0.0 <= value <= 1.0 for value in (self.mean_probability, self.observed_rate)):
+            raise ValueError("calibration probabilities/rates must be bounded")
+
 
 @dataclass(frozen=True, slots=True)
 class ClassificationMetrics:

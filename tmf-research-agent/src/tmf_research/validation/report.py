@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import cast
 
 from tmf_research.validation.overfitting import GeneralizationGap, ModelDecision, StabilityDimensions
+from tmf_research.validation.metrics import CalibrationRow
 
 
 CLASSIFICATION_KEYS = frozenset({
@@ -15,7 +16,7 @@ CLASSIFICATION_KEYS = frozenset({
     "confusion_matrix", "expected_calibration_error", "calibration_table",
 })
 TRADING_KEYS = frozenset({
-    "trade_count", "long_count", "short_count", "win_rate", "average_win", "average_loss",
+    "candidate_count", "trade_count", "long_count", "short_count", "win_rate", "average_win", "average_loss",
     "average_net_points", "gross_pnl", "net_pnl", "profit_factor", "maximum_drawdown",
     "longest_losing_streak", "expected_value_per_trade", "expected_value_per_day",
     "average_holding_time", "exposure_ratio", "turnover",
@@ -92,8 +93,21 @@ class FoldReport:
             or any(not isinstance(row, (tuple, list)) or len(row) != 2 for row in confusion)
         ):
             raise ValueError("confusion matrix must be 2x2")
-        if not isinstance(self.classification["calibration_table"], (tuple, list)):
-            raise ValueError("calibration table must be a sequence")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for row in confusion for value in row
+        ):
+            raise ValueError("confusion matrix counts must be non-negative integers")
+        candidate_count = self.trading["candidate_count"]
+        if isinstance(candidate_count, bool) or not isinstance(candidate_count, int) or candidate_count <= 0:
+            raise ValueError("candidate_count must be a positive integer")
+        if sum(value for row in confusion for value in row) != candidate_count:
+            raise ValueError("confusion matrix must reconcile to candidate_count")
+        table = self.classification["calibration_table"]
+        if not isinstance(table, (tuple, list)) or not table or not all(isinstance(row, CalibrationRow) for row in table):
+            raise ValueError("calibration table must contain typed CalibrationRow evidence")
+        if sum(row.count for row in table) != candidate_count:
+            raise ValueError("calibration table counts must reconcile to candidate_count")
         object.__setattr__(self, "split_regions", MappingProxyType(dict(self.split_regions)))
         object.__setattr__(self, "classification", MappingProxyType(dict(self.classification)))
         object.__setattr__(self, "trading", MappingProxyType(dict(self.trading)))

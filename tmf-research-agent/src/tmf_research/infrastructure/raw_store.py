@@ -9,6 +9,10 @@ from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tmf_research.validation.data_provenance import DataProvenanceEvidence
 
 
 _SAFE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -141,6 +145,20 @@ class AppendOnlyRawStore:
         except OSError:
             return False
         return hashlib.sha256(encoded).hexdigest() == manifest.checksum_sha256
+
+    def phase5_provenance(self, manifests: Sequence[SegmentManifest]) -> DataProvenanceEvidence:
+        from tmf_research.validation.data_provenance import _issue_real_data_provenance
+
+        if not manifests or any(not self.verify(manifest) for manifest in manifests):
+            raise RawIntegrityError("verified non-empty raw manifests are required for Phase 5 provenance")
+        catalog = tuple(
+            json.loads(line)
+            for line in (self._root / "manifest.ndjson").read_text(encoding="utf-8").splitlines()
+        )
+        payloads = tuple(_record(manifest) for manifest in manifests)
+        if any(payload not in catalog for payload in payloads):
+            raise RawIntegrityError("Phase 5 provenance requires catalogued raw manifests")
+        return _issue_real_data_provenance(self._root, self._dataset_version, payloads)
 
     def read_verified(self, manifest: SegmentManifest) -> tuple[dict[str, object], ...]:
         path = self._verified_manifest_path(manifest)

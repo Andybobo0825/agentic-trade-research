@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from collections.abc import Mapping
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,6 +19,7 @@ from tmf_research.experiments.registry import (
     transition_model_status,
 )
 from tests.overfitting.test_search_budget import space
+from tests.phase5_test_support import synthetic_provenance
 
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -24,18 +27,19 @@ NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 def context(**overrides: str) -> ComparisonContext:
     values = {
-        "dataset_version": "dataset-v1", "outer_fold_plan_hash": "fold-v1",
-        "cost_assumption_hash": "cost-v1", "label_version": "label-v1",
+        "dataset_version": "dataset-v1", "outer_fold_plan_hash": hashlib.sha256(b"wrong-fold-v1").hexdigest(),
+        "cost_assumption_hash": hashlib.sha256(b"cost-v1").hexdigest(), "label_version": "labels-v1",
         "evaluation_period": "2025",
     }
     values.update(overrides)
     return ComparisonContext(**values)
 
 
-def definition() -> ExperimentDefinition:
+def definition(*, candidate_hashes: Mapping[str, str] | None = None) -> ExperimentDefinition:
     return ExperimentDefinition(
         "experiment-1", NOW, "direction hypothesis", "core", "labels-v1", "LOGISTIC",
         space(), "brier", ("log_loss", "ece", "ev"), "2024-2025", "LOCKED", context(),
+        candidate_hashes or {name: "0" * 64 for name in ("model", "features", "labels", "parameters", "thresholds", "rules")},
     )
 
 
@@ -79,6 +83,36 @@ class ExperimentRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "deletion"):
                 ExperimentRegistry(root)
 
+    def test_delete_failed_checkpoint_too_still_fails_external_terminal_anchor(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "registry"
+            registry = ExperimentRegistry.preregister(root, definition())
+            registry.append_attempt(attempt("success"))
+            registry.append_attempt(attempt("failed", status="FAILED"))
+            lines = (root / "attempts.jsonl").read_text().splitlines()
+            (root / "attempts.jsonl").write_text(lines[0] + "\n")
+            sorted((root / "checkpoints").glob("*.json"))[-1].unlink()
+            first_checkpoint = sorted((root / "checkpoints").glob("*.json"))[0]
+            state = json.loads((root / "state.json").read_text())
+            state.update({
+                "attempt_count": 1,
+                "chain_head": json.loads(lines[0])["entry_hash"],
+                "checkpoint_hash": first_checkpoint.stem.split("-", 1)[1],
+            })
+            (root / "state.json").write_text(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n")
+            with self.assertRaisesRegex(ValueError, "external terminal anchor"):
+                ExperimentRegistry(root)
+
+    def test_previously_issued_evidence_rechecks_the_registry_not_only_the_terminal_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "registry"
+            registry = ExperimentRegistry.preregister(root, definition())
+            registry.append_attempt(attempt("success"))
+            evidence = registry.evidence()
+            (root / "attempts.jsonl").write_text("", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                evidence.assert_current()
+
     def test_post_result_neighbor_and_incomparable_context_are_forbidden(self) -> None:
         with TemporaryDirectory() as directory:
             registry = ExperimentRegistry.preregister(Path(directory) / "registry", definition())
@@ -88,18 +122,25 @@ class ExperimentRegistryTests(unittest.TestCase):
         require_comparable(context(), context())
         with self.assertRaisesRegex(ValueError, "dataset_version"):
             require_comparable(context(), context(dataset_version="dataset-v2"))
+        with self.assertRaisesRegex(ValueError, "hash"):
+            ComparisonContext("dataset-v1", "not-a-hash", "also-not-a-hash", "labels-v1", "2025")
 
     def test_status_enum_rejects_strings_bogus_and_synthetic_approval(self) -> None:
         self.assertEqual(
-            transition_model_status(ModelStatus.DRAFT, ModelStatus.VALIDATING, data_provenance="SYNTHETIC_TEST_ONLY"),
+            transition_model_status(ModelStatus.DRAFT, ModelStatus.VALIDATING, data_provenance=synthetic_provenance()),
             ModelStatus.VALIDATING,
         )
         with self.assertRaises(TypeError):
-            transition_model_status(cast(ModelStatus, "BOGUS"), ModelStatus.VALIDATING, data_provenance="REAL_READONLY_MARKET_DATA")
+            transition_model_status(cast(ModelStatus, "BOGUS"), ModelStatus.VALIDATING, data_provenance=synthetic_provenance())
         with self.assertRaises(ValueError):
-            transition_model_status(ModelStatus.CANDIDATE, ModelStatus.LOCKED_TEST_PENDING, data_provenance="SYNTHETIC_TEST_ONLY")
+            transition_model_status(ModelStatus.CANDIDATE, ModelStatus.LOCKED_TEST_PENDING, data_provenance=synthetic_provenance())
         with self.assertRaises(TypeError):
             publish_model_registry(Path("unused"), cast(object, {"metadata": {}}))  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            transition_model_status(
+                ModelStatus.DRAFT, ModelStatus.VALIDATING,
+                data_provenance=cast(object, "REAL_READONLY_MARKET_DATA"),  # type: ignore[arg-type]
+            )
 
 
 if __name__ == "__main__":

@@ -12,9 +12,10 @@ from types import MappingProxyType
 from typing import Literal, cast
 
 
-HoldoutStatus = Literal["LOCKED", "FROZEN", "UNLOCKED", "CONSUMED", "CONTAMINATED"]
+HoldoutStatus = Literal["LOCKED", "FROZEN", "UNLOCKED", "CONSUMED", "EVALUATED", "CONTAMINATED"]
 REQUIRED_FREEZE_COMPONENTS = ("model", "features", "labels", "parameters", "thresholds", "rules")
 _APPROVAL_SEAL = object()
+_EVALUATION_SEAL = object()
 
 
 class HoldoutAccessError(RuntimeError):
@@ -135,6 +136,118 @@ class HoldoutToken:
     candidate_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class HoldoutCostModel:
+    entry_fee_points: float
+    exit_fee_points: float
+    tax_points: float
+    slippage_points: float
+
+    def __post_init__(self) -> None:
+        if any(
+            not isinstance(value, (int, float)) or isinstance(value, bool)
+            or not math.isfinite(value) or value < 0.0
+            for value in (self.entry_fee_points, self.exit_fee_points, self.tax_points, self.slippage_points)
+        ):
+            raise ValueError("complete finite non-negative holdout cost inputs are required")
+
+    @property
+    def round_trip_cost_points(self) -> float:
+        return self.entry_fee_points + self.exit_fee_points + self.tax_points + self.slippage_points
+
+    @property
+    def content_hash(self) -> str:
+        return _hash([self.entry_fee_points, self.exit_fee_points, self.tax_points, self.slippage_points])
+
+
+@dataclass(frozen=True, slots=True)
+class HoldoutPrediction:
+    row_id: str
+    outcome: int
+    probability: float
+    event_id: str
+    regime: str
+    target_code: str
+
+    def __post_init__(self) -> None:
+        if (
+            not self.row_id.strip() or not self.event_id.strip() or not self.regime.strip() or not self.target_code.strip()
+            or isinstance(self.outcome, bool) or self.outcome not in (0, 1)
+            or not isinstance(self.probability, (int, float)) or isinstance(self.probability, bool)
+            or not math.isfinite(self.probability) or not 0.0 <= self.probability <= 1.0
+        ):
+            raise ValueError("invalid holdout prediction evidence")
+
+
+@dataclass(frozen=True, slots=True)
+class HoldoutTrade:
+    row_id: str
+    direction: Literal["LONG", "SHORT"]
+    gross_points: float
+    cost_points: float
+    net_points: float
+    event_id: str
+    regime: str
+    target_code: str
+
+    def __post_init__(self) -> None:
+        if (
+            not self.row_id.strip() or self.direction not in ("LONG", "SHORT")
+            or not self.event_id.strip() or not self.regime.strip() or not self.target_code.strip()
+            or any(not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) for value in (self.gross_points, self.cost_points, self.net_points))
+            or self.cost_points < 0.0
+            or not math.isclose(self.net_points, self.gross_points - self.cost_points, rel_tol=1e-9, abs_tol=1e-9)
+        ):
+            raise ValueError("invalid executable holdout trade/cost evidence")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class LockedHoldoutEvaluation:
+    candidate_hash: str
+    evaluation_hash: str
+    epoch: int
+    status: Literal["PASSED", "FAILED"]
+    row_count: int
+    trade_count: int
+    brier_score: float
+    log_loss: float
+    expected_calibration_error: float
+    net_pnl: float
+    net_ev: float
+    event_concentration: float
+    cost_model_hash: str
+    reasons: tuple[str, ...]
+    _root: Path
+    _seal: object
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> LockedHoldoutEvaluation:
+        raise TypeError("holdout evaluations must be issued by the durable vault evaluator")
+
+    def __post_init__(self) -> None:
+        if self._seal is not _EVALUATION_SEAL or self.status not in ("PASSED", "FAILED"):
+            raise TypeError("invalid holdout evaluation authority")
+        for value in (self.candidate_hash, self.evaluation_hash, self.cost_model_hash):
+            _sha256(value, "evaluation")
+        if any(not math.isfinite(value) for value in (self.brier_score, self.log_loss, self.expected_calibration_error, self.net_pnl, self.net_ev, self.event_concentration)):
+            raise ValueError("holdout evaluation metrics must be finite")
+
+    def assert_current(self) -> None:
+        if self._seal is not _EVALUATION_SEAL:
+            raise HoldoutAccessError("holdout evaluation authority is invalid")
+        LockedHoldout(self._root)
+        state = _read_state(self._root)
+        path = self._root / f"holdout.evaluation.{self.evaluation_hash}.json"
+        if (
+            state.get("status") != "EVALUATED"
+            or state.get("epoch") != self.epoch
+            or state.get("evaluation_hash") != self.evaluation_hash
+            or state.get("evaluation_status") != self.status
+            or not path.is_file() or _hash(_object(path)) != self.evaluation_hash
+            or _approval_state_hash(state) != state.get("approval_state_hash")
+        ):
+            raise HoldoutAccessError("holdout evaluation is stale or no longer current")
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class LockedHoldoutApprovalEvidence:
     selection_hash: str
@@ -142,7 +255,12 @@ class LockedHoldoutApprovalEvidence:
     model_hash: str
     data_hash: str
     state_hash: str
+    evaluation_hash: str
+    cost_model_hash: str
+    candidate_hashes: Mapping[str, str]
+    epoch: int
     status: Literal["PASSED"]
+    _root: Path
     _seal: object
 
     def __new__(cls, *_args: object, **_kwargs: object) -> LockedHoldoutApprovalEvidence:
@@ -154,8 +272,22 @@ class LockedHoldoutApprovalEvidence:
         for name, value in (
             ("selection", self.selection_hash), ("candidate", self.candidate_hash), ("model", self.model_hash),
             ("data", self.data_hash), ("state", self.state_hash),
+            ("evaluation", self.evaluation_hash),
+            ("cost_model", self.cost_model_hash),
         ):
             _sha256(value, name)
+        if set(self.candidate_hashes) != set(REQUIRED_FREEZE_COMPONENTS):
+            raise ValueError("holdout approval candidate hashes are incomplete")
+
+    def assert_current(self) -> None:
+        LockedHoldout(self._root)
+        state = _read_state(self._root)
+        if (
+            state.get("status") != "EVALUATED" or state.get("evaluation_status") != "PASSED"
+            or state.get("epoch") != self.epoch or state.get("evaluation_hash") != self.evaluation_hash
+            or _approval_state_hash(state) != self.state_hash or state.get("approval_state_hash") != self.state_hash
+        ):
+            raise HoldoutAccessError("locked holdout approval evidence is stale or not current")
 
 
 class LockedHoldout:
@@ -209,6 +341,10 @@ class LockedHoldout:
             "token_hash": None,
             "unlock_count": 0,
             "read_count": 0,
+            "epoch": 0,
+            "evaluation_hash": None,
+            "evaluation_status": None,
+            "approval_state_hash": None,
             "contamination_reasons": [],
         }
         _write_state(root / "holdout.state.json", state, exclusive=True)
@@ -234,6 +370,7 @@ class LockedHoldout:
             raise HoldoutAccessError("holdout may be frozen exactly once from LOCKED")
         state["candidate_hash"] = candidate.content_hash
         state["candidate_hashes"] = dict(candidate.hashes)
+        state["epoch"] = _integer(state["epoch"]) + 1
         state["status"] = "FROZEN"
         self._save(state)
 
@@ -277,6 +414,83 @@ class LockedHoldout:
         self._verify_files(contaminate=True)
         return rows
 
+    def evaluate_once(
+        self,
+        candidate: FrozenCandidate,
+        predictions: Sequence[HoldoutPrediction],
+        trades: Sequence[HoldoutTrade],
+        cost_model: HoldoutCostModel,
+    ) -> LockedHoldoutEvaluation:
+        self.assert_candidate_unchanged(candidate)
+        state = self._state()
+        if state["status"] != "CONSUMED" or state["evaluation_hash"] is not None:
+            self._contaminate("HOLDOUT_EVALUATION_RETRY_OR_INVALID_STATE")
+            raise HoldoutAccessError("holdout evaluation is single-use after the exact read")
+        rows = tuple(_row(value) for value in _list(json.loads((self._root / "holdout.data.json").read_bytes())))
+        row_ids = tuple(row.row_id for row in rows)
+        prediction_values, trade_values = tuple(predictions), tuple(trades)
+        if (
+            tuple(value.row_id for value in prediction_values) != row_ids
+            or len({value.row_id for value in prediction_values}) != len(prediction_values)
+            or len({value.row_id for value in trade_values}) != len(trade_values)
+            or any(value.row_id not in set(row_ids) for value in trade_values)
+            or any(not math.isclose(value.cost_points, cost_model.round_trip_cost_points, rel_tol=1e-9, abs_tol=1e-9) for value in trade_values)
+        ):
+            self._contaminate("HOLDOUT_EVALUATION_PROVENANCE_MISMATCH")
+            raise HoldoutAccessError("holdout predictions/trades/costs do not align with frozen rows")
+        epsilon = 1e-15
+        brier = sum((value.probability - value.outcome) ** 2 for value in prediction_values) / len(prediction_values)
+        log_loss = -sum(
+            value.outcome * math.log(max(epsilon, value.probability))
+            + (1 - value.outcome) * math.log(max(epsilon, 1.0 - value.probability))
+            for value in prediction_values
+        ) / len(prediction_values)
+        ece = abs(sum(value.probability for value in prediction_values) / len(prediction_values) - sum(value.outcome for value in prediction_values) / len(prediction_values))
+        net_pnl = sum(value.net_points for value in trade_values)
+        net_ev = net_pnl / len(trade_values) if trade_values else 0.0
+        event_pnl: dict[str, float] = {}
+        regime_pnl: dict[str, float] = {}
+        target_pnl: dict[str, float] = {}
+        for value in trade_values:
+            event_pnl[value.event_id] = event_pnl.get(value.event_id, 0.0) + value.net_points
+            regime_pnl[value.regime] = regime_pnl.get(value.regime, 0.0) + value.net_points
+            target_pnl[value.target_code] = target_pnl.get(value.target_code, 0.0) + value.net_points
+        event_concentration = max((max(0.0, value) / net_pnl for value in event_pnl.values()), default=1.0) if net_pnl > 0.0 else 1.0
+        reasons: list[str] = []
+        if len(rows) < 40 or len({row.trading_date for row in rows}) < 40:
+            reasons.append("INSUFFICIENT_HOLDOUT_SAMPLE")
+        long_count = sum(value.direction == "LONG" for value in trade_values)
+        short_count = len(trade_values) - long_count
+        if len(trade_values) < 30 or long_count < 10 or short_count < 10:
+            reasons.append("INSUFFICIENT_HOLDOUT_TRADES")
+        if brier > 0.25 or log_loss > math.log(2.0) or ece > 0.10:
+            reasons.append("HOLDOUT_CALIBRATION_FAILED")
+        if net_pnl <= 0.0 or net_ev < 0.0:
+            reasons.append("HOLDOUT_NET_EV_OR_COST_FAILED")
+        if event_concentration > 0.40:
+            reasons.append("HOLDOUT_EVENT_CONCENTRATION_FAILED")
+        if any(value < 0.0 for value in regime_pnl.values()) or any(value < 0.0 for value in target_pnl.values()):
+            reasons.append("HOLDOUT_REGIME_OR_TARGET_STABILITY_FAILED")
+        payload = {
+            "candidate_hash": candidate.content_hash, "epoch": state["epoch"],
+            "row_count": len(rows), "trade_count": len(trade_values),
+            "brier_score": brier, "log_loss": log_loss, "expected_calibration_error": ece,
+            "net_pnl": net_pnl, "net_ev": net_ev, "event_concentration": event_concentration,
+            "cost_model_hash": cost_model.content_hash, "reasons": reasons,
+            "status": "PASSED" if not reasons else "FAILED",
+            "prediction_hash": _hash([_prediction_payload(value) for value in prediction_values]),
+            "trade_hash": _hash([_trade_payload(value) for value in trade_values]),
+        }
+        evaluation_hash = _hash(payload)
+        _write_exclusive(self._root / f"holdout.evaluation.{evaluation_hash}.json", _canonical(payload))
+        state["status"] = "EVALUATED"
+        state["evaluation_hash"] = evaluation_hash
+        state["evaluation_status"] = payload["status"]
+        state["approval_state_hash"] = None
+        state["approval_state_hash"] = _approval_state_hash(state)
+        self._save(state)
+        return _sealed_evaluation(self._root, payload, evaluation_hash)
+
     def assert_candidate_unchanged(self, candidate: FrozenCandidate) -> None:
         self._verify_files(contaminate=True)
         state = self._state()
@@ -294,12 +508,18 @@ class LockedHoldout:
         state = self._state()
         if not self._approval_eligible_state(state, candidate):
             raise HoldoutAccessError("locked holdout is not eligible for approval")
+        evaluation = _object(self._root / f"holdout.evaluation.{state['evaluation_hash']}.json")
         return _sealed_approval(
             selection_hash=str(state["selection_hash"]),
             candidate_hash=candidate.content_hash,
             model_hash=candidate.hashes["model"],
             data_hash=str(state["data_hash"]),
-            state_hash=_hash(state),
+            state_hash=_approval_state_hash(state),
+            evaluation_hash=str(state["evaluation_hash"]),
+            cost_model_hash=str(evaluation["cost_model_hash"]),
+            candidate_hashes=MappingProxyType(dict(candidate.hashes)),
+            epoch=_integer(state["epoch"]),
+            _root=self._root,
         )
 
     def approval_eligible(self, candidate: FrozenCandidate) -> bool:
@@ -311,13 +531,15 @@ class LockedHoldout:
 
     def _approval_eligible_state(self, state: Mapping[str, object], candidate: FrozenCandidate) -> bool:
         return (
-            state["status"] == "CONSUMED"
+            state["status"] == "EVALUATED"
+            and state["evaluation_status"] == "PASSED"
             and state["candidate_hash"] == candidate.content_hash
             and state["candidate_hashes"] == dict(candidate.hashes)
             and _integer(state["unlock_count"]) == 1
             and _integer(state["read_count"]) == 1
             and _integer(state["row_count"]) > 0
             and not _list(state["contamination_reasons"])
+            and state["approval_state_hash"] == _approval_state_hash(state)
             and self._manifest()["status"] == "READY"
         )
 
@@ -351,6 +573,17 @@ class LockedHoldout:
             values = tuple(_row(value) for value in _list(json.loads(data)))
             if len(values) != _integer(manifest["holdout_count"]) or _hash([row.to_dict() for row in values]) != manifest["holdout_hash"]:
                 raise HoldoutAccessError("holdout data content does not match manifest")
+            evaluation_hash = state.get("evaluation_hash")
+            evaluation_files = tuple(self._root.glob("holdout.evaluation.*.json"))
+            if evaluation_hash is None:
+                if evaluation_files:
+                    raise HoldoutAccessError("unanchored holdout evaluation file detected")
+            elif (
+                not isinstance(evaluation_hash, str) or len(evaluation_files) != 1
+                or evaluation_files[0].name != f"holdout.evaluation.{evaluation_hash}.json"
+                or _hash(_object(evaluation_files[0])) != evaluation_hash
+            ):
+                raise HoldoutAccessError("holdout evaluation anchor mismatch")
         except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError, HoldoutAccessError) as error:
             if contaminate:
                 self._contaminate("HOLDOUT_INTEGRITY_FAILURE")
@@ -383,11 +616,18 @@ class LockedHoldout:
             reasons.append(reason)
         state["contamination_reasons"] = reasons
         state["status"] = "CONTAMINATED"
+        state["epoch"] = _integer(state.get("epoch", 0)) + 1
+        state["approval_state_hash"] = None
         self._save(state)
 
 
 def _selection_payload(rows: tuple[HoldoutRow, ...], percentage: float, effective_days: int) -> dict[str, object]:
-    if not 0.0 < percentage < 1.0 or not math.isfinite(percentage) or effective_days <= 0:
+    if (
+        isinstance(percentage, bool) or not isinstance(percentage, (int, float))
+        or not math.isfinite(percentage) or not 0.15 <= percentage < 1.0
+        or isinstance(effective_days, bool) or not isinstance(effective_days, int)
+        or effective_days < 40
+    ):
         raise ValueError("invalid locked holdout sizing")
     if not rows or len({row.row_id for row in rows}) != len(rows):
         raise ValueError("locked holdout requires non-empty unique chronological rows")
@@ -426,6 +666,41 @@ def _sealed_approval(**values: object) -> LockedHoldoutApprovalEvidence:
     return instance
 
 
+def _sealed_evaluation(root: Path, payload: Mapping[str, object], evaluation_hash: str) -> LockedHoldoutEvaluation:
+    instance = object.__new__(LockedHoldoutEvaluation)
+    values: dict[str, object] = {
+        "candidate_hash": payload["candidate_hash"], "evaluation_hash": evaluation_hash,
+        "epoch": payload["epoch"], "status": payload["status"],
+        "row_count": payload["row_count"], "trade_count": payload["trade_count"],
+        "brier_score": payload["brier_score"], "log_loss": payload["log_loss"],
+        "expected_calibration_error": payload["expected_calibration_error"],
+        "net_pnl": payload["net_pnl"], "net_ev": payload["net_ev"],
+        "event_concentration": payload["event_concentration"],
+        "cost_model_hash": payload["cost_model_hash"],
+        "reasons": tuple(str(value) for value in _list(payload["reasons"])),
+        "_root": root, "_seal": _EVALUATION_SEAL,
+    }
+    for name, value in values.items():
+        object.__setattr__(instance, name, value)
+    instance.__post_init__()
+    return instance
+
+
+def _prediction_payload(value: HoldoutPrediction) -> list[object]:
+    return [value.row_id, value.outcome, value.probability, value.event_id, value.regime, value.target_code]
+
+
+def _trade_payload(value: HoldoutTrade) -> list[object]:
+    return [
+        value.row_id, value.direction, value.gross_points, value.cost_points,
+        value.net_points, value.event_id, value.regime, value.target_code,
+    ]
+
+
+def _approval_state_hash(state: Mapping[str, object]) -> str:
+    return _hash({key: value for key, value in state.items() if key != "approval_state_hash"})
+
+
 def _row(value: object) -> HoldoutRow:
     if not isinstance(value, dict) or not isinstance(value.get("payload"), dict):
         raise HoldoutAccessError("holdout row is invalid")
@@ -443,6 +718,14 @@ def _write_state(path: Path, state: Mapping[str, object], *, exclusive: bool) ->
         temporary.unlink()
     _write_exclusive(temporary, payload)
     os.replace(temporary, path)
+
+
+def _read_state(root: Path) -> dict[str, object]:
+    envelope = _object(root / "holdout.state.json")
+    state = envelope.get("state")
+    if set(envelope) != {"state", "checksum"} or not isinstance(state, dict) or envelope["checksum"] != _hash(state):
+        raise HoldoutAccessError("holdout durable state is invalid")
+    return cast(dict[str, object], state)
 
 
 def _write_exclusive(path: Path, payload: bytes) -> None:

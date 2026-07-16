@@ -244,6 +244,8 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             self.assertTrue(development_ids.isdisjoint(evidence.lineage.holdout_row_ids))
             from tmf_research.models.calibration import fit_two_stage_calibrators
             from tmf_research.models.training import Phase4TrainingSpec, train_phase4_model
+            from tmf_research.models.provenance import canonical_hash, freeze_decision_policy
+            from tmf_research.validation.fold_evaluation import evaluate_outer_fold
 
             capability = evidence.fold_capabilities[0]
             feature_order = tuple(capability.inner_train.rows[0].features)
@@ -270,6 +272,32 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             self.assertEqual(
                 calibration.calibrator.provenance.manifest,
                 capability.manifest,
+            )
+            policy = freeze_decision_policy(
+                calibration,
+                thresholds_hash=canonical_hash({
+                    "trade_probability": 0.5, "direction_probability": 0.5,
+                }),
+                rules_hash="a" * 64,
+            )
+            outer_predictions = trained.predict_outer_test(
+                capability.outer_test, calibration, policy,
+            )
+            self.assertEqual(
+                tuple(value.source_row_id for value in outer_predictions.rows),
+                tuple(value.row_id for value in capability.outer_test.rows),
+            )
+            self.assertTrue(all(
+                not hasattr(value, "trade_outcome") and not hasattr(value, "net_return")
+                for value in outer_predictions.rows
+            ))
+            fold_evaluation = evaluate_outer_fold(
+                evidence, capability, trained, calibration, policy,
+            )
+            self.assertEqual(fold_evaluation.evidence.authority, "RAW_DERIVED")
+            self.assertAlmostEqual(
+                fold_evaluation.evidence.net_pnl,
+                sum(value[-1] for value in fold_evaluation.contribution_rows),
             )
             with self.assertRaisesRegex(ValueError, "inner-train capability"):
                 train_phase4_model(

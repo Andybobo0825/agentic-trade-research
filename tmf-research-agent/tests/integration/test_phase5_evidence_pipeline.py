@@ -14,11 +14,13 @@ from tmf_research.experiments.registry import (
     SourceCommitEvidence,
     build_registry_publication,
     publish_model_registry,
-    validate_model_registry,
     verified_source_commit,
 )
 from tmf_research.validation.approval import Phase5DecisionResult, assemble_phase5_evidence, decide_phase5
-from tmf_research.validation.locked_holdout import FrozenCandidate, HoldoutCostModel, LockedHoldout, select_locked_holdout
+from tmf_research.validation.locked_holdout import (
+    FrozenCandidate, HoldoutAccessError, HoldoutCostModel, LockedHoldout,
+    select_locked_holdout,
+)
 from tmf_research.validation.report import build_phase5_report
 from tmf_research.domain.events import TickEvent
 from tmf_research.infrastructure.raw_store import AppendOnlyRawStore
@@ -63,14 +65,8 @@ class Phase5EvidencePipelineTests(unittest.TestCase):
             vault = LockedHoldout.create(base / "holdout", select_locked_holdout(rows()))
             vault.freeze(frozen)
             self.assertEqual(evaluate(vault, frozen).status, "PASSED")
-            holdout = vault.approval_evidence(frozen)
-            with self.assertRaisesRegex(ValueError, "lineage|dataset"):
-                assemble_phase5_evidence(
-                    folds=values[0], reports=values[1], gaps=values[2], dimensions=values[3],
-                    ablations=values[4], coefficients=values[5], sensitivities=values[6],
-                    calibrations=values[7], experiment=experiment.evidence(), holdout=holdout,
-                    data_provenance=provenance,
-                )
+            with self.assertRaisesRegex(HoldoutAccessError, "TEST_ONLY"):
+                vault.approval_evidence(frozen)
 
     def test_verified_real_data_with_four_folds_is_rejected_insufficient_data(self) -> None:
         values = subset_fold_evidence(4)
@@ -88,15 +84,13 @@ class Phase5EvidencePipelineTests(unittest.TestCase):
                 base / "experiment", aligned_definition(definition(), values[0], provenance),
             )
             experiment.append_attempt(attempt("real-insufficient"))
-            evidence = assemble_phase5_evidence(
-                folds=values[0], reports=values[1], gaps=values[2], dimensions=values[3],
-                ablations=values[4], coefficients=values[5], sensitivities=values[6],
-                calibrations=values[7], experiment=experiment.evidence(), holdout=None,
-                data_provenance=provenance,
-            )
-            result = decide_phase5(evidence)
-        self.assertEqual(result.decision.model_status, ModelStatus.REJECTED_INSUFFICIENT_DATA)
-        self.assertIn("FEWER_THAN_FIVE_VALID_OUTER_FOLDS", result.decision.reasons)
+            with self.assertRaisesRegex(ValueError, "raw-derived production evaluation"):
+                assemble_phase5_evidence(
+                    folds=values[0], reports=values[1], gaps=values[2], dimensions=values[3],
+                    ablations=values[4], coefficients=values[5], sensitivities=values[6],
+                    calibrations=values[7], experiment=experiment.evidence(), holdout=None,
+                    data_provenance=provenance,
+                )
 
     def test_synthetic_end_to_end_evidence_publishes_candidate_never_approval(self) -> None:
         trained = bundle()
@@ -141,13 +135,12 @@ class Phase5EvidencePipelineTests(unittest.TestCase):
                 publication.metadata["model_status"] = ModelStatus.APPROVED_FOR_PAPER.value  # type: ignore[index]
             with self.assertRaises(TypeError):
                 RegistryPublication()
-            checksum = publish_model_registry(root, publication)
-            validation = validate_model_registry(root, checksum)
+            with self.assertRaisesRegex(ValueError, "TEST_ONLY"):
+                publish_model_registry(root, publication)
+            self.assertFalse(root.exists())
             experiment.append_attempt(attempt("post-build-attempt"))
             with self.assertRaises(ValueError):
                 publish_model_registry(base / "stale-candidate", publication)
-        self.assertEqual(validation.reasons, ())
-        self.assertIsNone(validation.signal)
 
     def test_publication_rejects_a_nonexistent_commit(self) -> None:
         values = complete_fold_evidence()

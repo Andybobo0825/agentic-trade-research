@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -37,6 +38,7 @@ from tmf_research.validation.locked_holdout import HoldoutRow, HoldoutSelection,
 
 _LINEAGE_SEAL = object()
 _BUILD_RESULT_SEAL = object()
+_OUTCOME_SEAL = object()
 LineageStatus = Literal["READY", "REJECTED_INSUFFICIENT_DATA"]
 
 
@@ -44,6 +46,51 @@ class DatasetValidationError(ValueError):
     def __init__(self, reasons: Sequence[str]) -> None:
         self.reasons = tuple(sorted(set(reasons)))
         super().__init__(",".join(self.reasons))
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ExecutableOutcome:
+    row_id: str
+    source_row_hash: str
+    long_net_points: float
+    short_net_points: float
+    cost_policy_hash: str
+    decision_time: datetime
+    outcome_time: datetime
+    event_id: str
+    regime: str
+    target_code: str
+    content_hash: str
+    _seal: object
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> ExecutableOutcome:
+        raise TypeError("executable outcomes must be issued from verified raw market data")
+
+    def __post_init__(self) -> None:
+        if self._seal is not _OUTCOME_SEAL:
+            raise TypeError("invalid executable outcome authority")
+        if (
+            not self.row_id.strip()
+            or not self.event_id.strip()
+            or not self.regime.strip()
+            or not self.target_code.strip()
+            or any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                for value in (self.long_net_points, self.short_net_points)
+            )
+            or self.decision_time.tzinfo is None
+            or self.decision_time.utcoffset() is None
+            or self.outcome_time.tzinfo is None
+            or self.outcome_time.utcoffset() is None
+            or self.outcome_time < self.decision_time
+        ):
+            raise ValueError("invalid executable outcome semantics")
+        for value in (self.source_row_hash, self.cost_policy_hash, self.content_hash):
+            _sha256(value)
+        if canonical_hash(_outcome_payload(self, include_hash=False)) != self.content_hash:
+            raise ValueError("executable outcome content hash mismatch")
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -63,6 +110,7 @@ class DatasetLineageEvidence:
     holdout_selection_hash: str | None
     holdout_data_hash: str | None
     holdout_row_count: int
+    executable_outcome_hashes: tuple[tuple[str, str], ...]
     content_hash: str
     _provenance: DataProvenanceEvidence
     _spec: ResearchBuildSpec
@@ -89,6 +137,14 @@ class DatasetLineageEvidence:
         committed = dict(self.temporal_sample_hashes)
         if len(committed) != len(self.temporal_sample_hashes):
             raise ValueError("temporal sample lineage requires unique row ids")
+        outcome_committed = dict(self.executable_outcome_hashes)
+        if (
+            len(outcome_committed) != len(self.executable_outcome_hashes)
+            or set(outcome_committed) != set(committed)
+        ):
+            raise ValueError("executable outcome lineage must cover every exact sample")
+        for value in outcome_committed.values():
+            _sha256(value)
         if any(row_id not in self.development_row_ids for manifest in self.fold_manifests for role in (
             manifest.inner_train, manifest.inner_validation, manifest.outer_test,
         ) for row_id, _row_hash in role.row_hashes):
@@ -104,9 +160,12 @@ class DatasetLineageEvidence:
         if self.status == "READY":
             if self._holdout_root is None:
                 raise ValueError("ready lineage lost its locked holdout")
-            LockedHoldout(self._holdout_root, witness=self._witness)
+            holdout = LockedHoldout(self._holdout_root, witness=self._witness)
+            holdout.assert_lineage_commitment(self.content_hash)
             if hashlib.sha256((self._holdout_root / "holdout.data.json").read_bytes()).hexdigest() != self.holdout_data_hash:
                 raise ValueError("locked holdout no longer matches dataset lineage")
+            if _read_lineage_receipt(self._holdout_root) != _lineage_receipt(self):
+                raise ValueError("dataset lineage receipt no longer matches issued evidence")
 
     def binds(
         self,
@@ -131,6 +190,7 @@ class DatasetLineageEvidence:
 class DatasetBuildResult:
     lineage: DatasetLineageEvidence
     development_samples: tuple[TemporalSample, ...]
+    development_outcomes: tuple[ExecutableOutcome, ...]
     fold_capabilities: tuple[Phase4FoldCapabilities, ...]
     rejection_reasons: tuple[str, ...]
     content_hash: str
@@ -145,6 +205,19 @@ class DatasetBuildResult:
         if tuple(value.manifest for value in self.fold_capabilities) != self.lineage.fold_manifests:
             raise ValueError("build capabilities do not match sealed lineage fold manifests")
         development_ids = {value.source.row_id for value in self.development_samples}
+        if tuple(value.row_id for value in self.development_outcomes) != tuple(
+            value.source.row_id for value in self.development_samples
+        ):
+            raise ValueError("development outcomes do not match exact development samples")
+        if any(
+            outcome.source_row_hash != sample.source.content_hash
+            for sample, outcome in zip(
+                self.development_samples, self.development_outcomes, strict=True,
+            )
+        ):
+            raise ValueError("development outcome source commitments do not match")
+        if len({value.cost_policy_hash for value in self.development_outcomes}) > 1:
+            raise ValueError("one exact executable cost policy is required per build")
         if any(
             row_id not in development_ids
             for capability in self.fold_capabilities
@@ -160,6 +233,7 @@ class DatasetBuildResult:
             "lineage": self.lineage.content_hash,
             "development": [_sample_payload(value) for value in self.development_samples],
             "folds": [value.manifest.content_hash for value in self.fold_capabilities],
+            "outcomes": [value.content_hash for value in self.development_outcomes],
             "rejection_reasons": self.rejection_reasons,
         })
         if self.content_hash != expected:
@@ -211,49 +285,74 @@ class Phase5DatasetIssuer:
             elif manifest.event_type == "bidask":
                 quotes.extend(decode_bidask(record) for record in records)
         try:
-            samples = _derive_samples(tuple(ticks), tuple(quotes), tuple(manifests), spec)
+            samples, outcomes = _derive_samples(
+                tuple(ticks), tuple(quotes), tuple(manifests), spec,
+            )
         except DatasetValidationError as error:
             lineage = _issue_evidence(
-                provenance, spec, (), (), None, holdout_root, witness,
+                provenance, spec, (), (), (), None, holdout_root, witness,
             )
-            return _build_result(lineage, (), (), error.reasons)
+            return _build_result(lineage, (), (), (), error.reasons)
+        outcomes_by_id = {value.row_id: value for value in outcomes}
         holdout_rows = tuple(
-            HoldoutRow(sample.source.row_id, sample.trading_date, sample.source.payload())
+            HoldoutRow(sample.source.row_id, sample.trading_date, {
+                "source": sample.source.payload(),
+                "outcome": _outcome_payload(outcomes_by_id[sample.source.row_id]),
+            })
             for sample in samples
         )
         selection = select_locked_holdout(holdout_rows) if holdout_rows else None
         if selection is None or selection.status != "READY" or not selection.development:
-            lineage = _issue_evidence(provenance, spec, samples, (), None, holdout_root, witness)
+            lineage = _issue_evidence(
+                provenance, spec, samples, outcomes, (), None, holdout_root, witness,
+            )
             return _build_result(
-                lineage, (), (), ("FEWER_THAN_40_EFFECTIVE_TRADING_DAYS",),
+                lineage, (), (), (), ("FEWER_THAN_40_EFFECTIVE_TRADING_DAYS",),
             )
         development_ids = {row.row_id for row in selection.development}
         development = tuple(sample for sample in samples if sample.source.row_id in development_ids)
+        development_outcomes = tuple(outcomes_by_id[value.source.row_id] for value in development)
         capabilities = _plan_development_folds(development, spec.requested_outer_folds)
         folds = tuple(value.manifest for value in capabilities)
         if len(capabilities) < spec.requested_outer_folds:
-            lineage = _issue_evidence(provenance, spec, samples, folds, None, holdout_root, witness)
+            lineage = _issue_evidence(
+                provenance, spec, samples, outcomes, folds, None, holdout_root, witness,
+            )
             return _build_result(
-                lineage, development, capabilities, ("FEWER_THAN_FIVE_OUTER_FOLDS",),
+                lineage, development, development_outcomes, capabilities,
+                ("FEWER_THAN_FIVE_OUTER_FOLDS",),
             )
         if holdout_root.exists():
             LockedHoldout(holdout_root, witness=witness)
             lineage = _issue_evidence(
-                provenance, spec, samples, folds, selection, holdout_root, witness,
+                provenance, spec, samples, outcomes, folds, selection,
+                holdout_root, witness,
             )
             if _read_lineage_receipt(holdout_root) != _lineage_receipt(lineage):
                 raise DatasetValidationError(("EXISTING_LINEAGE_INPUT_MISMATCH",))
-            return _build_result(lineage, development, capabilities, ())
-        LockedHoldout.create(holdout_root, selection, witness=witness)
+            return _build_result(
+                lineage, development, development_outcomes, capabilities, (),
+            )
         lineage = _issue_evidence(
-            provenance, spec, samples, folds, selection, holdout_root, witness,
+            provenance, spec, samples, outcomes, folds, selection,
+            holdout_root, witness,
+        )
+        LockedHoldout.create(
+            holdout_root, selection, witness=witness,
+            lineage_commitment_hash=lineage.content_hash,
         )
         _write_lineage_receipt(holdout_root, lineage)
-        return _build_result(lineage, development, capabilities, ())
+        return _build_result(lineage, development, development_outcomes, capabilities, ())
 
 
-def _derive_samples(ticks: tuple[TickEvent, ...], quotes: tuple[BidAskEvent, ...], manifests: tuple[SegmentManifest, ...], spec: ResearchBuildSpec) -> tuple[TemporalSample, ...]:
+def _derive_samples(
+    ticks: tuple[TickEvent, ...],
+    quotes: tuple[BidAskEvent, ...],
+    manifests: tuple[SegmentManifest, ...],
+    spec: ResearchBuildSpec,
+) -> tuple[tuple[TemporalSample, ...], tuple[ExecutableOutcome, ...]]:
     result: list[TemporalSample] = []
+    outcomes: list[ExecutableOutcome] = []
     feature_manifest = replace(default_feature_manifest(), version=spec.feature_version)
     feature_pipeline = FeaturePipeline(feature_manifest)
     label_pipeline = LabelPipeline()
@@ -362,21 +461,24 @@ def _derive_samples(ticks: tuple[TickEvent, ...], quotes: tuple[BidAskEvent, ...
                 )
             except ValueError:
                 continue
-            net_return = 0.0
-            if label.label == "LONG":
-                outcome_state = max(
-                    (state for state in processed.states if state.second < label.outcome_time),
-                    key=lambda state: state.second,
-                )
-                exit_quote = price_policy.snapshot(outcome_state)
-                net_return = exit_quote.bid - label.entry_ask - price_policy.estimated_round_trip_cost
-            elif label.label == "SHORT":
-                outcome_state = max(
-                    (state for state in processed.states if state.second < label.outcome_time),
-                    key=lambda state: state.second,
-                )
-                exit_quote = price_policy.snapshot(outcome_state)
-                net_return = label.entry_bid - exit_quote.ask - price_policy.estimated_round_trip_cost
+            outcome_state = max(
+                (state for state in processed.states if state.second < label.outcome_time),
+                key=lambda state: state.second,
+            )
+            exit_quote = price_policy.snapshot(outcome_state)
+            long_net = (
+                exit_quote.bid - label.entry_ask
+                - price_policy.estimated_round_trip_cost
+            )
+            short_net = (
+                label.entry_bid - exit_quote.ask
+                - price_policy.estimated_round_trip_cost
+            )
+            net_return = (
+                long_net if label.label == "LONG"
+                else short_net if label.label == "SHORT"
+                else 0.0
+            )
             features = {
                 name: feature.values[name]
                 for name in feature_manifest.formal_features
@@ -386,9 +488,24 @@ def _derive_samples(ticks: tuple[TickEvent, ...], quotes: tuple[BidAskEvent, ...
                 label.label, net_return, label.training_eligible,
             )
             result.append(TemporalSample(source, candidate.decision_time, label.outcome_time, trading_date))
+            outcomes.append(_issue_outcome(
+                source=source,
+                long_net_points=long_net,
+                short_net_points=short_net,
+                cost_points=spec.cost_points,
+                decision_time=candidate.decision_time,
+                outcome_time=label.outcome_time,
+                event_id=candidate.candidate_id,
+                regime=str(session),
+                target_code=candidate.target_code,
+            ))
         prior_bars[:] = bars
         prior_states.extend(processed.states)
-    return tuple(sorted(result, key=lambda value: (value.decision_time, value.source.row_id)))
+    paired = tuple(sorted(
+        zip(result, outcomes, strict=True),
+        key=lambda value: (value[0].decision_time, value[0].source.row_id),
+    ))
+    return tuple(value[0] for value in paired), tuple(value[1] for value in paired)
 
 
 def _event_matches_resolution(
@@ -433,15 +550,25 @@ def _issue_evidence(
     provenance: DataProvenanceEvidence,
     spec: ResearchBuildSpec,
     samples: tuple[TemporalSample, ...],
+    outcomes: tuple[ExecutableOutcome, ...],
     folds: tuple[NestedFoldManifest, ...],
     selection: HoldoutSelection | None,
     holdout_root: Path,
     witness: TrustedWitness,
 ) -> DatasetLineageEvidence:
+    if len({value.cost_policy_hash for value in outcomes}) > 1:
+        raise DatasetValidationError(("MULTIPLE_EXECUTABLE_COST_POLICIES",))
     ready = selection is not None
     development = selection.development if selection is not None else ()
     holdout = selection.holdout if selection is not None else ()
-    data_hash = hashlib.sha256((holdout_root / "holdout.data.json").read_bytes()).hexdigest() if ready else None
+    data_hash = None
+    if ready:
+        data_path = holdout_root / "holdout.data.json"
+        data = (
+            data_path.read_bytes() if data_path.is_file()
+            else _canonical_bytes([row.to_dict() for row in holdout])
+        )
+        data_hash = hashlib.sha256(data).hexdigest()
     payload = {
         "status": "READY" if ready else "REJECTED_INSUFFICIENT_DATA",
         "raw_dataset_hash": provenance.dataset_hash,
@@ -463,6 +590,9 @@ def _issue_evidence(
         "holdout_selection_hash": selection.content_hash if selection is not None else None,
         "holdout_data_hash": data_hash,
         "holdout_row_count": len(holdout),
+        "executable_outcome_hashes": tuple(
+            (value.row_id, value.content_hash) for value in outcomes
+        ),
     }
     instance = object.__new__(DatasetLineageEvidence)
     values: dict[str, object] = {
@@ -489,12 +619,14 @@ def _sample_payload(value: TemporalSample) -> dict[str, object]:
 def _build_result(
     lineage: DatasetLineageEvidence,
     development: tuple[TemporalSample, ...],
+    outcomes: tuple[ExecutableOutcome, ...],
     capabilities: tuple[Phase4FoldCapabilities, ...],
     rejection_reasons: tuple[str, ...],
 ) -> DatasetBuildResult:
     payload = {
         "lineage": lineage.content_hash,
         "development": [_sample_payload(value) for value in development],
+        "outcomes": [value.content_hash for value in outcomes],
         "folds": [value.manifest.content_hash for value in capabilities],
         "rejection_reasons": rejection_reasons,
     }
@@ -502,6 +634,7 @@ def _build_result(
     for name, value in (
         ("lineage", lineage),
         ("development_samples", development),
+        ("development_outcomes", outcomes),
         ("fold_capabilities", capabilities),
         ("rejection_reasons", rejection_reasons),
         ("content_hash", canonical_hash(payload)),
@@ -521,6 +654,7 @@ def _lineage_receipt(lineage: DatasetLineageEvidence) -> dict[str, object]:
         "fold_manifest_hashes": list(lineage.fold_manifest_hashes),
         "holdout_selection_hash": lineage.holdout_selection_hash,
         "holdout_data_hash": lineage.holdout_data_hash,
+        "executable_outcome_hashes": [list(value) for value in lineage.executable_outcome_hashes],
     }
 
 
@@ -546,3 +680,79 @@ def _write_lineage_receipt(root: Path, lineage: DatasetLineageEvidence) -> None:
 def _sha256(value: str) -> None:
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError("invalid lineage SHA-256")
+
+
+def _canonical_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        + "\n"
+    ).encode()
+
+
+def _issue_outcome(
+    *,
+    source: Phase4SourceRow,
+    long_net_points: float,
+    short_net_points: float,
+    cost_points: float,
+    decision_time: datetime,
+    outcome_time: datetime,
+    event_id: str,
+    regime: str,
+    target_code: str,
+) -> ExecutableOutcome:
+    payload = {
+        "row_id": source.row_id,
+        "source_row_hash": source.content_hash,
+        "long_net_points": long_net_points,
+        "short_net_points": short_net_points,
+        "cost_policy_hash": canonical_hash({
+            "version": "phase5-fixed-executable-cost-v1",
+            "entry_slippage": 0.0,
+            "exit_slippage": cost_points,
+        }),
+        "decision_time": decision_time.isoformat(),
+        "outcome_time": outcome_time.isoformat(),
+        "event_id": event_id,
+        "regime": regime,
+        "target_code": target_code,
+    }
+    instance = object.__new__(ExecutableOutcome)
+    values: tuple[tuple[str, object], ...] = (
+        ("row_id", source.row_id),
+        ("source_row_hash", source.content_hash),
+        ("long_net_points", long_net_points),
+        ("short_net_points", short_net_points),
+        ("cost_policy_hash", payload["cost_policy_hash"]),
+        ("decision_time", decision_time),
+        ("outcome_time", outcome_time),
+        ("event_id", event_id),
+        ("regime", regime),
+        ("target_code", target_code),
+        ("content_hash", canonical_hash(payload)),
+        ("_seal", _OUTCOME_SEAL),
+    )
+    for name, value in values:
+        object.__setattr__(instance, name, value)
+    instance.__post_init__()
+    return instance
+
+
+def _outcome_payload(
+    value: ExecutableOutcome,
+    *,
+    include_hash: bool = True,
+) -> dict[str, object]:
+    payload = {
+        "row_id": value.row_id,
+        "source_row_hash": value.source_row_hash,
+        "long_net_points": value.long_net_points,
+        "short_net_points": value.short_net_points,
+        "cost_policy_hash": value.cost_policy_hash,
+        "decision_time": value.decision_time.isoformat(),
+        "outcome_time": value.outcome_time.isoformat(),
+        "event_id": value.event_id,
+        "regime": value.regime,
+        "target_code": value.target_code,
+    }
+    return {**payload, "content_hash": value.content_hash} if include_hash else payload

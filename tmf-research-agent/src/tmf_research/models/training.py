@@ -8,8 +8,12 @@ from tmf_research.models.provenance import (
     InnerTrainDataset,
     InnerValidationDataset,
     InnerValidationPredictions,
+    FrozenDecisionPolicy,
+    OuterTestDataset,
+    OuterTestPredictions,
     _generated_prediction,
     _generated_predictions,
+    _generated_outer_predictions,
     canonical_hash,
 )
 from tmf_research.models.scaler import FoldPreprocessor
@@ -150,6 +154,50 @@ class Phase4TrainingResult:
             preprocessor_hash=self.preprocessor.content_hash,
             model_hash=self.model.content_hash,
             rows=generated,
+        )
+
+    def predict_outer_test(
+        self,
+        dataset: OuterTestDataset,
+        calibration: object,
+        policy: FrozenDecisionPolicy,
+    ) -> OuterTestPredictions:
+        from tmf_research.models.calibration import TwoStageCalibrationSelection
+
+        if not isinstance(dataset, OuterTestDataset):
+            raise TypeError("outer scoring requires the sealed outer-test capability")
+        if not isinstance(calibration, TwoStageCalibrationSelection):
+            raise TypeError("outer scoring requires sealed inner-validation calibration")
+        if not isinstance(policy, FrozenDecisionPolicy):
+            raise TypeError("outer scoring requires a frozen decision policy")
+        if (
+            dataset.manifest != self.preprocessor.provenance.manifest
+            or calibration.calibrator.provenance != self.preprocessor.provenance
+            or calibration.calibrator.preprocessor_hash != self.preprocessor.content_hash
+            or calibration.calibrator.model_hash != self.model.content_hash
+        ):
+            raise ValueError("outer model/calibration/fold provenance mismatch")
+        calibration_hash = canonical_hash(calibration.calibrator.to_dict())
+        if policy.calibration_hash != calibration_hash:
+            raise ValueError("outer decision policy does not bind exact calibration")
+        values: list[tuple[float, float]] = []
+        for row in dataset.rows:
+            if tuple(row.features) != self.preprocessor.feature_order:
+                raise ValueError("outer feature order mismatch")
+            transformed = self.preprocessor.transform(row.features)
+            if not transformed.is_eligible:
+                values.append((0.0, 0.5))
+                continue
+            values.append(calibration.calibrator.calibrate(
+                self.model.trade_model.predict_probability(transformed.values),
+                self.model.direction_model.predict_probability(transformed.values),
+            ))
+        return _generated_outer_predictions(
+            dataset=dataset,
+            model_hash=self.model.content_hash,
+            calibration_hash=calibration_hash,
+            policy=policy,
+            values=values,
         )
 
 

@@ -24,6 +24,7 @@ _AUTHORITY_DOMAIN = "tmf-phase4-fold-authority-v2"
 _PLANNER_AUTHORITY = object()
 _ISSUED_CAPABILITY_SEAL = object()
 _GENERATED_PREDICTION_SEAL = object()
+_DECISION_POLICY_SEAL = object()
 _CHECKSUM_VALIDATED_DESERIALIZATION = object()
 
 
@@ -494,6 +495,179 @@ class OuterTestDataset(_SealedAuthority):
             self.outer_test_hash,
         )
         _verify_authority("outer-test-dataset", payload, self._authority)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class FrozenDecisionPolicy(_SealedAuthority):
+    trade_threshold: float
+    direction_threshold: float
+    calibration_hash: str
+    thresholds_hash: str
+    rules_hash: str
+    content_hash: str
+    _seal: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _DECISION_POLICY_SEAL:
+            raise TypeError("decision policy must be frozen from calibration evidence")
+        _probability(self.trade_threshold, "trade threshold")
+        _probability(self.direction_threshold, "direction threshold")
+        for value in (self.calibration_hash, self.thresholds_hash, self.rules_hash):
+            validate_sha256(value, "decision policy commitment")
+        expected_thresholds = canonical_hash({
+            "trade_probability": 0.5, "direction_probability": 0.5,
+        })
+        if self.thresholds_hash != expected_thresholds:
+            raise ValueError("Phase 5 decision thresholds are fixed before outer evaluation")
+        payload = {
+            "trade_threshold": self.trade_threshold,
+            "direction_threshold": self.direction_threshold,
+            "calibration_hash": self.calibration_hash,
+            "thresholds_hash": self.thresholds_hash,
+            "rules_hash": self.rules_hash,
+        }
+        if canonical_hash(payload) != self.content_hash:
+            raise ValueError("frozen decision policy hash mismatch")
+
+
+def freeze_decision_policy(
+    calibration: object,
+    *,
+    thresholds_hash: str,
+    rules_hash: str,
+) -> FrozenDecisionPolicy:
+    from tmf_research.models.calibration import TwoStageCalibrationSelection
+
+    if not isinstance(calibration, TwoStageCalibrationSelection):
+        raise TypeError("decision policy requires sealed calibration selection")
+    calibration_hash = canonical_hash(calibration.calibrator.to_dict())
+    trade_threshold = 0.5
+    direction_threshold = 0.5
+    payload = {
+        "trade_threshold": trade_threshold,
+        "direction_threshold": direction_threshold,
+        "calibration_hash": calibration_hash,
+        "thresholds_hash": thresholds_hash,
+        "rules_hash": rules_hash,
+    }
+    return _sealed_instance(
+        FrozenDecisionPolicy,
+        trade_threshold=trade_threshold,
+        direction_threshold=direction_threshold,
+        calibration_hash=calibration_hash,
+        thresholds_hash=thresholds_hash,
+        rules_hash=rules_hash,
+        content_hash=canonical_hash(payload),
+        _seal=_DECISION_POLICY_SEAL,
+    )
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class OuterTestPrediction(_SealedAuthority):
+    source_row_id: str
+    source_row_hash: str
+    p_trade: float
+    p_long_given_trade: float
+    signal: Literal["NO_TRADE", "LONG", "SHORT"]
+    _seal: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _GENERATED_PREDICTION_SEAL:
+            raise TypeError("outer predictions require generated model authority")
+        if not self.source_row_id.strip() or self.signal not in ("NO_TRADE", "LONG", "SHORT"):
+            raise ValueError("invalid outer prediction identity or signal")
+        validate_sha256(self.source_row_hash, "outer prediction source")
+        _probability(self.p_trade, "outer p_trade")
+        _probability(self.p_long_given_trade, "outer p_long")
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "source_row_id": self.source_row_id,
+            "source_row_hash": self.source_row_hash,
+            "p_trade": self.p_trade,
+            "p_long_given_trade": self.p_long_given_trade,
+            "signal": self.signal,
+        }
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class OuterTestPredictions(_SealedAuthority):
+    manifest: NestedFoldManifest
+    model_hash: str
+    calibration_hash: str
+    decision_policy_hash: str
+    rows: tuple[OuterTestPrediction, ...]
+    content_hash: str
+    _seal: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _GENERATED_PREDICTION_SEAL:
+            raise TypeError("outer predictions require generated model authority")
+        for value in (
+            self.model_hash, self.calibration_hash,
+            self.decision_policy_hash, self.content_hash,
+        ):
+            validate_sha256(value, "outer prediction commitment")
+        committed = self.manifest.outer_test.row_hashes
+        actual = tuple((value.source_row_id, value.source_row_hash) for value in self.rows)
+        if actual != committed:
+            raise ValueError("outer predictions do not match exact ordered test rows")
+        if canonical_hash(self._payload()) != self.content_hash:
+            raise ValueError("outer prediction hash mismatch")
+
+    def _payload(self) -> dict[str, object]:
+        return {
+            "manifest_hash": self.manifest.content_hash,
+            "model_hash": self.model_hash,
+            "calibration_hash": self.calibration_hash,
+            "decision_policy_hash": self.decision_policy_hash,
+            "rows": [value.payload() for value in self.rows],
+        }
+
+
+def _generated_outer_predictions(
+    *,
+    dataset: OuterTestDataset,
+    model_hash: str,
+    calibration_hash: str,
+    policy: FrozenDecisionPolicy,
+    values: Sequence[tuple[float, float]],
+) -> OuterTestPredictions:
+    if len(values) != len(dataset.rows):
+        raise ValueError("outer prediction count does not match sealed test rows")
+    rows = []
+    for source, (p_trade, p_long) in zip(dataset.rows, values, strict=True):
+        signal: Literal["NO_TRADE", "LONG", "SHORT"] = (
+            "NO_TRADE" if p_trade < policy.trade_threshold
+            else "LONG" if p_long >= policy.direction_threshold
+            else "SHORT"
+        )
+        rows.append(_sealed_instance(
+            OuterTestPrediction,
+            source_row_id=source.row_id,
+            source_row_hash=source.content_hash,
+            p_trade=p_trade,
+            p_long_given_trade=p_long,
+            signal=signal,
+            _seal=_GENERATED_PREDICTION_SEAL,
+        ))
+    payload = {
+        "manifest_hash": dataset.manifest.content_hash,
+        "model_hash": model_hash,
+        "calibration_hash": calibration_hash,
+        "decision_policy_hash": policy.content_hash,
+        "rows": [value.payload() for value in rows],
+    }
+    return _sealed_instance(
+        OuterTestPredictions,
+        manifest=dataset.manifest,
+        model_hash=model_hash,
+        calibration_hash=calibration_hash,
+        decision_policy_hash=policy.content_hash,
+        rows=tuple(rows),
+        content_hash=canonical_hash(payload),
+        _seal=_GENERATED_PREDICTION_SEAL,
+    )
 
 
 @dataclass(frozen=True, slots=True, init=False)

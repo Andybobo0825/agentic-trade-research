@@ -14,7 +14,9 @@ from tmf_research.validation.overfitting import FoldEvidence, ResearchStatus, St
 from tmf_research.validation.report import FoldReport
 from tests.overfitting.test_experiment_registry import attempt, definition
 from tests.phase4_test_support import TestPhase4FoldPlanner
-from tests.phase5_test_support import _row, aligned_definition, complete_fold_evidence, synthetic_provenance
+from tests.phase5_test_support import (
+    _row, aligned_definition, complete_fold_evidence, replace_test_fold, synthetic_provenance,
+)
 
 
 def evidence_with_candidate_counts(train_candidates: int, test_candidates: int) -> FoldEvidence:
@@ -41,7 +43,7 @@ def evidence_with_candidate_counts(train_candidates: int, test_candidates: int) 
         validation_start=validation_start, validation_end=validation_end,
         outer_test_start=test_start, outer_test_end=test_start + timedelta(minutes=test_candidates + 1),
     )
-    return replace(complete_fold_evidence()[0][0], manifest=materialized.manifest)
+    return replace_test_fold(complete_fold_evidence()[0][0], manifest=materialized.manifest)
 
 
 def decision_for(
@@ -69,6 +71,12 @@ def decision_for(
 
 
 class ModelSelectionTests(unittest.TestCase):
+    def test_fold_evidence_public_construction_and_replace_are_closed(self) -> None:
+        with self.assertRaises(TypeError):
+            FoldEvidence()
+        with self.assertRaises(TypeError):
+            replace(complete_fold_evidence()[0][0], net_pnl=999.0)
+
     def test_candidate_order_is_strict_brier_logloss_ece_then_descending_ev(self) -> None:
         priorities = (
             ("best_brier", CalibrationMetrics(0.09, 9.0, 9.0, -9.0)),
@@ -94,9 +102,9 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertEqual((fold.train_candidates, fold.test_candidates), (5_000, 500))
         self.assertEqual(fold.fold_status, "VALID")
         with self.assertRaisesRegex(ValueError, "LONG plus SHORT"):
-            replace(fold, trade_count=31)
+            replace_test_fold(fold, trade_count=31)
         with self.assertRaisesRegex(ValueError, "integer"):
-            replace(fold, trade_count=30.0, long_count=15.0, short_count=15.0)  # type: ignore[arg-type]
+            replace_test_fold(fold, trade_count=30.0, long_count=15.0, short_count=15.0)
 
     def test_duplicate_outer_fold_id_or_manifest_rejected(self) -> None:
         values = complete_fold_evidence()
@@ -118,7 +126,7 @@ class ModelSelectionTests(unittest.TestCase):
     def test_exactly_half_brier_and_logloss_noninferiority_is_not_majority(self) -> None:
         values = complete_fold_evidence()
         folds = tuple(
-            fold if index < 3 else replace(fold, baseline_brier=0.1, baseline_log_loss=0.4)
+            fold if index < 3 else replace_test_fold(fold, baseline_brier=0.1, baseline_log_loss=0.4)
             for index, fold in enumerate(values[0])
         )
         reports = values[1]
@@ -152,9 +160,9 @@ class ModelSelectionTests(unittest.TestCase):
         )
         fold = values[0][0]
         for insufficient in (
-            replace(fold, trade_count=29, long_count=14, short_count=15),
-            replace(fold, trade_count=30, long_count=9, short_count=21),
-            replace(fold, trade_count=30, long_count=21, short_count=9),
+            replace_test_fold(fold, trade_count=29, long_count=14, short_count=15),
+            replace_test_fold(fold, trade_count=30, long_count=9, short_count=21),
+            replace_test_fold(fold, trade_count=30, long_count=21, short_count=9),
         ):
             with self.subTest(counts=(insufficient.trade_count, insufficient.long_count, insufficient.short_count)):
                 self.assertFalse(insufficient.sample_sufficient)
@@ -169,7 +177,7 @@ class ModelSelectionTests(unittest.TestCase):
     def test_nonpositive_70_percent_and_concentration_caps_fail_closed(self) -> None:
         values = complete_fold_evidence()
         weak = tuple(
-            fold if index < 4 else replace(fold, test_ev=-0.1)
+            fold if index < 4 else replace_test_fold(fold, test_ev=-0.1)
             for index, fold in enumerate(values[0])
         )
         weak_reasons = _core_reasons(weak, values[3])[2]
@@ -181,14 +189,14 @@ class ModelSelectionTests(unittest.TestCase):
             values[3].events, True,
         )
         concentrated_folds = (
-            replace(values[0][0], net_pnl=30.0),
-            *(replace(fold, net_pnl=6.0) for fold in values[0][1:]),
+            replace_test_fold(values[0][0], net_pnl=30.0),
+            *(replace_test_fold(fold, net_pnl=6.0) for fold in values[0][1:]),
         )
         cap_reasons = _core_reasons(concentrated_folds, concentrated)[2]
         self.assertIn("FOLD_CONCENTRATION_ABOVE_40_PERCENT", cap_reasons)
         self.assertIn("MONTH_CONCENTRATION_ABOVE_30_PERCENT", cap_reasons)
         self.assertIn("DIRECTION_CONCENTRATION_ABOVE_85_PERCENT", cap_reasons)
-        negative_folds = tuple(replace(fold, net_pnl=-10.0) for fold in values[0])
+        negative_folds = tuple(replace_test_fold(fold, net_pnl=-10.0) for fold in values[0])
         negative_dimensions = StabilityDimensions(
             values[3].regimes, {"m1": -30.0, "m2": -30.0},
             {"LONG": -30.0, "SHORT": -30.0}, {"T1": -30.0, "T2": -30.0},

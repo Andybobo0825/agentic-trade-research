@@ -14,6 +14,7 @@ from tmf_research.experiments.registry import (
 from tmf_research.experiments.comparison import require_canonical_fold_periods
 from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
 from tmf_research.validation.dataset_lineage import DatasetBuildResult, DatasetLineageEvidence
+from tmf_research.validation.fold_evaluation import ProductionEvaluation
 from tmf_research.models.calibration import TwoStageCalibrationSelection
 from tmf_research.models.provenance import NestedFoldManifest
 from tmf_research.validation.ablation import ABLATION_GROUPS, AblationComparison
@@ -132,6 +133,8 @@ class Phase5EvidenceBundle:
     holdout: LockedHoldoutApprovalEvidence | None
     data_provenance: DataProvenanceEvidence
     dataset_lineage: DatasetLineageEvidence | None
+    production_evaluation_hash: str | None
+    production_evaluation: ProductionEvaluation | None
     content_hash: str
     _seal: object
 
@@ -159,6 +162,7 @@ def assemble_phase5_evidence(
     holdout: LockedHoldoutApprovalEvidence | None,
     data_provenance: DataProvenanceEvidence,
     dataset_lineage: DatasetLineageEvidence | DatasetBuildResult | None = None,
+    production_evaluation: ProductionEvaluation | None = None,
 ) -> Phase5EvidenceBundle:
     if isinstance(dataset_lineage, DatasetBuildResult):
         dataset_build: DatasetBuildResult | None = dataset_lineage
@@ -170,6 +174,23 @@ def assemble_phase5_evidence(
         dataset_build = None
         authoritative_lineage = None
     fold_values, report_values, gap_values = tuple(folds), tuple(reports), tuple(gaps)
+    if data_provenance.kind is DataProvenanceKind.REAL_READONLY_MARKET_DATA:
+        if dataset_build is None or not isinstance(production_evaluation, ProductionEvaluation):
+            raise ValueError("real Phase 5 evidence requires sealed raw-derived production evaluation")
+        if production_evaluation.dataset_build_hash != dataset_build.content_hash:
+            raise ValueError("production evaluation does not belong to exact dataset build")
+        derived_folds = tuple(value.evidence for value in production_evaluation.folds)
+        if fold_values != derived_folds or dimensions != production_evaluation.dimensions:
+            raise ValueError("caller fold metrics/dimensions cannot replace raw-derived evaluation")
+        if (
+            production_evaluation.policy.thresholds_hash
+            != experiment.candidate_hashes["thresholds"]
+            or production_evaluation.policy.rules_hash
+            != experiment.candidate_hashes["rules"]
+        ):
+            raise ValueError("production decision policy does not match preregistered candidate")
+    elif any(value.authority != "TEST_ONLY" for value in fold_values):
+        raise ValueError("synthetic mechanics require explicit TEST_ONLY fold authority")
     keys = tuple((fold.fold_id, fold.manifest_hash) for fold in fold_values)
     if not keys or len(set(keys)) != len(keys):
         raise ValueError("Phase 5 evidence requires unique planner fold IDs/manifests")
@@ -234,6 +255,7 @@ def assemble_phase5_evidence(
             raise ValueError("holdout evaluation cost model does not match experiment context")
         if (
             dataset_build is None
+            or holdout.authority != "RAW_DERIVED"
             or authoritative_lineage is None
             or authoritative_lineage.raw_dataset_hash != data_provenance.dataset_hash
             or tuple(value.manifest for value in dataset_build.fold_capabilities)
@@ -253,6 +275,7 @@ def assemble_phase5_evidence(
         fold_values, report_values, gap_values, dimensions, ablation_values,
         coefficient_values, sensitivity_values, calibration_values,
         experiment, holdout, data_provenance, authoritative_lineage,
+        None if production_evaluation is None else production_evaluation.content_hash,
     )
     instance = object.__new__(Phase5EvidenceBundle)
     values: dict[str, object] = {
@@ -262,6 +285,10 @@ def assemble_phase5_evidence(
         "calibrations": calibration_values, "experiment": experiment,
         "holdout": holdout, "data_provenance": data_provenance,
         "dataset_lineage": authoritative_lineage,
+        "production_evaluation_hash": (
+            None if production_evaluation is None else production_evaluation.content_hash
+        ),
+        "production_evaluation": production_evaluation,
         "content_hash": _hash(payload), "_seal": _BUNDLE_SEAL,
     }
     for name, value in values.items():
@@ -320,12 +347,15 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
         bundle.folds, bundle.reports, bundle.gaps, bundle.dimensions, bundle.ablations,
         bundle.coefficients, bundle.sensitivities, bundle.calibrations,
         bundle.experiment, bundle.holdout, bundle.data_provenance, bundle.dataset_lineage,
+        bundle.production_evaluation_hash,
     ))
     if authoritative_hash != bundle.content_hash:
         raise ValueError("Phase 5 evidence was mutated after provenance binding")
     bundle.data_provenance.assert_current()
     if bundle.dataset_lineage is not None:
         bundle.dataset_lineage.assert_current()
+    if bundle.production_evaluation is not None:
+        bundle.production_evaluation.__post_init__()
     bundle.experiment.assert_current()
     if bundle.holdout is not None:
         bundle.holdout.assert_current()
@@ -343,6 +373,8 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
         reasons.append("COEFFICIENT_OR_REMOVAL_INSTABILITY")
     if any(not value.group_supported for value in bundle.ablations):
         reasons.append("ABLATION_MAJORITY_SUPPORT_FAILED")
+    if bundle.data_provenance.kind is DataProvenanceKind.REAL_READONLY_MARKET_DATA:
+        reasons.append("RAW_DERIVED_PROMOTION_EVIDENCE_INCOMPLETE")
     if len(valid) < 5:
         research = ResearchStatus.INSUFFICIENT_DATA
         status = ModelStatus.REJECTED_INSUFFICIENT_DATA
@@ -443,11 +475,14 @@ def _phase5_payload(
     holdout: LockedHoldoutApprovalEvidence | None,
     data_provenance: DataProvenanceEvidence,
     dataset_lineage: DatasetLineageEvidence | None,
+    production_evaluation_hash: str | None,
 ) -> dict[str, object]:
     return {
         "folds": [{
             "manifest_hash": value.manifest_hash,
             "fold_id": value.fold_id,
+            "authority": value.authority,
+            "derivation_hash": value.derivation_hash,
             "counts": [value.train_candidates, value.test_candidates, value.trade_count, value.long_count, value.short_count],
             "metrics": [
                 value.train_ev, value.test_ev, value.baseline_net_ev, value.baseline_brier,
@@ -503,9 +538,11 @@ def _phase5_payload(
             holdout.data_hash, holdout.state_hash, holdout.evaluation_hash,
             holdout.cost_model_hash, holdout.terminal_anchor_hash,
             dict(holdout.candidate_hashes), holdout.epoch, holdout.status,
+            holdout.authority,
         ],
         "provenance": data_provenance.content_hash,
         "dataset_lineage": None if dataset_lineage is None else dataset_lineage.content_hash,
+        "production_evaluation": production_evaluation_hash,
     }
 
 

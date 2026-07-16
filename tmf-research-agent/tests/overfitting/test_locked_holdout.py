@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -55,10 +56,16 @@ def evaluate(vault: LockedHoldout, frozen: FrozenCandidate, *, losing: bool = Fa
         )
         for index, row in enumerate(holdout_rows[:40])
     )
-    return vault.evaluate_once(frozen, predictions, trades, cost)
+    return vault.evaluate_test_only(frozen, predictions, trades, cost)
 
 
 class LockedHoldoutContractTests(unittest.TestCase):
+    def test_production_evaluator_accepts_only_model_bundle_and_frozen_policy(self) -> None:
+        self.assertEqual(
+            tuple(inspect.signature(LockedHoldout.evaluate_once).parameters),
+            ("self", "bundle", "policy"),
+        )
+
     def test_full_vault_restore_and_missing_or_wrong_witness_remain_revoked(self) -> None:
         with TemporaryDirectory() as directory:
             base = Path(directory)
@@ -145,9 +152,8 @@ class LockedHoldoutContractTests(unittest.TestCase):
             evaluation = evaluate(vault, frozen)
             self.assertEqual(evaluation.status, "PASSED")
             restarted = LockedHoldout(root)
-            evidence = restarted.approval_evidence(frozen)
-            self.assertEqual(evidence.status, "PASSED")
-            self.assertEqual(evaluation.terminal_anchor_hash, evidence.terminal_anchor_hash)
+            with self.assertRaisesRegex(HoldoutAccessError, "TEST_ONLY"):
+                restarted.approval_evidence(frozen)
             with self.assertRaises(HoldoutAccessError):
                 restarted.mark_rerun_attempt()
             self.assertTrue(restarted.contaminated)
@@ -161,12 +167,9 @@ class LockedHoldoutContractTests(unittest.TestCase):
                 frozen = candidate()
                 vault.freeze(frozen)
                 evaluate(vault, frozen)
-                evidence = vault.approval_evidence(frozen)
                 (root / target).write_text("{}\n", encoding="utf-8")
                 with self.assertRaises(HoldoutAccessError):
                     LockedHoldout(root)
-                with self.assertRaises(HoldoutAccessError):
-                    evidence.assert_current()
                 self.assertFalse(vault.approval_eligible(frozen))
         with TemporaryDirectory() as directory:
             vault = LockedHoldout.create(Path(directory) / "holdout", select_locked_holdout(rows()))
@@ -191,11 +194,10 @@ class LockedHoldoutContractTests(unittest.TestCase):
             frozen = candidate()
             vault.freeze(frozen)
             self.assertEqual(evaluate(vault, frozen).status, "PASSED")
-            evidence = vault.approval_evidence(frozen)
+            with self.assertRaisesRegex(HoldoutAccessError, "TEST_ONLY"):
+                vault.approval_evidence(frozen)
             with self.assertRaises(HoldoutAccessError):
                 vault.mark_rerun_attempt()
-            with self.assertRaisesRegex(HoldoutAccessError, "stale|current"):
-                evidence.assert_current()
 
     def test_restoring_pre_contamination_state_cannot_revoke_the_rerun_revocation(self) -> None:
         with TemporaryDirectory() as directory:
@@ -204,7 +206,6 @@ class LockedHoldoutContractTests(unittest.TestCase):
             frozen = candidate()
             vault.freeze(frozen)
             self.assertEqual(evaluate(vault, frozen).status, "PASSED")
-            evidence = vault.approval_evidence(frozen)
             approved_state = (root / "holdout.state.json").read_bytes()
             with self.assertRaises(HoldoutAccessError):
                 vault.mark_rerun_attempt()
@@ -213,8 +214,6 @@ class LockedHoldoutContractTests(unittest.TestCase):
             (root / "holdout.state.json").write_bytes(approved_state)
             with self.assertRaises(HoldoutAccessError):
                 LockedHoldout(root)
-            with self.assertRaises(HoldoutAccessError):
-                evidence.assert_current()
             self.assertFalse(vault.approval_eligible(frozen))
 
 

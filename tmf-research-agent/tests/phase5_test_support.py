@@ -29,6 +29,7 @@ from tmf_research.validation.overfitting import (
     REQUIRED_REGIMES,
     StabilityDimensions,
     generalization_gap,
+    _issue_test_fold_evidence,
 )
 from tmf_research.validation.metrics import CalibrationRow
 from tmf_research.validation.report import FoldReport
@@ -45,6 +46,21 @@ from tests.unit.test_phase4_training import training_spec
 
 def synthetic_provenance() -> DataProvenanceEvidence:
     return _issue_synthetic_test_provenance("dataset-v1")
+
+
+def replace_test_fold(fold: FoldEvidence, **changes: object) -> FoldEvidence:
+    names = (
+        "trade_count", "long_count", "short_count", "train_ev", "test_ev",
+        "baseline_net_ev", "baseline_brier", "baseline_log_loss", "net_pnl",
+        "train_log_loss", "test_log_loss", "train_brier", "test_brier",
+        "train_profit_factor", "test_profit_factor", "train_trade_frequency",
+        "test_trade_frequency", "train_accuracy", "test_accuracy",
+    )
+    manifest = changes.pop("manifest", fold.manifest)
+    if changes.keys() - set(names):
+        raise ValueError("unknown test fold override")
+    values = tuple(changes.get(name, getattr(fold, name)) for name in names)
+    return _issue_test_fold_evidence(manifest, *values)  # type: ignore[arg-type]
 
 
 def aligned_definition(
@@ -150,7 +166,7 @@ def complete_fold_evidence() -> tuple[
             (1.0, 0.6, 1.25): 0.1, (1.0, 0.6, 1.75): 0.1,
         }
         sensitivities.append(sensitivity_evidence(materialized.manifest, sensitivity_results, (1.0, 0.6, 1.5)))
-        evidence = FoldEvidence(
+        evidence = _issue_test_fold_evidence(
             materialized.manifest, 30, 15, 15,
             0.15, 0.20, 0.10, 0.25, 0.60, 10.0,
             0.55, 0.55, 0.22, 0.22, 1.10, 1.10, 0.04, 0.04, 0.60, 0.60,

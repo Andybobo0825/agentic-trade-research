@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
+from typing import Literal, cast
 
 from tmf_research.experiments.registry import ModelStatus
 from tmf_research.models.provenance import NestedFoldManifest
@@ -15,6 +16,8 @@ REQUIRED_REGIMES = frozenset({
     "TRENDING", "RANGING", "EXPIRY_WEEK", "NON_EXPIRY_WEEK", "OPENING_30M",
     "INTRADAY", "CLOSING_30M",
 })
+_FOLD_EVIDENCE_SEAL = object()
+FoldEvidenceAuthority = Literal["RAW_DERIVED", "TEST_ONLY"]
 
 
 class ResearchStatus(str, Enum):
@@ -23,7 +26,7 @@ class ResearchStatus(str, Enum):
     REJECTED = "RESEARCH_REJECTED"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class FoldEvidence:
     manifest: NestedFoldManifest
     trade_count: int
@@ -45,8 +48,22 @@ class FoldEvidence:
     test_trade_frequency: float
     train_accuracy: float
     test_accuracy: float
+    authority: FoldEvidenceAuthority
+    derivation_hash: str
+    _seal: object
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> FoldEvidence:
+        raise TypeError("fold evidence must be issued by an authoritative evaluator")
 
     def __post_init__(self) -> None:
+        if self._seal is not _FOLD_EVIDENCE_SEAL or self.authority not in (
+            "RAW_DERIVED", "TEST_ONLY",
+        ):
+            raise TypeError("invalid fold evidence authority")
+        if len(self.derivation_hash) != 64 or any(
+            value not in "0123456789abcdef" for value in self.derivation_hash
+        ):
+            raise ValueError("fold derivation hash is required")
         if not isinstance(self.manifest, NestedFoldManifest):
             raise TypeError("fold evidence requires a sealed planner manifest")
         counts = (self.trade_count, self.long_count, self.short_count)
@@ -95,6 +112,58 @@ class FoldEvidence:
     @property
     def fold_status(self) -> str:
         return "VALID" if self.sample_sufficient else "INSUFFICIENT_SAMPLE"
+
+
+def _issue_fold_evidence(
+    manifest: NestedFoldManifest,
+    values: tuple[
+        int, int, int, float, float, float, float, float, float, float,
+        float, float, float, float, float, float, float, float, float,
+    ],
+    *,
+    authority: FoldEvidenceAuthority,
+    derivation_hash: str,
+) -> FoldEvidence:
+    instance = object.__new__(FoldEvidence)
+    names = (
+        "trade_count", "long_count", "short_count", "train_ev", "test_ev",
+        "baseline_net_ev", "baseline_brier", "baseline_log_loss", "net_pnl",
+        "train_log_loss", "test_log_loss", "train_brier", "test_brier",
+        "train_profit_factor", "test_profit_factor", "train_trade_frequency",
+        "test_trade_frequency", "train_accuracy", "test_accuracy",
+    )
+    entries = tuple(zip(names, values, strict=True))
+    for name, value in (
+        ("manifest", manifest), *entries,
+        ("authority", authority), ("derivation_hash", derivation_hash),
+        ("_seal", _FOLD_EVIDENCE_SEAL),
+    ):
+        object.__setattr__(instance, name, value)
+    instance.__post_init__()
+    return instance
+
+
+def _issue_test_fold_evidence(
+    manifest: NestedFoldManifest,
+    *values: int | float,
+) -> FoldEvidence:
+    if len(values) != 19:
+        raise ValueError("test fold evidence requires the complete metric vector")
+    import hashlib
+    import json
+
+    derivation_hash = hashlib.sha256(json.dumps(
+        [manifest.content_hash, *values], separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+    return _issue_fold_evidence(
+        manifest,
+        cast(tuple[
+            int, int, int, float, float, float, float, float, float, float,
+            float, float, float, float, float, float, float, float, float,
+        ], values),
+        authority="TEST_ONLY",
+        derivation_hash=derivation_hash,
+    )
 
 
 @dataclass(frozen=True, slots=True)

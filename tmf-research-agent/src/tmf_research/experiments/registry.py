@@ -817,6 +817,8 @@ def publish_model_registry(root: Path, publication: RegistryPublication) -> str:
         raise ValueError("model status is outside fixed SPEC 42 states")
     if provenance not in ("REAL_READONLY_MARKET_DATA", "SYNTHETIC_TEST_ONLY"):
         raise ValueError("unknown data provenance")
+    if provenance == "SYNTHETIC_TEST_ONLY":
+        raise ValueError("TEST_ONLY evidence cannot be published to the model registry")
     if provenance == "SYNTHETIC_TEST_ONLY" and status in (
         "LOCKED_TEST_PENDING", "LOCKED_TEST_FAILED", "APPROVED_FOR_PAPER",
     ):

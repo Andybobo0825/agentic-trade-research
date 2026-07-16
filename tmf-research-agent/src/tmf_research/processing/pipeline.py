@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal, cast
 
 from tmf_research.domain.events import BidAskEvent, TickEvent
 from tmf_research.domain.sessions import SessionResolution
@@ -119,7 +118,7 @@ class ProcessingPipeline:
         expected_seconds = len(frozen_states)
         quality = QualityReportBuilder().build(
             trading_date=resolution.trading_date,
-            session=cast(Literal["DAY", "NIGHT"], resolution.session),
+            session=resolution.session,
             ticks=window_ticks,
             bidasks=window_bidasks,
             rejection_reasons=rejection_reasons,

@@ -535,6 +535,7 @@ class LockedHoldout:
         raise HoldoutAccessError("locked holdout cannot be re-run")
 
     def approval_evidence(self, candidate: FrozenCandidate) -> LockedHoldoutApprovalEvidence:
+        self._verify_witness()
         self.assert_candidate_unchanged(candidate)
         self._verify_files(contaminate=True)
         state = self._state()

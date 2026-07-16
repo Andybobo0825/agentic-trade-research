@@ -13,6 +13,7 @@ from tmf_research.experiments.registry import (
 )
 from tmf_research.experiments.comparison import require_canonical_fold_periods
 from tmf_research.validation.data_provenance import DataProvenanceEvidence, DataProvenanceKind
+from tmf_research.validation.dataset_lineage import DatasetLineageEvidence
 from tmf_research.models.calibration import TwoStageCalibrationSelection
 from tmf_research.models.provenance import NestedFoldManifest
 from tmf_research.validation.ablation import ABLATION_GROUPS, AblationComparison
@@ -130,6 +131,7 @@ class Phase5EvidenceBundle:
     experiment: ExperimentRegistryEvidence
     holdout: LockedHoldoutApprovalEvidence | None
     data_provenance: DataProvenanceEvidence
+    dataset_lineage: DatasetLineageEvidence | None
     content_hash: str
     _seal: object
 
@@ -156,6 +158,7 @@ def assemble_phase5_evidence(
     experiment: ExperimentRegistryEvidence,
     holdout: LockedHoldoutApprovalEvidence | None,
     data_provenance: DataProvenanceEvidence,
+    dataset_lineage: DatasetLineageEvidence | None = None,
 ) -> Phase5EvidenceBundle:
     fold_values, report_values, gap_values = tuple(folds), tuple(reports), tuple(gaps)
     keys = tuple((fold.fold_id, fold.manifest_hash) for fold in fold_values)
@@ -220,17 +223,15 @@ def assemble_phase5_evidence(
             raise ValueError("holdout freeze and experiment candidate hashes do not match")
         if holdout.cost_model_hash != experiment.comparison.cost_assumption_hash:
             raise ValueError("holdout evaluation cost model does not match experiment context")
-        fold_dataset_hashes = {fold.manifest.dataset_hash for fold in fold_values}
-        if len(fold_dataset_hashes) != 1:
-            raise ValueError("promotion cannot mix outer folds from unrelated dataset lineages")
-        expected_lineage = _hash({
-            "raw_dataset_hash": data_provenance.dataset_hash,
-            "fold_dataset_hash": next(iter(fold_dataset_hashes)),
-            "fold_manifest_hashes": [fold.manifest_hash for fold in fold_values],
-            "holdout_selection_hash": holdout.selection_hash,
-            "holdout_data_hash": holdout.data_hash,
-        })
-        if data_provenance.promotion_lineage_hash != expected_lineage:
+        if (
+            not isinstance(dataset_lineage, DatasetLineageEvidence)
+            or dataset_lineage.raw_dataset_hash != data_provenance.dataset_hash
+            or not dataset_lineage.binds(
+                fold_values,
+                selection_hash=holdout.selection_hash,
+                data_hash=holdout.data_hash,
+            )
+        ):
             raise ValueError("raw, fold, and locked holdout dataset lineage is not authoritatively bound")
     _validate_report_stability(
         fold_values, report_values, gap_values, dimensions,
@@ -239,7 +240,7 @@ def assemble_phase5_evidence(
     payload = _phase5_payload(
         fold_values, report_values, gap_values, dimensions, ablation_values,
         coefficient_values, sensitivity_values, calibration_values,
-        experiment, holdout, data_provenance,
+        experiment, holdout, data_provenance, dataset_lineage,
     )
     instance = object.__new__(Phase5EvidenceBundle)
     values: dict[str, object] = {
@@ -248,6 +249,7 @@ def assemble_phase5_evidence(
         "coefficients": coefficient_values, "sensitivities": sensitivity_values,
         "calibrations": calibration_values, "experiment": experiment,
         "holdout": holdout, "data_provenance": data_provenance,
+        "dataset_lineage": dataset_lineage,
         "content_hash": _hash(payload), "_seal": _BUNDLE_SEAL,
     }
     for name, value in values.items():
@@ -260,6 +262,7 @@ def assemble_phase5_evidence(
 class ApprovalCapability:
     evidence_hash: str
     data_provenance_hash: str
+    dataset_lineage_hash: str
     holdout_state_hash: str
     holdout_evaluation_hash: str
     holdout_cost_model_hash: str
@@ -278,7 +281,7 @@ class ApprovalCapability:
         if self._seal is not _APPROVAL_SEAL or self.model_status is not ModelStatus.APPROVED_FOR_PAPER:
             raise TypeError("approval capability can only be issued by all derived Phase 5 gates")
         for value in (
-            self.evidence_hash, self.data_provenance_hash, self.holdout_state_hash,
+            self.evidence_hash, self.data_provenance_hash, self.dataset_lineage_hash, self.holdout_state_hash,
             self.holdout_evaluation_hash, self.holdout_cost_model_hash,
             self.holdout_terminal_anchor_hash,
             self.experiment_checkpoint_hash, self.experiment_terminal_anchor_hash,
@@ -304,11 +307,13 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
     authoritative_hash = _hash(_phase5_payload(
         bundle.folds, bundle.reports, bundle.gaps, bundle.dimensions, bundle.ablations,
         bundle.coefficients, bundle.sensitivities, bundle.calibrations,
-        bundle.experiment, bundle.holdout, bundle.data_provenance,
+        bundle.experiment, bundle.holdout, bundle.data_provenance, bundle.dataset_lineage,
     ))
     if authoritative_hash != bundle.content_hash:
         raise ValueError("Phase 5 evidence was mutated after provenance binding")
     bundle.data_provenance.assert_current()
+    if bundle.dataset_lineage is not None:
+        bundle.dataset_lineage.assert_current()
     bundle.experiment.assert_current()
     if bundle.holdout is not None:
         bundle.holdout.assert_current()
@@ -352,10 +357,12 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
     if status is not ModelStatus.APPROVED_FOR_PAPER:
         return Phase5DecisionResult(decision, None)
     assert bundle.holdout is not None
+    assert bundle.dataset_lineage is not None
     approval = object.__new__(ApprovalCapability)
     for name, value in (
         ("evidence_hash", bundle.content_hash),
         ("data_provenance_hash", bundle.data_provenance.content_hash),
+        ("dataset_lineage_hash", bundle.dataset_lineage.content_hash),
         ("holdout_state_hash", bundle.holdout.state_hash),
         ("holdout_evaluation_hash", bundle.holdout.evaluation_hash),
         ("holdout_cost_model_hash", bundle.holdout.cost_model_hash),
@@ -423,6 +430,7 @@ def _phase5_payload(
     experiment: ExperimentRegistryEvidence,
     holdout: LockedHoldoutApprovalEvidence | None,
     data_provenance: DataProvenanceEvidence,
+    dataset_lineage: DatasetLineageEvidence | None,
 ) -> dict[str, object]:
     return {
         "folds": [{
@@ -485,6 +493,7 @@ def _phase5_payload(
             dict(holdout.candidate_hashes), holdout.epoch, holdout.status,
         ],
         "provenance": data_provenance.content_hash,
+        "dataset_lineage": None if dataset_lineage is None else dataset_lineage.content_hash,
     }
 
 

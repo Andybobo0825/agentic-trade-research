@@ -13,6 +13,23 @@ SIDECAR_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
+    def test_phase5_status_fails_closed_offline_when_inputs_are_missing(self) -> None:
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            status = main([
+                "phase5-status",
+                "--raw-root", str(root / "missing-raw"),
+                "--calendar", str(root / "missing-calendar.json"),
+                "--witness-db", str(root / "witness" / "heads.sqlite3"),
+            ], stdout=output)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            output.getvalue(),
+            '{"status":"REJECTED_INSUFFICIENT_DATA"}\n',
+        )
+
     def test_verify_readonly_succeeds_for_the_sidecar(self) -> None:
         output = StringIO()
 

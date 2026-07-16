@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -90,6 +91,23 @@ class LockedHoldoutContractTests(unittest.TestCase):
             LockedHoldoutEvaluation()
         with self.assertRaises(TypeError):
             LockedHoldoutApprovalEvidence()
+
+    def test_approval_rechecks_live_witness_after_final_evaluation_save(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "holdout"
+            witness = MemoryTrustedWitness()
+            vault = LockedHoldout.create(
+                root, select_locked_holdout(rows()), witness=witness,
+            )
+            frozen = candidate()
+            vault.freeze(frozen)
+            evaluate(vault, frozen)
+            subject = json.loads((root / "witness.receipt.json").read_text())["subject"]
+            current = witness.current(subject)
+            witness.compare_and_swap(current, hashlib.sha256(b"divergent-owner-state").hexdigest())
+
+            with self.assertRaisesRegex(HoldoutAccessError, "witness"):
+                vault.approval_evidence(frozen)
 
     def test_final_suffix_uses_larger_of_40_days_and_15_percent(self) -> None:
         selected = select_locked_holdout(rows())

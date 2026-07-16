@@ -571,6 +571,7 @@ REQUIRED_METADATA = (
     "phase4_bundle_hash",
     "phase5_evidence_hash",
     "data_provenance_hash",
+    "dataset_lineage_hash",
     "experiment_checkpoint_hash",
     "experiment_terminal_anchor_hash",
     "holdout_state_hash",
@@ -729,6 +730,8 @@ def build_registry_publication(
             or dict(evidence.holdout.candidate_hashes) != dict(candidate_hashes)
             or decision_result.approval.evidence_hash != evidence.content_hash
             or decision_result.approval.data_provenance_hash != evidence.data_provenance.content_hash
+            or evidence.dataset_lineage is None
+            or decision_result.approval.dataset_lineage_hash != evidence.dataset_lineage.content_hash
             or decision_result.approval.holdout_state_hash != evidence.holdout.state_hash
             or decision_result.approval.holdout_evaluation_hash != evidence.holdout.evaluation_hash
             or decision_result.approval.holdout_cost_model_hash != evidence.holdout.cost_model_hash
@@ -764,6 +767,7 @@ def build_registry_publication(
         "phase4_bundle_hash": phase4_hash,
         "phase5_evidence_hash": evidence.content_hash,
         "data_provenance_hash": evidence.data_provenance.content_hash,
+        "dataset_lineage_hash": None if evidence.dataset_lineage is None else evidence.dataset_lineage.content_hash,
         "experiment_checkpoint_hash": evidence.experiment.checkpoint_hash,
         "experiment_terminal_anchor_hash": evidence.experiment.terminal_anchor_hash,
         "holdout_state_hash": None if evidence.holdout is None else evidence.holdout.state_hash,
@@ -828,6 +832,7 @@ def publish_model_registry(root: Path, publication: RegistryPublication) -> str:
         metadata["outer_fold_count"] < 5
         or metadata["locked_holdout_status"] != "PASSED"
         or provenance != "REAL_READONLY_MARKET_DATA"
+        or metadata["dataset_lineage_hash"] is None
         or metadata["holdout_state_hash"] is None
         or metadata["holdout_evaluation_hash"] is None
         or metadata["holdout_cost_model_hash"] is None
@@ -972,6 +977,8 @@ def _validate_metadata(metadata: Mapping[str, object]) -> None:
         "experiment_checkpoint_hash", "experiment_terminal_anchor_hash",
     ):
         _sha256(str(metadata[name]), name)
+    if metadata["dataset_lineage_hash"] is not None:
+        _sha256(str(metadata["dataset_lineage_hash"]), "dataset_lineage_hash")
     for name in (
         "holdout_state_hash", "holdout_evaluation_hash", "holdout_cost_model_hash",
         "holdout_terminal_anchor_hash",

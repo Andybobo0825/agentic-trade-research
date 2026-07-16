@@ -122,6 +122,7 @@ class RawStoreTests(unittest.TestCase):
             manifest = store.append_segment("tick", [event], segment_id="phase5", created_at=NOW)
             provenance = store.phase5_provenance((manifest,))
             self.assertEqual(provenance.kind.value, "REAL_READONLY_MARKET_DATA")
+            self.assertFalse(hasattr(provenance, "promotion_lineage_hash"))
             provenance.assert_current()
             with self.assertRaises(TypeError):
                 DataProvenanceEvidence()

@@ -156,7 +156,7 @@ def _backfill(
             file=output,
         )
     print(
-        f"BACKFILL COMPLETE target={summary.target_code}"
+        f"BACKFILL COMPLETE alias={summary.alias_code}"
         f" dataset={summary.dataset_version}"
         f" stored_days={summary.stored_days}"
         f" already_stored_days={summary.already_stored_days}"

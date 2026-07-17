@@ -20,7 +20,8 @@ class HistoricalTickSource(Protocol):
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 EVENT_TYPE = "historical-tick"
-SOURCE = "SHIOAJI_HISTORICAL_TICKS"
+SOURCE = "SHIOAJI_HISTORICAL_TICKS_CONTINUOUS_NEAR"
+TARGET_DERIVATION = "taifex-third-wednesday-v1"
 _EPOCH = datetime(1970, 1, 1)
 
 Clock = Callable[[], datetime]
@@ -33,7 +34,13 @@ class BackfillError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class HistoricalTickRecord:
-    """One immutable historical tick preserved exactly as fetched."""
+    """One immutable historical tick preserved exactly as fetched.
+
+    Expired contracts delist from the Shioaji catalog, so history is only
+    reachable through the continuous near-month alias. The per-date target
+    is therefore derived from the TAIFEX third-Wednesday expiry rule and
+    carries an explicit derivation marker instead of claiming API evidence.
+    """
 
     schema_version: str
     event_id: str
@@ -41,9 +48,9 @@ class HistoricalTickRecord:
     received_at: datetime
     source: str
     alias_code: str
-    target_code: str
-    delivery_month: str
-    delivery_date: str
+    derived_target_code: str
+    derived_delivery_date: str
+    target_derivation: str
     fields: Mapping[str, float | int | str | None]
 
 
@@ -57,7 +64,7 @@ class BackfillDayResult:
 
 @dataclass(frozen=True, slots=True)
 class BackfillSummary:
-    target_code: str
+    alias_code: str
     dataset_version: str
     results: tuple[BackfillDayResult, ...]
 
@@ -103,20 +110,21 @@ def normalize_tick_batch(batch: TickBatch) -> tuple[HistoricalTickRecord, ...]:
     count = lengths.pop()
     if count == 0:
         return ()
+    target_code, delivery_date = derived_near_target(date.fromisoformat(batch.date))
     records = []
     for index in range(count):
         records.append(HistoricalTickRecord(
             schema_version="1.1.0",
             event_id=(
-                f"hist-tick-{batch.contract.target_code}-{batch.date}-{index:06d}"
+                f"hist-tick-{batch.contract.alias_code}-{batch.date}-{index:06d}"
             ),
             exchange_datetime=_tick_time(batch.date, columns["ts"][index]),
             received_at=batch.fetched_at,
             source=SOURCE,
             alias_code=batch.contract.alias_code,
-            target_code=batch.contract.target_code,
-            delivery_month=batch.contract.delivery_month,
-            delivery_date=batch.contract.delivery_date,
+            derived_target_code=target_code,
+            derived_delivery_date=delivery_date,
+            target_derivation=TARGET_DERIVATION,
             fields={
                 name: _scalar(batch.date, name, values[index])
                 for name, values in columns.items()
@@ -124,6 +132,25 @@ def normalize_tick_batch(batch: TickBatch) -> tuple[HistoricalTickRecord, ...]:
             },
         ))
     return tuple(records)
+
+
+def third_wednesday(year: int, month: int) -> date:
+    """TAIFEX index futures settle on the third Wednesday of the month."""
+
+    first = date(year, month, 1)
+    offset = (2 - first.weekday()) % 7
+    return first + timedelta(days=offset + 14)
+
+
+def derived_near_target(trading_date: date) -> tuple[str, str]:
+    """Derive the near-month target for one trading date from the expiry rule."""
+
+    expiry = third_wednesday(trading_date.year, trading_date.month)
+    if trading_date > expiry:
+        year = trading_date.year + (1 if trading_date.month == 12 else 0)
+        month = 1 if trading_date.month == 12 else trading_date.month + 1
+        expiry = third_wednesday(year, month)
+    return f"TMF{expiry.year}{expiry.month:02d}", expiry.isoformat()
 
 
 def run_backfill(
@@ -149,7 +176,7 @@ def run_backfill(
     current = first
     while current <= last:
         day = current.isoformat()
-        segment_id = f"backfill-tick-{contract.target_code}-{day}"
+        segment_id = f"backfill-tick-{contract.alias_code}-{day}"
         if store.has_segment(EVENT_TYPE, segment_id):
             results.append(BackfillDayResult(day, "ALREADY_STORED", 0, None))
         else:
@@ -177,7 +204,7 @@ def run_backfill(
                 pause()
         current += timedelta(days=1)
     return BackfillSummary(
-        target_code=contract.target_code,
+        alias_code=contract.alias_code,
         dataset_version=store.dataset_version,
         results=tuple(results),
     )

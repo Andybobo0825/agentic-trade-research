@@ -179,7 +179,7 @@ class BackfillCliTests(unittest.TestCase):
             self.assertEqual(created["simulation"], False)
             segment = (
                 Path(directory) / "datasets" / "dataset-v1" / "segments"
-                / "historical-tick" / "backfill-tick-TMF202607-2026-07-15.ndjson"
+                / "historical-tick" / "backfill-tick-TMFR1-2026-07-15.ndjson"
             )
             self.assertTrue(segment.is_file())
         self.assertIn("2026-07-15 STORED records=1", output.getvalue())

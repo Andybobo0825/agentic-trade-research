@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime, time
@@ -127,21 +128,34 @@ class AppendOnlyRawStore:
         if len(event_ids) != len(set(event_ids)):
             raise FileExistsError("duplicate event_id within segment")
 
-        directory = self._dataset_root / "event_ids"
-        directory.mkdir(parents=True, exist_ok=True)
-        markers = {
-            event_id: directory / f"{hashlib.sha256(event_id.encode()).hexdigest()}.id"
-            for event_id in event_ids
-        }
-        for event_id, marker in markers.items():
-            if marker.exists():
-                raise FileExistsError(f"duplicate event_id: {event_id}")
-        for event_id, marker in markers.items():
-            with marker.open("xb") as stream:
-                stream.write(event_id.encode("utf-8"))
-                stream.flush()
-                os.fsync(stream.fileno())
-            marker.chmod(0o444)
+        self._dataset_root.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self._dataset_root / "event_ids.sqlite3")
+        try:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS event_ids"
+                " (event_id TEXT PRIMARY KEY) WITHOUT ROWID"
+            )
+            try:
+                with connection:
+                    connection.executemany(
+                        "INSERT INTO event_ids (event_id) VALUES (?)",
+                        ((event_id,) for event_id in event_ids),
+                    )
+            except sqlite3.IntegrityError:
+                duplicate = next(
+                    (
+                        event_id for event_id in event_ids
+                        if connection.execute(
+                            "SELECT 1 FROM event_ids WHERE event_id = ?",
+                            (event_id,),
+                        ).fetchone()
+                        is not None
+                    ),
+                    event_ids[0],
+                )
+                raise FileExistsError(f"duplicate event_id: {duplicate}") from None
+        finally:
+            connection.close()
 
     def verify(self, manifest: SegmentManifest) -> bool:
         try:

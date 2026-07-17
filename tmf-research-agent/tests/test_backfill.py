@@ -9,8 +9,10 @@ from zoneinfo import ZoneInfo
 
 from tmf_research.collection.backfill import (
     BackfillError,
+    derived_near_target,
     normalize_tick_batch,
     run_backfill,
+    third_wednesday,
 )
 from tmf_research.domain.contracts import ContractInfo, KbarBatch, TickBatch
 from tmf_research.infrastructure.raw_store import AppendOnlyRawStore
@@ -87,14 +89,17 @@ class NormalizationTests(unittest.TestCase):
 
         self.assertEqual(len(records), 2)
         first = records[0]
-        self.assertEqual(first.event_id, "hist-tick-TMF202607-2026-07-16-000000")
+        self.assertEqual(first.event_id, "hist-tick-TMFR1-2026-07-16-000000")
         self.assertEqual(
             first.exchange_datetime,
             datetime(2026, 7, 16, 9, 1, 0, tzinfo=TAIPEI),
         )
         self.assertEqual(first.received_at, FIXED_NOW)
-        self.assertEqual(first.source, "SHIOAJI_HISTORICAL_TICKS")
-        self.assertEqual(first.target_code, "TMF202607")
+        self.assertEqual(first.source, "SHIOAJI_HISTORICAL_TICKS_CONTINUOUS_NEAR")
+        self.assertEqual(first.alias_code, "TMFR1")
+        self.assertEqual(first.derived_target_code, "TMF202608")
+        self.assertEqual(first.derived_delivery_date, "2026-08-19")
+        self.assertEqual(first.target_derivation, "taifex-third-wednesday-v1")
         self.assertEqual(first.fields["close"], 21500.0)
         self.assertEqual(first.fields["bid_price"], 21499.0)
         self.assertEqual(first.fields["ask_price"], 21501.0)
@@ -144,7 +149,7 @@ class RunBackfillTests(unittest.TestCase):
             clock=lambda: FIXED_NOW,
         )
 
-        self.assertEqual(summary.target_code, "TMF202607")
+        self.assertEqual(summary.alias_code, "TMFR1")
         self.assertEqual(
             tuple((result.date, result.status, result.record_count) for result in summary.results),
             (
@@ -157,14 +162,15 @@ class RunBackfillTests(unittest.TestCase):
         self.assertEqual(summary.no_data_days, 1)
         segment = (
             self.root / "datasets" / "dataset-v1" / "segments" / "historical-tick"
-            / "backfill-tick-TMF202607-2026-07-15.ndjson"
+            / "backfill-tick-TMFR1-2026-07-15.ndjson"
         )
         self.assertTrue(segment.is_file())
         lines = segment.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(lines), 2)
         record = json.loads(lines[0])
         self.assertEqual(record["exchange_datetime"], "2026-07-15T09:01:00+08:00")
-        self.assertEqual(record["source"], "SHIOAJI_HISTORICAL_TICKS")
+        self.assertEqual(record["source"], "SHIOAJI_HISTORICAL_TICKS_CONTINUOUS_NEAR")
+        self.assertEqual(record["derived_target_code"], "TMF202607")
 
     def test_rerun_skips_already_stored_days_without_refetching(self) -> None:
         gateway = FakeGateway({"2026-07-15": day_payload(15)})
@@ -195,10 +201,10 @@ class RunBackfillTests(unittest.TestCase):
             )
 
         self.assertTrue(self.store.has_segment(
-            "historical-tick", "backfill-tick-TMF202607-2026-07-15",
+            "historical-tick", "backfill-tick-TMFR1-2026-07-15",
         ))
         self.assertFalse(self.store.has_segment(
-            "historical-tick", "backfill-tick-TMF202607-2026-07-16",
+            "historical-tick", "backfill-tick-TMFR1-2026-07-16",
         ))
 
     def test_invalid_date_ranges_are_rejected(self) -> None:
@@ -243,3 +249,38 @@ class RunBackfillTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TargetDerivationTests(unittest.TestCase):
+    def test_third_wednesday_matches_listed_taifex_expiries(self) -> None:
+        from datetime import date
+
+        self.assertEqual(third_wednesday(2026, 7), date(2026, 7, 15))
+        self.assertEqual(third_wednesday(2026, 8), date(2026, 8, 19))
+        self.assertEqual(third_wednesday(2026, 9), date(2026, 9, 16))
+        self.assertEqual(third_wednesday(2026, 10), date(2026, 10, 21))
+        self.assertEqual(third_wednesday(2026, 12), date(2026, 12, 16))
+
+    def test_near_target_rolls_the_day_after_expiry(self) -> None:
+        from datetime import date
+
+        self.assertEqual(
+            derived_near_target(date(2026, 7, 14)),
+            ("TMF202607", "2026-07-15"),
+        )
+        self.assertEqual(
+            derived_near_target(date(2026, 7, 15)),
+            ("TMF202607", "2026-07-15"),
+        )
+        self.assertEqual(
+            derived_near_target(date(2026, 7, 16)),
+            ("TMF202608", "2026-08-19"),
+        )
+
+    def test_december_rolls_into_the_next_year(self) -> None:
+        from datetime import date
+
+        self.assertEqual(
+            derived_near_target(date(2026, 12, 17)),
+            ("TMF202701", "2027-01-20"),
+        )

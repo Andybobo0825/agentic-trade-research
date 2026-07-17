@@ -267,7 +267,6 @@ def create_market_data_session(
         api_key=api_key,
         secret_key=secret_key,
         subscribe_trade=False,
-        fetch_contract=True,
     )
     return ShioajiMarketDataGateway(
         api,

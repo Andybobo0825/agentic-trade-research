@@ -70,10 +70,19 @@ class CredentialedBackfillSmokeTests(unittest.TestCase):
         ))
         self.assertTrue(records)
         first_time = records[0].exchange_datetime.astimezone(TAIPEI)
-        self.assertEqual(first_time.date().isoformat(), probe.isoformat())
+        night_open = datetime.combine(
+            probe - timedelta(days=1), datetime.min.time(), tzinfo=TAIPEI,
+        ) + timedelta(hours=15)
+        day_open = datetime.combine(
+            probe, datetime.min.time(), tzinfo=TAIPEI,
+        ) + timedelta(hours=8, minutes=45)
+        tolerance = timedelta(minutes=5)
         self.assertTrue(
-            5 <= first_time.hour <= 23,
-            f"tick time {first_time.isoformat()} violates the Taipei wall-clock assumption",
+            abs(first_time - night_open) <= tolerance
+            or abs(first_time - day_open) <= tolerance,
+            "first tick "
+            f"{first_time.isoformat()} matches neither the 15:00 night open nor"
+            " the 08:45 day open; the Taipei wall-clock assumption is wrong",
         )
 
 

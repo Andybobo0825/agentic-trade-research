@@ -47,8 +47,9 @@ class ProcessingPipeline:
         queue_drop_count: int = 0,
         connection_drop_count: int = 0,
     ) -> ProcessingResult:
+        session = resolution.session
         if (
-            resolution.session not in ("DAY", "NIGHT")
+            (session != "DAY" and session != "NIGHT")
             or resolution.trading_date is None
             or resolution.session_start is None
             or resolution.session_end is None
@@ -118,7 +119,7 @@ class ProcessingPipeline:
         expected_seconds = len(frozen_states)
         quality = QualityReportBuilder().build(
             trading_date=resolution.trading_date,
-            session=resolution.session,
+            session=session,
             ticks=window_ticks,
             bidasks=window_bidasks,
             rejection_reasons=rejection_reasons,

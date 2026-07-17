@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
+import math
 import tempfile
 import unittest
 from dataclasses import replace
@@ -17,6 +19,19 @@ from tests.support.trusted_witness import MemoryTrustedWitness
 
 
 class Phase5DatasetLineageTests(unittest.TestCase):
+    def test_production_evaluation_owns_every_promotion_affecting_artifact(self) -> None:
+        from tmf_research.validation.fold_evaluation import ProductionEvaluation
+
+        required = {
+            "folds", "reports", "gaps", "dimensions", "ablations",
+            "coefficients", "sensitivities", "calibrations",
+            "dataset_build", "content_hash",
+        }
+        self.assertTrue(
+            required.issubset(ProductionEvaluation.__annotations__),
+            required - set(ProductionEvaluation.__annotations__),
+        )
+
     def test_quote_only_verified_input_fails_closed_without_indexing_ticks(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec
         from tmf_research.validation.dataset_lineage import Phase5DatasetIssuer
@@ -162,7 +177,12 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             evidence = Phase5DatasetIssuer().issue(
                 raw_store=store,
                 manifests=manifests,
-                spec=ResearchBuildSpec(calendar=calendar),
+                spec=ResearchBuildSpec(
+                    calendar=calendar,
+                    entry_fee_points=0.0,
+                    exit_fee_points=0.0,
+                    tax_points=0.0,
+                ),
                 holdout_root=root / "holdout",
                 witness=MemoryTrustedWitness(),
             )
@@ -214,7 +234,12 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             evidence = Phase5DatasetIssuer().issue(
                 raw_store=store,
                 manifests=manifests,
-                spec=ResearchBuildSpec(calendar=calendar),
+                spec=ResearchBuildSpec(
+                    calendar=calendar,
+                    entry_fee_points=0.0,
+                    exit_fee_points=0.0,
+                    tax_points=0.0,
+                ),
                 holdout_root=root / "holdout",
                 witness=witness,
             )
@@ -235,6 +260,27 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             )
             development_ids = {value.source.row_id for value in evidence.development_samples}
             self.assertTrue(development_ids)
+            regime_families = (
+                {"DAY", "NIGHT"},
+                {"HIGH_VOLATILITY", "MEDIUM_VOLATILITY", "LOW_VOLATILITY"},
+                {"TRENDING", "RANGING"},
+                {"EXPIRY_WEEK", "NON_EXPIRY_WEEK"},
+                {"OPENING_30M", "INTRADAY", "CLOSING_30M"},
+            )
+            for outcome in evidence.development_outcomes:
+                self.assertTrue(outcome.cost_complete)
+                self.assertTrue(all(
+                    len(set(outcome.regime_tags) & family) == 1
+                    for family in regime_families
+                ))
+                self.assertAlmostEqual(
+                    outcome.long_gross_points - outcome.round_trip_cost_points,
+                    outcome.long_net_points,
+                )
+                self.assertAlmostEqual(
+                    outcome.short_gross_points - outcome.round_trip_cost_points,
+                    outcome.short_net_points,
+                )
             self.assertTrue(all(
                 row_id in development_ids
                 for capability in evidence.fold_capabilities
@@ -266,9 +312,7 @@ class Phase5DatasetLineageTests(unittest.TestCase):
                 ),
             )
             predictions = trained.predict_inner_validation(capability.inner_validation)
-            calibration = fit_two_stage_calibrators(
-                predictions, bin_count=1, minimum_bin_size=1,
-            )
+            calibration = fit_two_stage_calibrators(predictions)
             self.assertEqual(
                 calibration.calibrator.provenance.manifest,
                 capability.manifest,
@@ -298,6 +342,130 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             self.assertAlmostEqual(
                 fold_evaluation.evidence.net_pnl,
                 sum(value[-1] for value in fold_evaluation.contribution_rows),
+            )
+            baseline_rate = sum(
+                row.label in ("LONG", "SHORT") for row in capability.inner_train.rows
+            ) / len(capability.inner_train.rows)
+            self.assertAlmostEqual(
+                fold_evaluation.evidence.baseline_brier,
+                sum(
+                    (baseline_rate - int(row.label in ("LONG", "SHORT"))) ** 2
+                    for row in capability.outer_test.rows
+                ) / len(capability.outer_test.rows),
+            )
+            epsilon = 1e-15
+            self.assertAlmostEqual(
+                fold_evaluation.evidence.baseline_log_loss,
+                -sum(
+                    int(row.label in ("LONG", "SHORT"))
+                    * math.log(max(epsilon, baseline_rate))
+                    + int(row.label not in ("LONG", "SHORT"))
+                    * math.log(max(epsilon, 1.0 - baseline_rate))
+                    for row in capability.outer_test.rows
+                ) / len(capability.outer_test.rows),
+            )
+            from tmf_research.experiments.comparison import (
+                ComparisonContext,
+                canonical_fold_periods,
+            )
+            from tmf_research.experiments.registry import ExperimentRegistry
+            from tmf_research.validation.fold_evaluation import (
+                _candidate_refit_contract_hash,
+                _diagnostic_plan_hash,
+                evaluate_complete_outer_fold,
+            )
+            from tests.overfitting.test_experiment_registry import attempt, definition
+
+            thresholds_hash = canonical_hash({
+                "trade_probability": 0.5, "direction_probability": 0.5,
+            })
+            rules_hash = "a" * 64
+            candidate_hashes = {
+                name: "0" * 64
+                for name in (
+                    "model", "features", "labels", "parameters",
+                    "thresholds", "rules",
+                )
+            }
+            candidate_hashes.update({
+                "thresholds": thresholds_hash, "rules": rules_hash,
+            })
+            base_definition = definition(candidate_hashes=candidate_hashes)
+            train_period, evaluation_period = canonical_fold_periods(
+                tuple(value.manifest for value in evidence.fold_capabilities),
+            )
+            fold_plan_hash = hashlib.sha256(json.dumps(
+                [value.manifest.content_hash for value in evidence.fold_capabilities],
+                separators=(",", ":"),
+            ).encode()).hexdigest()
+            experiment = ExperimentRegistry.preregister(
+                root / "experiment",
+                replace(
+                    base_definition,
+                    train_period=train_period,
+                    comparison=ComparisonContext(
+                        store.phase5_provenance(manifests).dataset_version,
+                        fold_plan_hash,
+                        evidence.development_outcomes[0].cost_policy_hash,
+                        base_definition.label_version,
+                        evaluation_period,
+                    ),
+                ),
+                witness=witness,
+            )
+            complete_policy = freeze_decision_policy(
+                calibration,
+                thresholds_hash=thresholds_hash,
+                rules_hash=rules_hash,
+            )
+            complete_spec = Phase4TrainingSpec(
+                primary_features=feature_order,
+                required_features=required,
+                max_iterations=1,
+            )
+            experiment.append_attempt(attempt("unbound-raw-fold"))
+            with self.assertRaisesRegex(ValueError, "exact run"):
+                evaluate_complete_outer_fold(
+                    evidence, capability, trained, complete_spec,
+                    calibration, complete_policy, experiment.evidence(),
+                )
+            experiment.append_attempt(replace(
+                attempt("complete-raw-fold"),
+                result={
+                    "dataset_build_hash": evidence.content_hash,
+                    "fold_manifest_hash": capability.manifest.content_hash,
+                    "training_spec_hash": trained.specification_hash,
+                    "model_hash": trained.model.content_hash,
+                    "calibration_hash": canonical_hash(calibration.calibrator.to_dict()),
+                    "policy_hash": complete_policy.content_hash,
+                    "diagnostic_plan_hash": _diagnostic_plan_hash(
+                        complete_spec, complete_policy,
+                    ),
+                    "candidate_refit_contract_hash": _candidate_refit_contract_hash(
+                        evidence, complete_spec, experiment.evidence(),
+                    ),
+                },
+            ))
+            complete = evaluate_complete_outer_fold(
+                evidence, capability, trained, complete_spec,
+                calibration, complete_policy, experiment.evidence(),
+            )
+            self.assertEqual(
+                tuple(name for name, _value in complete.ablation_results),
+                (
+                    "FULL", "PRICE", "VWAP", "ORDER_FLOW", "ORDER_BOOK",
+                    "BASIS", "VOLATILITY", "MARKET_STRUCTURE", "TIME",
+                ),
+            )
+            self.assertEqual(len(complete.sensitivity_results), 7)
+            self.assertEqual(
+                len(complete.coefficient_observations),
+                len(trained.model.trade_model.coefficients)
+                + len(trained.model.direction_model.coefficients),
+            )
+            self.assertEqual(
+                len(complete.feature_removal_evidence),
+                len(complete.coefficient_observations),
             )
             with self.assertRaisesRegex(ValueError, "inner-train capability"):
                 train_phase4_model(

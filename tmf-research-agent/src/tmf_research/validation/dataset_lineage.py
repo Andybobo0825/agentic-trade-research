@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -52,14 +52,20 @@ class DatasetValidationError(ValueError):
 class ExecutableOutcome:
     row_id: str
     source_row_hash: str
+    long_gross_points: float
+    short_gross_points: float
     long_net_points: float
     short_net_points: float
+    round_trip_cost_points: float
+    cost_components: tuple[tuple[str, float | None], ...]
+    cost_complete: bool
     cost_policy_hash: str
     decision_time: datetime
     outcome_time: datetime
     event_id: str
-    regime: str
+    regime_tags: tuple[str, ...]
     target_code: str
+    atr_sensitivity: tuple[tuple[float, str, float, float], ...]
     content_hash: str
     _seal: object
 
@@ -72,19 +78,52 @@ class ExecutableOutcome:
         if (
             not self.row_id.strip()
             or not self.event_id.strip()
-            or not self.regime.strip()
+            or len(self.regime_tags) != 5
+            or any(not value.strip() for value in self.regime_tags)
             or not self.target_code.strip()
             or any(
                 not isinstance(value, (int, float))
                 or isinstance(value, bool)
                 or not math.isfinite(value)
-                for value in (self.long_net_points, self.short_net_points)
+                for value in (
+                    self.long_gross_points, self.short_gross_points,
+                    self.long_net_points, self.short_net_points,
+                    self.round_trip_cost_points,
+                )
+            )
+            or self.round_trip_cost_points < 0.0
+            or tuple(name for name, _value in self.cost_components)
+            != ("SLIPPAGE", "ENTRY_FEE", "EXIT_FEE", "TAX")
+            or any(
+                value is not None and (not math.isfinite(value) or value < 0.0)
+                for _name, value in self.cost_components
+            )
+            or self.cost_complete
+            != all(value is not None for _name, value in self.cost_components)
+            or not math.isclose(
+                self.long_net_points,
+                self.long_gross_points - self.round_trip_cost_points,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+            or not math.isclose(
+                self.short_net_points,
+                self.short_gross_points - self.round_trip_cost_points,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
             )
             or self.decision_time.tzinfo is None
             or self.decision_time.utcoffset() is None
             or self.outcome_time.tzinfo is None
             or self.outcome_time.utcoffset() is None
             or self.outcome_time < self.decision_time
+            or tuple(value[0] for value in self.atr_sensitivity) != (0.75, 1.0, 1.25)
+            or any(
+                label not in ("NO_TRADE", "LONG", "SHORT", "AMBIGUOUS")
+                or not math.isfinite(long_value)
+                or not math.isfinite(short_value)
+                for _multiplier, label, long_value, short_value in self.atr_sensitivity
+            )
         ):
             raise ValueError("invalid executable outcome semantics")
         for value in (self.source_row_hash, self.cost_policy_hash, self.content_hash):
@@ -357,6 +396,16 @@ def _derive_samples(
     feature_pipeline = FeaturePipeline(feature_manifest)
     label_pipeline = LabelPipeline()
     price_policy = ExecutablePricePolicy(entry_slippage=0.0, exit_slippage=spec.cost_points)
+    cost_components = (
+        ("SLIPPAGE", spec.cost_points),
+        ("ENTRY_FEE", spec.entry_fee_points),
+        ("EXIT_FEE", spec.exit_fee_points),
+        ("TAX", spec.tax_points),
+    )
+    cost_complete = all(value is not None for _name, value in cost_components)
+    total_cost_points = sum(
+        0.0 if value is None else value for _name, value in cost_components
+    )
     labeler = TripleBarrierLabeler(price_policy=price_policy)
     resolver = SessionResolver(spec.trading_calendar())
     events: tuple[TickEvent | BidAskEvent, ...] = (*ticks, *quotes)
@@ -466,14 +515,10 @@ def _derive_samples(
                 key=lambda state: state.second,
             )
             exit_quote = price_policy.snapshot(outcome_state)
-            long_net = (
-                exit_quote.bid - label.entry_ask
-                - price_policy.estimated_round_trip_cost
-            )
-            short_net = (
-                label.entry_bid - exit_quote.ask
-                - price_policy.estimated_round_trip_cost
-            )
+            long_gross = exit_quote.bid - label.entry_ask
+            short_gross = label.entry_bid - exit_quote.ask
+            long_net = long_gross - total_cost_points
+            short_net = short_gross - total_cost_points
             net_return = (
                 long_net if label.label == "LONG"
                 else short_net if label.label == "SHORT"
@@ -490,14 +535,25 @@ def _derive_samples(
             result.append(TemporalSample(source, candidate.decision_time, label.outcome_time, trading_date))
             outcomes.append(_issue_outcome(
                 source=source,
+                long_gross_points=long_gross,
+                short_gross_points=short_gross,
                 long_net_points=long_net,
                 short_net_points=short_net,
-                cost_points=spec.cost_points,
+                round_trip_cost_points=total_cost_points,
+                cost_components=cost_components,
+                cost_complete=cost_complete,
                 decision_time=candidate.decision_time,
                 outcome_time=label.outcome_time,
                 event_id=candidate.candidate_id,
-                regime=str(session),
+                regime_tags=_regime_tags(feature.values, str(session)),
                 target_code=candidate.target_code,
+                atr_sensitivity=_atr_sensitivity_outcomes(
+                    labeler=labeler, candidate_id=candidate.candidate_id,
+                    decision_time=candidate.decision_time, entry_state=entry,
+                    future_bars=future, atr=atr, parameters=parameters,
+                    states=processed.states, price_policy=price_policy,
+                    total_cost_points=total_cost_points,
+                ),
             ))
         prior_bars[:] = bars
         prior_states.extend(processed.states)
@@ -692,43 +748,60 @@ def _canonical_bytes(value: object) -> bytes:
 def _issue_outcome(
     *,
     source: Phase4SourceRow,
+    long_gross_points: float,
+    short_gross_points: float,
     long_net_points: float,
     short_net_points: float,
-    cost_points: float,
+    round_trip_cost_points: float,
+    cost_components: tuple[tuple[str, float | None], ...],
+    cost_complete: bool,
     decision_time: datetime,
     outcome_time: datetime,
     event_id: str,
-    regime: str,
+    regime_tags: tuple[str, ...],
     target_code: str,
+    atr_sensitivity: tuple[tuple[float, str, float, float], ...],
 ) -> ExecutableOutcome:
     payload = {
         "row_id": source.row_id,
         "source_row_hash": source.content_hash,
+        "long_gross_points": long_gross_points,
+        "short_gross_points": short_gross_points,
         "long_net_points": long_net_points,
         "short_net_points": short_net_points,
+        "round_trip_cost_points": round_trip_cost_points,
+        "cost_components": [list(value) for value in cost_components],
+        "cost_complete": cost_complete,
         "cost_policy_hash": canonical_hash({
             "version": "phase5-fixed-executable-cost-v1",
-            "entry_slippage": 0.0,
-            "exit_slippage": cost_points,
+            "components": [list(value) for value in cost_components],
+            "complete": cost_complete,
         }),
         "decision_time": decision_time.isoformat(),
         "outcome_time": outcome_time.isoformat(),
         "event_id": event_id,
-        "regime": regime,
+        "regime_tags": list(regime_tags),
         "target_code": target_code,
+        "atr_sensitivity": [list(value) for value in atr_sensitivity],
     }
     instance = object.__new__(ExecutableOutcome)
     values: tuple[tuple[str, object], ...] = (
         ("row_id", source.row_id),
         ("source_row_hash", source.content_hash),
+        ("long_gross_points", long_gross_points),
+        ("short_gross_points", short_gross_points),
         ("long_net_points", long_net_points),
         ("short_net_points", short_net_points),
+        ("round_trip_cost_points", round_trip_cost_points),
+        ("cost_components", cost_components),
+        ("cost_complete", cost_complete),
         ("cost_policy_hash", payload["cost_policy_hash"]),
         ("decision_time", decision_time),
         ("outcome_time", outcome_time),
         ("event_id", event_id),
-        ("regime", regime),
+        ("regime_tags", regime_tags),
         ("target_code", target_code),
+        ("atr_sensitivity", atr_sensitivity),
         ("content_hash", canonical_hash(payload)),
         ("_seal", _OUTCOME_SEAL),
     )
@@ -746,13 +819,95 @@ def _outcome_payload(
     payload = {
         "row_id": value.row_id,
         "source_row_hash": value.source_row_hash,
+        "long_gross_points": value.long_gross_points,
+        "short_gross_points": value.short_gross_points,
         "long_net_points": value.long_net_points,
         "short_net_points": value.short_net_points,
+        "round_trip_cost_points": value.round_trip_cost_points,
+        "cost_components": [list(item) for item in value.cost_components],
+        "cost_complete": value.cost_complete,
         "cost_policy_hash": value.cost_policy_hash,
         "decision_time": value.decision_time.isoformat(),
         "outcome_time": value.outcome_time.isoformat(),
         "event_id": value.event_id,
-        "regime": value.regime,
+        "regime_tags": list(value.regime_tags),
         "target_code": value.target_code,
+        "atr_sensitivity": [list(item) for item in value.atr_sensitivity],
     }
     return {**payload, "content_hash": value.content_hash} if include_hash else payload
+
+
+def _regime_tags(
+    values: Mapping[str, float | None],
+    session: str,
+) -> tuple[str, ...]:
+    realized = values.get("realized_vol_5m")
+    volatility = (
+        "HIGH_VOLATILITY" if isinstance(realized, (int, float)) and realized > 0.002
+        else "MEDIUM_VOLATILITY"
+        if isinstance(realized, (int, float)) and realized > 0.0005
+        else "LOW_VOLATILITY"
+    )
+    return_5m = values.get("return_5m")
+    structure = (
+        "TRENDING"
+        if isinstance(return_5m, (int, float)) and abs(return_5m) > 0.001
+        else "RANGING"
+    )
+    days = values.get("days_to_expiry")
+    expiry = (
+        "EXPIRY_WEEK"
+        if isinstance(days, (int, float)) and days <= 7.0
+        else "NON_EXPIRY_WEEK"
+    )
+    from_open = values.get("minutes_from_session_open")
+    to_close = values.get("minutes_to_session_close")
+    period = (
+        "OPENING_30M"
+        if isinstance(from_open, (int, float)) and from_open <= 30.0
+        else "CLOSING_30M"
+        if isinstance(to_close, (int, float)) and to_close <= 30.0
+        else "INTRADAY"
+    )
+    return (session, volatility, structure, expiry, period)
+
+
+def _atr_sensitivity_outcomes(
+    *,
+    labeler: TripleBarrierLabeler,
+    candidate_id: str,
+    decision_time: datetime,
+    entry_state: OneSecondState,
+    future_bars: tuple[Bar, ...],
+    atr: float,
+    parameters: LabelParameters,
+    states: tuple[OneSecondState, ...],
+    price_policy: ExecutablePricePolicy,
+    total_cost_points: float,
+) -> tuple[tuple[float, str, float, float], ...]:
+    values = []
+    for multiplier in (0.75, 1.0, 1.25):
+        label = labeler.label(
+            candidate_id=candidate_id,
+            decision_time=decision_time,
+            entry_state=entry_state,
+            future_bars=future_bars,
+            atr=atr,
+            parameters=replace(
+                parameters,
+                target_atr_multiplier=multiplier,
+                stop_atr_multiplier=multiplier,
+            ),
+        )
+        outcome_state = max(
+            (state for state in states if state.second < label.outcome_time),
+            key=lambda state: state.second,
+        )
+        exit_quote = price_policy.snapshot(outcome_state)
+        values.append((
+            multiplier,
+            label.label,
+            exit_quote.bid - label.entry_ask - total_cost_points,
+            label.entry_bid - exit_quote.ask - total_cost_points,
+        ))
+    return tuple(values)

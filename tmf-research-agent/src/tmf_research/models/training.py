@@ -207,6 +207,26 @@ def train_phase4_model(dataset: InnerTrainDataset, specification: Phase4Training
     expected_order = specification.raw_feature_order
     if any(tuple(row.features) != expected_order for row in dataset.rows):
         raise ValueError("inner-train feature order does not match declared formal roles")
+    return _fit_phase4(dataset, specification)
+
+
+def _train_phase4_feature_subset(
+    dataset: InnerTrainDataset,
+    specification: Phase4TrainingSpec,
+) -> Phase4TrainingResult:
+    if not isinstance(dataset, InnerTrainDataset):
+        raise ValueError("subset training requires a materialized inner-train capability")
+    expected = set(specification.raw_feature_order)
+    if not expected or any(not expected.issubset(row.features) for row in dataset.rows):
+        raise ValueError("subset training features do not belong to exact issued rows")
+    return _fit_phase4(dataset, specification)
+
+
+def _fit_phase4(
+    dataset: InnerTrainDataset,
+    specification: Phase4TrainingSpec,
+) -> Phase4TrainingResult:
+    expected_order = specification.raw_feature_order
     preprocessor = FoldPreprocessor.fit_inner_train(
         dataset,
         feature_order=expected_order,

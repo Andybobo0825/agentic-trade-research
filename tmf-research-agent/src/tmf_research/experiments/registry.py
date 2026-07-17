@@ -195,6 +195,8 @@ class ExperimentAttempt:
 @dataclass(frozen=True, slots=True, init=False)
 class ExperimentRegistryEvidence:
     experiment_id: str
+    model_family: str
+    feature_set_id: str
     definition_hash: str
     search_manifest_hash: str
     attempt_count: int
@@ -216,7 +218,13 @@ class ExperimentRegistryEvidence:
     def __post_init__(self) -> None:
         if self._seal is not _EXPERIMENT_EVIDENCE_SEAL:
             raise TypeError("experiment evidence must be issued by a verified immutable registry")
-        if not self.experiment_id.strip() or not self.train_period.strip() or self.attempt_count < 0:
+        if (
+            not self.experiment_id.strip()
+            or not self.model_family.strip()
+            or not self.feature_set_id.strip()
+            or not self.train_period.strip()
+            or self.attempt_count < 0
+        ):
             raise ValueError("invalid experiment evidence")
         for name, value in (
             ("definition", self.definition_hash), ("search", self.search_manifest_hash),
@@ -240,6 +248,8 @@ class ExperimentRegistryEvidence:
         comparison = _mapping(registry._definition["comparison"])
         if (
             registry.definition_hash != self.definition_hash
+            or registry._definition.get("model_family") != self.model_family
+            or registry._definition.get("feature_set_id") != self.feature_set_id
             or registry._space.canonical_hash != self.search_manifest_hash
             or state.get("attempt_count") != self.attempt_count
             or state.get("chain_head") != self.chain_head
@@ -260,6 +270,32 @@ class ExperimentRegistryEvidence:
             or terminal.get("checkpoint_hash") != self.checkpoint_hash
         ):
             raise ValueError("external terminal anchor is stale or mismatched")
+
+    def assert_successful_result(self, commitments: Mapping[str, str]) -> None:
+        """Require one immutable successful attempt to bind exact run artifacts."""
+
+        self.assert_current()
+        if not commitments:
+            raise ValueError("exact run commitments are required")
+        for name, value in commitments.items():
+            if not name.strip():
+                raise ValueError("run commitment names are required")
+            _sha256(value, name)
+        registry = ExperimentRegistry(self._registry_root, witness=self._witness)
+        matches = tuple(
+            attempt
+            for attempt in registry.attempts
+            if attempt.get("status") == "SUCCEEDED"
+            and attempt.get("model_families") == self.model_family
+            and attempt.get("feature_sets") == self.feature_set_id
+            and isinstance(attempt.get("result"), Mapping)
+            and all(
+                cast(Mapping[str, object], attempt["result"]).get(name) == value
+                for name, value in commitments.items()
+            )
+        )
+        if not matches:
+            raise ValueError("no successful immutable experiment attempt binds the exact run")
 
 
 class ExperimentRegistry:
@@ -403,6 +439,8 @@ class ExperimentRegistry:
         instance = object.__new__(ExperimentRegistryEvidence)
         values: dict[str, object] = {
             "experiment_id": str(self._definition["experiment_id"]),
+            "model_family": str(self._definition["model_family"]),
+            "feature_set_id": str(self._definition["feature_set_id"]),
             "definition_hash": self.definition_hash,
             "search_manifest_hash": self._space.canonical_hash,
             "attempt_count": _integer(state["attempt_count"]),

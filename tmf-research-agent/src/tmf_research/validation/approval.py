@@ -179,9 +179,32 @@ def assemble_phase5_evidence(
             raise ValueError("real Phase 5 evidence requires sealed raw-derived production evaluation")
         if production_evaluation.dataset_build_hash != dataset_build.content_hash:
             raise ValueError("production evaluation does not belong to exact dataset build")
+        production_evaluation.__post_init__()
+        if (
+            production_evaluation.experiment.experiment_id != experiment.experiment_id
+            or production_evaluation.experiment.checkpoint_hash != experiment.checkpoint_hash
+            or production_evaluation.experiment.terminal_anchor_hash
+            != experiment.terminal_anchor_hash
+            or dict(production_evaluation.experiment.candidate_hashes)
+            != dict(experiment.candidate_hashes)
+            or production_evaluation.cost_policy_hash
+            != experiment.comparison.cost_assumption_hash
+        ):
+            raise ValueError("production evaluation does not belong to exact experiment evidence")
         derived_folds = tuple(value.evidence for value in production_evaluation.folds)
-        if fold_values != derived_folds or dimensions != production_evaluation.dimensions:
-            raise ValueError("caller fold metrics/dimensions cannot replace raw-derived evaluation")
+        if (
+            fold_values != derived_folds
+            or report_values != production_evaluation.reports
+            or gap_values != production_evaluation.gaps
+            or dimensions != production_evaluation.dimensions
+            or tuple(ablations) != production_evaluation.ablations
+            or tuple(coefficients) != production_evaluation.coefficients
+            or tuple(sensitivities) != production_evaluation.sensitivities
+            or tuple(calibrations) != production_evaluation.calibrations
+        ):
+            raise ValueError(
+                "caller evidence cannot replace any raw/model-derived production artifact"
+            )
         if (
             production_evaluation.policy.thresholds_hash
             != experiment.candidate_hashes["thresholds"]
@@ -189,8 +212,11 @@ def assemble_phase5_evidence(
             != experiment.candidate_hashes["rules"]
         ):
             raise ValueError("production decision policy does not match preregistered candidate")
-    elif any(value.authority != "TEST_ONLY" for value in fold_values):
-        raise ValueError("synthetic mechanics require explicit TEST_ONLY fold authority")
+    else:
+        if production_evaluation is not None:
+            raise ValueError("synthetic mechanics cannot carry production evaluation authority")
+        if any(value.authority != "TEST_ONLY" for value in fold_values):
+            raise ValueError("synthetic mechanics require explicit TEST_ONLY fold authority")
     keys = tuple((fold.fold_id, fold.manifest_hash) for fold in fold_values)
     if not keys or len(set(keys)) != len(keys):
         raise ValueError("Phase 5 evidence requires unique planner fold IDs/manifests")
@@ -373,8 +399,6 @@ def decide_phase5(bundle: Phase5EvidenceBundle) -> Phase5DecisionResult:
         reasons.append("COEFFICIENT_OR_REMOVAL_INSTABILITY")
     if any(not value.group_supported for value in bundle.ablations):
         reasons.append("ABLATION_MAJORITY_SUPPORT_FAILED")
-    if bundle.data_provenance.kind is DataProvenanceKind.REAL_READONLY_MARKET_DATA:
-        reasons.append("RAW_DERIVED_PROMOTION_EVIDENCE_INCOMPLETE")
     if len(valid) < 5:
         research = ResearchStatus.INSUFFICIENT_DATA
         status = ModelStatus.REJECTED_INSUFFICIENT_DATA

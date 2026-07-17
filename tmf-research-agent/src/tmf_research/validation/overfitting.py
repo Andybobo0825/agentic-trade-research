@@ -16,6 +16,13 @@ REQUIRED_REGIMES = frozenset({
     "TRENDING", "RANGING", "EXPIRY_WEEK", "NON_EXPIRY_WEEK", "OPENING_30M",
     "INTRADAY", "CLOSING_30M",
 })
+REGIME_FAMILIES = (
+    ("DAY", "NIGHT"),
+    ("HIGH_VOLATILITY", "MEDIUM_VOLATILITY", "LOW_VOLATILITY"),
+    ("TRENDING", "RANGING"),
+    ("EXPIRY_WEEK", "NON_EXPIRY_WEEK"),
+    ("OPENING_30M", "INTRADAY", "CLOSING_30M"),
+)
 _FOLD_EVIDENCE_SEAL = object()
 FoldEvidenceAuthority = Literal["RAW_DERIVED", "TEST_ONLY"]
 
@@ -240,6 +247,14 @@ class StabilityDimensions:
         for name, values in (("months", self.months), ("directions", self.directions), ("target_codes", self.target_codes), ("events", self.events)):
             if not math.isclose(sum(values.values()), self.total_net_pnl, rel_tol=1e-9, abs_tol=1e-9):
                 raise ValueError(f"{name} contributions must reconcile to total net PnL")
+        for family in REGIME_FAMILIES:
+            if not math.isclose(
+                sum(self.regimes[name] for name in family),
+                self.total_net_pnl,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            ):
+                raise ValueError("each regime family must reconcile to total net PnL")
         object.__setattr__(self, "regimes", MappingProxyType(dict(self.regimes)))
         object.__setattr__(self, "months", MappingProxyType(dict(self.months)))
         object.__setattr__(self, "directions", MappingProxyType(dict(self.directions)))

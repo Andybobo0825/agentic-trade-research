@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -22,6 +23,9 @@ class ResearchBuildSpec:
     feature_version: str = "features-v1"
     label_version: str = "labels-v1"
     cost_points: float = 0.0
+    entry_fee_points: float | None = None
+    exit_fee_points: float | None = None
+    tax_points: float | None = None
     requested_outer_folds: int = 5
 
     def __post_init__(self) -> None:
@@ -32,8 +36,15 @@ class ResearchBuildSpec:
             self.processing_version, self.feature_version, self.label_version,
         )):
             raise ValueError("all build-stage versions are required")
-        if self.cost_points < 0.0:
-            raise ValueError("cost_points must be non-negative")
+        costs = (
+            self.cost_points, self.entry_fee_points,
+            self.exit_fee_points, self.tax_points,
+        )
+        if any(
+            value is not None and (not math.isfinite(value) or value < 0.0)
+            for value in costs
+        ):
+            raise ValueError("cost components must be finite and non-negative")
         if isinstance(self.requested_outer_folds, bool) or self.requested_outer_folds < 5:
             raise ValueError("at least five outer folds are required")
         object.__setattr__(self, "calendar", calendar)
@@ -50,6 +61,9 @@ class ResearchBuildSpec:
             "feature_version": self.feature_version,
             "label_version": self.label_version,
             "cost_points": self.cost_points,
+            "entry_fee_points": self.entry_fee_points,
+            "exit_fee_points": self.exit_fee_points,
+            "tax_points": self.tax_points,
             "requested_outer_folds": self.requested_outer_folds,
         }
         return hashlib.sha256(json.dumps(

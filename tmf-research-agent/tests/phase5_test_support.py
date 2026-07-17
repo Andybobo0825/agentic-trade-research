@@ -26,7 +26,7 @@ from tmf_research.validation.approval import (
 from tmf_research.validation.overfitting import (
     FoldEvidence,
     GeneralizationGap,
-    REQUIRED_REGIMES,
+    REGIME_FAMILIES,
     StabilityDimensions,
     generalization_gap,
     _issue_test_fold_evidence,
@@ -46,6 +46,13 @@ from tests.unit.test_phase4_training import training_spec
 
 def synthetic_provenance() -> DataProvenanceEvidence:
     return _issue_synthetic_test_provenance("dataset-v1")
+
+
+def regime_contributions(total: float) -> dict[str, float]:
+    return {
+        name: total / len(family)
+        for family in REGIME_FAMILIES for name in family
+    }
 
 
 def replace_test_fold(fold: FoldEvidence, **changes: object) -> FoldEvidence:
@@ -96,7 +103,7 @@ def subset_fold_evidence(count: int) -> tuple[
     )
     total = 10.0 * count
     dimensions = StabilityDimensions(
-        values[3].regimes, {f"m{index}": 10.0 for index in range(count)},
+        regime_contributions(total), {f"m{index}": 10.0 for index in range(count)},
         {"LONG": total / 2.0, "SHORT": total / 2.0},
         {"TMF202607": total / 2.0, "TMF202608": total / 2.0}, total,
         {f"event-{index}": 10.0 for index in range(count)}, True,
@@ -188,7 +195,7 @@ def complete_fold_evidence() -> tuple[
     removals = tuple(FeatureRemovalEvidence(fold_id, "return_1m", 0.2, 0.1) for fold_id in fold_ids)
     coefficients = coefficient_stability(observations, removals)
     dimensions = StabilityDimensions(
-        {name: 1.0 for name in REQUIRED_REGIMES},
+        regime_contributions(60.0),
         {"2026-01": 15.0, "2026-02": 15.0, "2026-03": 15.0, "2026-04": 15.0},
         {"LONG": 30.0, "SHORT": 30.0},
         {"TMF202607": 30.0, "TMF202608": 30.0},

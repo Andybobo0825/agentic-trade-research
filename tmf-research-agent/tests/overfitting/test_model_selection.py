@@ -15,7 +15,8 @@ from tmf_research.validation.report import FoldReport
 from tests.overfitting.test_experiment_registry import attempt, definition
 from tests.phase4_test_support import TestPhase4FoldPlanner
 from tests.phase5_test_support import (
-    _row, aligned_definition, complete_fold_evidence, replace_test_fold, synthetic_provenance,
+    _row, aligned_definition, complete_fold_evidence, regime_contributions,
+    replace_test_fold, synthetic_provenance,
 )
 
 
@@ -153,7 +154,7 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertIn(
             "FEWER_THAN_FIVE_VALID_OUTER_FOLDS",
             _core_reasons(values[0][:4], StabilityDimensions(
-                values[3].regimes, {"m1": 20.0, "m2": 20.0},
+                regime_contributions(40.0), {"m1": 20.0, "m2": 20.0},
                 {"LONG": 20.0, "SHORT": 20.0}, {"T1": 20.0, "T2": 20.0},
                 40.0, {f"e{i}": 10.0 for i in range(4)}, True,
             ))[2],
@@ -198,7 +199,7 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertIn("DIRECTION_CONCENTRATION_ABOVE_85_PERCENT", cap_reasons)
         negative_folds = tuple(replace_test_fold(fold, net_pnl=-10.0) for fold in values[0])
         negative_dimensions = StabilityDimensions(
-            values[3].regimes, {"m1": -30.0, "m2": -30.0},
+            regime_contributions(-60.0), {"m1": -30.0, "m2": -30.0},
             {"LONG": -30.0, "SHORT": -30.0}, {"T1": -30.0, "T2": -30.0},
             -60.0, {f"e{i}": -10.0 for i in range(6)}, True,
         )
@@ -215,7 +216,8 @@ class ModelSelectionTests(unittest.TestCase):
         values = complete_fold_evidence()
         base = values[3]
         risky = StabilityDimensions(
-            {**base.regimes, "DAY": -1.0}, base.months, base.directions,
+            {**base.regimes, "DAY": -1.0, "NIGHT": 61.0},
+            base.months, base.directions,
             {"TMF202607": -1.0, "TMF202608": 61.0}, 60.0,
             {"event-1": 30.0, "event-2": 30.0}, False,
         )

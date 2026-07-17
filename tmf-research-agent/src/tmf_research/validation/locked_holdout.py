@@ -508,6 +508,7 @@ class LockedHoldout:
         predictions = []
         trades = []
         cost_hashes: set[str] = set()
+        cost_values: set[float] = set()
         for row in rows:
             source, outcome = _production_payload(row)
             inference = bundle.predict(_feature_mapping(source))
@@ -522,25 +523,30 @@ class LockedHoldout:
             label = str(source["label"])
             predictions.append(HoldoutPrediction(
                 row.row_id, int(label in ("LONG", "SHORT")), p_trade,
-                str(outcome["event_id"]), str(outcome["regime"]),
+                str(outcome["event_id"]), "|".join(_strings(outcome["regime_tags"])),
                 str(outcome["target_code"]),
             ))
             cost_hashes.add(str(outcome["cost_policy_hash"]))
+            cost_values.add(_number(outcome["round_trip_cost_points"]))
             if signal != "NO_TRADE":
                 net = _number(outcome[
                     "long_net_points" if signal == "LONG" else "short_net_points"
                 ])
+                gross = _number(outcome[
+                    "long_gross_points" if signal == "LONG" else "short_gross_points"
+                ])
+                cost = _number(outcome["round_trip_cost_points"])
                 trades.append(HoldoutTrade(
                     row.row_id, cast(Literal["LONG", "SHORT"], signal),
-                    net, 0.0, net, str(outcome["event_id"]),
-                    str(outcome["regime"]), str(outcome["target_code"]),
+                    gross, cost, net, str(outcome["event_id"]),
+                    "|".join(_strings(outcome["regime_tags"])), str(outcome["target_code"]),
                 ))
-        if len(cost_hashes) != 1:
+        if len(cost_hashes) != 1 or len(cost_values) != 1:
             self._contaminate("HOLDOUT_COST_POLICY_MISMATCH")
             raise HoldoutAccessError("one exact raw-derived holdout cost policy is required")
         return self._evaluate_values(
             candidate, tuple(predictions), tuple(trades), next(iter(cost_hashes)),
-            expected_cost_points=0.0, authority="RAW_DERIVED",
+            expected_cost_points=next(iter(cost_values)), authority="RAW_DERIVED",
             extra_commitments={
                 "model_hash": hashes["model"], "policy_hash": policy.content_hash,
                 "lineage_hash": state.get("lineage_commitment_hash"),
@@ -602,7 +608,8 @@ class LockedHoldout:
         target_pnl: dict[str, float] = {}
         for value in trade_values:
             event_pnl[value.event_id] = event_pnl.get(value.event_id, 0.0) + value.net_points
-            regime_pnl[value.regime] = regime_pnl.get(value.regime, 0.0) + value.net_points
+            for regime in value.regime.split("|"):
+                regime_pnl[regime] = regime_pnl.get(regime, 0.0) + value.net_points
             target_pnl[value.target_code] = target_pnl.get(value.target_code, 0.0) + value.net_points
         event_concentration = max((max(0.0, value) / net_pnl for value in event_pnl.values()), default=1.0) if net_pnl > 0.0 else 1.0
         reasons: list[str] = []
@@ -914,8 +921,10 @@ def _production_payload(
     if outcome.get("content_hash") != canonical_hash(body):
         raise HoldoutAccessError("production executable outcome commitment mismatch")
     for name in (
-        "cost_policy_hash", "event_id", "regime", "target_code",
-        "long_net_points", "short_net_points",
+        "cost_policy_hash", "event_id", "regime_tags", "target_code",
+        "long_gross_points", "short_gross_points",
+        "long_net_points", "short_net_points", "round_trip_cost_points",
+        "cost_components", "cost_complete", "atr_sensitivity",
     ):
         if name not in outcome:
             raise HoldoutAccessError("production executable outcome is incomplete")
@@ -945,6 +954,16 @@ def _number(value: object) -> float:
     ):
         raise HoldoutAccessError("production executable return is invalid")
     return float(value)
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    if (
+        not isinstance(value, (tuple, list))
+        or not value
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+    ):
+        raise HoldoutAccessError("production regime tags are invalid")
+    return tuple(value)
 
 
 def _approval_state_hash(state: Mapping[str, object]) -> str:

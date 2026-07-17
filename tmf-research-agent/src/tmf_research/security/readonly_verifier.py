@@ -33,6 +33,9 @@ _FORBIDDEN_PAPER_CLASS_NAMES = frozenset(
 _ALLOWED_ADAPTER_PATH = Path(
     "tmf_research/infrastructure/shioaji_market_data.py"
 )
+_ALLOWED_ADAPTER_COMPOSITION_PATH = Path(
+    "tmf_research/infrastructure/market_session.py"
+)
 _RAW_ADAPTER_MODULE = ".".join(
     ("tmf_research", "infrastructure", "shioaji_market_data")
 )
@@ -42,6 +45,7 @@ _ALLOWED_RAW_API_CAPABILITIES = frozenset(
     (
         "Contracts",
         "kbars",
+        "login",
         "quote",
         "subscribe",
         "ticks",
@@ -262,7 +266,11 @@ def _scan_ast(relative: Path, tree: ast.AST) -> set[ReadonlyFinding]:
                     message="SDK imports are allowed only in the raw adapter",
                 )
             )
-        if not is_adapter and _is_raw_adapter_module(module):
+        if (
+            not is_adapter
+            and relative != _ALLOWED_ADAPTER_COMPOSITION_PATH
+            and _is_raw_adapter_module(module)
+        ):
             findings.add(
                 ReadonlyFinding(
                     path=path,

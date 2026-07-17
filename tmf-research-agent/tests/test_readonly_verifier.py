@@ -130,11 +130,35 @@ class ReadonlyVerifierTests(unittest.TestCase):
                     "        self._api.quote.set_on_bidask_fop_v1_callback(print)\n"
                     "        self._api.ticks(contract, date='2026-07-15')\n"
                     "        self._api.kbars(contract, start='x', end='y')\n"
+                    "    def authenticate(self, api):\n"
+                    "        api.login(api_key='k', secret_key='s')\n"
                 )
             }
         )
 
         self.assertTrue(report.ok, report.render())
+
+    def test_only_the_composition_module_may_import_the_raw_adapter(self) -> None:
+        composition = self._verify(
+            {
+                "tmf_research/infrastructure/market_session.py": (
+                    "from tmf_research.infrastructure.shioaji_market_data"
+                    " import create_market_data_session\n"
+                )
+            }
+        )
+        consumer = self._verify(
+            {
+                "tmf_research/collection/backfill.py": (
+                    "from tmf_research.infrastructure.shioaji_market_data"
+                    " import create_market_data_session\n"
+                )
+            }
+        )
+
+        self.assertTrue(composition.ok, composition.render())
+        self.assertFalse(consumer.ok)
+        self.assertEqual(consumer.findings[0].rule, "raw-adapter-dependency")
 
     def test_detects_raw_adapter_dependency_from_a_consumer(self) -> None:
         report = self._verify(

@@ -56,6 +56,16 @@ class AppendOnlyRawStore:
         self._dataset_root = self._root / "datasets" / dataset_version
         self._root.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def dataset_version(self) -> str:
+        return self._dataset_version
+
+    def has_segment(self, event_type: str, segment_id: str) -> bool:
+        _validate_path_component(event_type, "event_type")
+        _validate_path_component(segment_id, "segment_id")
+        path = self._dataset_root / "segments" / event_type / f"{segment_id}.ndjson"
+        return path.is_file()
+
     def append_segment(
         self,
         event_type: str,

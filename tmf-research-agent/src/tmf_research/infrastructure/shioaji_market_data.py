@@ -242,3 +242,38 @@ class ShioajiMarketDataGateway:
         if self._quote_version is not None:
             kwargs["version"] = self._quote_version
         method(raw_contract, **kwargs)
+
+
+def create_market_data_session(
+    *,
+    api_key: str,
+    secret_key: str,
+    simulation: bool,
+    alias_code: str = "TMFR1",
+    clock: Clock | None = None,
+) -> ShioajiMarketDataGateway:
+    """Open a market-data-only Shioaji session inside the adapter boundary.
+
+    Accepts API-key credentials only: no certificate, person id, or account
+    parameter exists, so brokerage capabilities cannot be activated here.
+    """
+
+    if not api_key.strip() or not secret_key.strip():
+        raise ValueError("api_key and secret_key are required")
+    import shioaji  # type: ignore[import-not-found]
+
+    api = shioaji.Shioaji(simulation=simulation)
+    api.login(
+        api_key=api_key,
+        secret_key=secret_key,
+        subscribe_trade=False,
+        fetch_contract=True,
+    )
+    return ShioajiMarketDataGateway(
+        api,
+        tick_quote_type=shioaji.constant.QuoteType.Tick,
+        bidask_quote_type=shioaji.constant.QuoteType.BidAsk,
+        quote_version=shioaji.constant.QuoteVersion.v1,
+        alias_code=alias_code,
+        clock=clock,
+    )

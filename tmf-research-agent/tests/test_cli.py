@@ -100,3 +100,87 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackfillCliTests(unittest.TestCase):
+    def test_backfill_requires_credentials_and_never_guesses(self) -> None:
+        from unittest.mock import patch
+
+        output = StringIO()
+        with patch.dict("os.environ", {"SJ_API_KEY": "", "SJ_SEC_KEY": ""}):
+            with chdir(SIDECAR_ROOT):
+                status = main(
+                    ["backfill", "--start", "2026-07-15", "--end", "2026-07-15"],
+                    stdout=output,
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("CREDENTIALED_VALIDATION_NOT_RUN", output.getvalue())
+
+    def test_backfill_runs_verifier_first_and_stores_days_via_injected_gateway(self) -> None:
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        from tmf_research.domain.contracts import ContractInfo, TickBatch
+
+        fixed_now = datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc)
+        contract = ContractInfo(
+            alias_code="TMFR1", target_code="TMF202607", symbol="TMFR1",
+            category="TMF", delivery_month="202607", delivery_date="2026-07-15",
+            resolved_at=fixed_now, resolver_version="shioaji-near-v1",
+        )
+        base = int((datetime(2026, 7, 15, 9, 1) - datetime(1970, 1, 1)).total_seconds())
+
+        class FakeGateway:
+            def resolve_near_contract(self) -> ContractInfo:
+                return contract
+
+            def fetch_ticks(self, contract_info: ContractInfo, date: str) -> TickBatch:
+                return TickBatch(
+                    contract=contract_info, date=date, fetched_at=fixed_now,
+                    payload={
+                        "ts": [base * 1_000_000_000],
+                        "close": [21500.0],
+                        "bid_price": [21499.0],
+                        "ask_price": [21501.0],
+                    },
+                )
+
+        created: dict[str, object] = {}
+
+        def factory(
+            *, api_key: str, secret_key: str, simulation: bool, alias_code: str,
+        ) -> FakeGateway:
+            created.update(
+                api_key=api_key, simulation=simulation, alias_code=alias_code,
+            )
+            return FakeGateway()
+
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(
+                "os.environ", {"SJ_API_KEY": "key", "SJ_SEC_KEY": "secret"},
+            ):
+                with chdir(SIDECAR_ROOT):
+                    status = main(
+                        [
+                            "backfill",
+                            "--start", "2026-07-15",
+                            "--end", "2026-07-15",
+                            "--data-root", directory,
+                            "--pause-seconds", "0",
+                        ],
+                        stdout=output,
+                        gateway_factory=factory,
+                    )
+
+            self.assertEqual(status, 0, output.getvalue())
+            self.assertEqual(created["api_key"], "key")
+            self.assertEqual(created["simulation"], False)
+            segment = (
+                Path(directory) / "datasets" / "dataset-v1" / "segments"
+                / "historical-tick" / "backfill-tick-TMF202607-2026-07-15.ndjson"
+            )
+            self.assertTrue(segment.is_file())
+        self.assertIn("2026-07-15 STORED records=1", output.getvalue())
+        self.assertIn("BACKFILL COMPLETE", output.getvalue())

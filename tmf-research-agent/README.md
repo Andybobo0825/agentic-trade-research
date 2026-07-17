@@ -75,6 +75,28 @@ and runs the exact console command first.
   Test-only runtimes stamp every prediction with
   `TEST_ONLY_RUNTIME_EVIDENCE` and are never research evidence.
 
+## Historical backfill
+
+`tmf backfill` downloads historical TMF ticks (with L1 bid/ask) into the
+append-only raw store, one create-once segment per day, resumable across
+runs. It runs the readonly verifier first and requires `SJ_API_KEY` and
+`SJ_SEC_KEY` in the environment (market-data login only; certificate
+variables are never read):
+
+```bash
+cd tmf-research-agent
+set -a; source ../.env; set +a
+PYTHONPATH=src .venv/bin/python -m tmf_research.cli backfill \
+  --start 2026-01-02 --end 2026-07-16 --data-root data
+```
+
+Days without data report `NO_DATA`; already-stored days are skipped without
+refetching. Historical data has no five-level order book, so datasets built
+from backfill support only a reduced feature set under its own feature
+version — never mixed with live-collected full features. Shioaji historical
+timestamps are treated as Taipei wall-clock epoch nanoseconds; the
+credentialed smoke test verifies that assumption against real data.
+
 ## Credentialed and real-data gaps
 
 Offline CI has no Shioaji credentials and no network. The following remain
@@ -83,7 +105,8 @@ pass: live authentication and current `TMFR1` payload shape, real Tick/BidAsk
 delivery and reconnect recovery, future exchange-calendar changes, sufficient
 uncontaminated real history for five outer folds plus the locked holdout, and
 any real-data EV/calibration/stability/holdout result. `tests/credentialed`
-does not exist yet; when it does, it runs only with `TMF_RUN_CREDENTIALED=1`.
+runs only with `TMF_RUN_CREDENTIALED=1` plus `SJ_API_KEY`/`SJ_SEC_KEY` and
+otherwise skips with `CREDENTIALED_VALIDATION_NOT_RUN`.
 
 ## Definition-of-Done traceability
 

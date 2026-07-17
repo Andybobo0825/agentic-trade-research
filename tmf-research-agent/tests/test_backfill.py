@@ -329,3 +329,41 @@ class VendorWindowTests(unittest.TestCase):
         ))
 
         self.assertEqual(len(records), 4)
+
+
+class WeekendSkipTests(unittest.TestCase):
+    def test_weekends_are_never_fetched_and_friday_night_lives_in_monday(self) -> None:
+        friday_night_and_monday = {
+            "ts": [
+                wall_ns(2026, 7, 3, 15, 0),
+                wall_ns(2026, 7, 6, 9, 0),
+            ],
+            "close": [21500.0, 21510.0],
+        }
+        gateway = FakeGateway({
+            "2026-07-03": day_payload(3),
+            "2026-07-06": friday_night_and_monday,
+        })
+        with TemporaryDirectory() as directory:
+            store = AppendOnlyRawStore(
+                Path(directory), writer_version="backfill-v1",
+                dataset_version="dataset-v1",
+            )
+
+            summary = run_backfill(
+                gateway, store,
+                start_date="2026-07-03", end_date="2026-07-06",
+                clock=lambda: FIXED_NOW,
+            )
+
+        self.assertEqual(gateway.fetch_calls, ["2026-07-03", "2026-07-06"])
+        self.assertEqual(
+            tuple((result.date, result.status) for result in summary.results),
+            (
+                ("2026-07-03", "STORED"),
+                ("2026-07-04", "NON_TRADING_DAY"),
+                ("2026-07-05", "NON_TRADING_DAY"),
+                ("2026-07-06", "STORED"),
+            ),
+        )
+        self.assertEqual(summary.non_trading_days, 2)

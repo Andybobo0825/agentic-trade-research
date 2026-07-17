@@ -25,7 +25,7 @@ TARGET_DERIVATION = "taifex-third-wednesday-v1"
 _EPOCH = datetime(1970, 1, 1)
 
 Clock = Callable[[], datetime]
-DayStatus = Literal["STORED", "ALREADY_STORED", "NO_DATA"]
+DayStatus = Literal["STORED", "ALREADY_STORED", "NO_DATA", "NON_TRADING_DAY"]
 
 
 class BackfillError(ValueError):
@@ -81,6 +81,10 @@ class BackfillSummary:
         return sum(result.status == "NO_DATA" for result in self.results)
 
     @property
+    def non_trading_days(self) -> int:
+        return sum(result.status == "NON_TRADING_DAY" for result in self.results)
+
+    @property
     def stored_records(self) -> int:
         return sum(
             result.record_count
@@ -111,8 +115,11 @@ def normalize_tick_batch(batch: TickBatch) -> tuple[HistoricalTickRecord, ...]:
     if count == 0:
         return ()
     trading_date = date.fromisoformat(batch.date)
+    previous = trading_date - timedelta(days=1)
+    while previous.weekday() >= 5:
+        previous -= timedelta(days=1)
     window_start = datetime.combine(
-        trading_date - timedelta(days=1), datetime.min.time(), tzinfo=TAIPEI,
+        previous, datetime.min.time(), tzinfo=TAIPEI,
     ) + timedelta(hours=15)
     window_end = datetime.combine(
         trading_date, datetime.min.time(), tzinfo=TAIPEI,
@@ -193,6 +200,10 @@ def run_backfill(
     while current <= last:
         day = current.isoformat()
         segment_id = f"backfill-tick-{contract.alias_code}-{day}"
+        if current.weekday() >= 5:
+            results.append(BackfillDayResult(day, "NON_TRADING_DAY", 0, None))
+            current += timedelta(days=1)
+            continue
         if store.has_segment(EVENT_TYPE, segment_id):
             results.append(BackfillDayResult(day, "ALREADY_STORED", 0, None))
         else:

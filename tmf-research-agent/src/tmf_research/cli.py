@@ -161,6 +161,7 @@ def _backfill(
         f" stored_days={summary.stored_days}"
         f" already_stored_days={summary.already_stored_days}"
         f" no_data_days={summary.no_data_days}"
+        f" non_trading_days={summary.non_trading_days}"
         f" stored_records={summary.stored_records}",
         file=output,
     )

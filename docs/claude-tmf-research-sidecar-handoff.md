@@ -5,6 +5,24 @@ Worktree：/Users/chentingwei/Desktop/SideProject/trade/.worktrees/tmf-research-
 Branch：feature/tmf-research-sidecar  
 HEAD：4ca7a84 Prevent caller-authored metrics from promoting research models
 
+## 0. 2026-07-17 completion update（本節之後為歷史快照）
+
+本 handoff 撰寫後，同日由 Claude 接手完成：
+
+- Phase 5 dirty diff 已審查（無 caller-authored/synthetic promotion 路徑）並以
+  `f7d3360` 提交；gate 修復（tests/infrastructure discovery、strict mypy
+  narrowing）以 `14ab526` 提交。
+- Phase 6 Task 11（paper fill/risk/ledger/PnL/tripwires）以 `8fb5c90` 提交；
+  Task 12（frozen inference、SPEC 36 prediction、approval-gated registry、
+  canonical replay identity、cross-process determinism）以 `31f61cb` 提交。
+- Task 13 全部 offline gate 於 2026-07-17 全數通過：readonly verifier、
+  312 sidecar tests、ruff 0.12.3、mypy 1.16.1 --strict（160 files）、
+  compileall、install smoke、host npm test（272）、isolation audit。
+- Credentialed / real-data 邊界維持 `CREDENTIALED_VALIDATION_NOT_RUN`。
+  Software-complete 不等於 research-capable，也不等於 approved-for-paper。
+
+以下各節是接手當下的歷史快照，數字與狀態以上述為準。
+
 ## 1. 先讀這份結論
 
 這個 worktree 同時包含既有的 Node finance toolkit 與獨立的 tmf-research-agent Python sidecar。後續工作應以 Python sidecar 為主，不要把 root src/、root tests/ 或現有 Node strategy 當成 TMF Phase 5/6 的實作位置。

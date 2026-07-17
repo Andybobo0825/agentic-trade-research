@@ -28,11 +28,29 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Install sidecar command
-        run: python -m pip install --no-deps .
+      - name: Install sidecar command with pinned dev tools
+        run: python -m pip install --no-deps . && python -m pip install "mypy==1.16.1" "ruff==0.12.3"
       - name: Verify read-only boundary
         run: tmf verify-readonly
-      - name: Run Python tests
-        run: python -m unittest discover -s tests -v
+      - name: Run security tests
+        run: python -m unittest discover -s tests/security -t . -v
+      - name: Run unit tests
+        run: python -m unittest discover -s tests/unit -t . -v
+      - name: Run integration tests
+        run: python -m unittest discover -s tests/integration -t . -v
+      - name: Run leakage tests
+        run: python -m unittest discover -s tests/leakage -t . -v
+      - name: Run overfitting tests
+        run: python -m unittest discover -s tests/overfitting -t . -v
+      - name: Run infrastructure tests
+        run: python -m unittest discover -s tests/infrastructure -t . -v
+      - name: Run replay tests
+        run: python -m unittest discover -s tests/replay -t . -v
+      - name: Run full discovery including root boundary tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Lint
+        run: python -m ruff check src tests
+      - name: Strict typecheck
+        run: python -m mypy --strict src tests
       - name: Compile Python source
         run: python -m compileall -q src tests

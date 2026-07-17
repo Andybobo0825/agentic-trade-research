@@ -54,10 +54,13 @@ class ProjectBoundaryTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         verifier = "run: tmf verify-readonly"
-        tests = "python -m unittest discover -s tests -v"
+        first_suite = "python -m unittest discover -s tests/security -t . -v"
+        full_discovery = "python -m unittest discover -s tests -t . -v"
         self.assertIn(verifier, workflow)
-        self.assertIn(tests, workflow)
-        self.assertLess(workflow.index(verifier), workflow.index(tests))
+        self.assertIn(first_suite, workflow)
+        self.assertIn(full_discovery, workflow)
+        self.assertLess(workflow.index(verifier), workflow.index(first_suite))
+        self.assertLess(workflow.index(first_suite), workflow.index(full_discovery))
 
 
 if __name__ == "__main__":

@@ -12,6 +12,24 @@
 
 **Stop condition:** Do not mark Phase 1–6 software-complete until Task 13 has fresh evidence for every offline gate and records all credentialed/real-data gaps without upgrading them to PASS.
 
+## Status reconciliation (2026-07-17)
+
+- **Tasks 1–10 (Phases 0–5):** implemented across earlier sessions; the step
+  checkboxes were never ticked in real time, so they are left as recorded.
+  Completion is evidenced by the artifact inventory and the fresh 2026-07-17
+  full gate: readonly verifier, 312 offline tests across
+  security/unit/integration/leakage/overfitting/infrastructure/replay plus
+  root boundary suites, `ruff==0.12.3`, `mypy==1.16.1 --strict` over 160
+  files, compileall, install smoke, host `npm test` (272), and the
+  isolation audit — all passing at commits `f7d3360` and `14ab526`.
+- **Tasks 11–12 (Phase 6):** executed step-by-step on 2026-07-17
+  (commits `8fb5c90`, `31f61cb`); their checkboxes below are ticked.
+- **Task 13:** executed 2026-07-17. Credentialed/real-data boundary recorded
+  as `CREDENTIALED_VALIDATION_NOT_RUN` (`tests/credentialed` does not exist;
+  no credentials in this environment). Software-complete does not claim
+  research-capable or approved-for-paper: both still require real TMF data
+  through the unchanged pipeline.
+
 ---
 
 ## Locked boundaries and phase gates
@@ -543,35 +561,35 @@ Commit a Lore record documenting immutable experiment budgets, multi-dimensional
 - Test: `tmf-research-agent/tests/unit/test_paper_pnl.py`
 - Test: `tmf-research-agent/tests/security/test_paper_tripwires.py`
 
-- [ ] **Step 1: Write P6-PAP failing tests**
+- [x] **Step 1: Write P6-PAP failing tests**
 
 Assert one contract/position, no add/average/reverse/cross-session, executable-side fills, every entry rejection reason, exit priority, stop-first same-bar ambiguity, point value 10, one-time costs, gross-only incomplete costs, immutable PAPER rows, and untouched F10 tripwires.
 
-- [ ] **Step 2: Run paper/security tests before implementation**
+- [x] **Step 2: Run paper/security tests before implementation**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.unit.test_paper_fill tests.unit.test_paper_risk tests.unit.test_paper_ledger tests.unit.test_paper_pnl tests.security.test_paper_tripwires -v`
 
 Expected: FAIL with missing Phase 6 paper modules.
 
-- [ ] **Step 3: Implement domain-only fill/risk decisions**
+- [x] **Step 3: Implement domain-only fill/risk decisions**
 
 Accept immutable market/model/config values only. LONG fills ask plus slippage; SHORT fills bid minus slippage. Reject missing/stale quote, excess spread, invalid quality/model/features, open position, rollover, session end, and incomplete cost config with persisted reasons.
 
-- [ ] **Step 4: Implement deterministic exits and append-only ledger**
+- [x] **Step 4: Implement deterministic exits and append-only ledger**
 
 Evaluate stop, target, vertical, session, stale, rollover in that order. Use tick order when available; otherwise stop first for same-bar ambiguity. Persist immutable rows with non-overridable `PAPER` mode and content checksum.
 
-- [ ] **Step 5: Implement transparent PnL**
+- [x] **Step 5: Implement transparent PnL**
 
 Calculate `gross_pnl_ntd = gross_pnl_points * 10`; subtract entry fee, exit fee, tax, and slippage exactly once. Missing costs permit gross output but no net value or profitability claim.
 
-- [ ] **Step 6: Run Phase 6 paper and readonly tests**
+- [x] **Step 6: Run Phase 6 paper and readonly tests**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m tmf_research.cli verify-readonly --root . && PYTHONPATH=src python3 -m unittest tests.unit.test_paper_fill tests.unit.test_paper_risk tests.unit.test_paper_ledger tests.unit.test_paper_pnl tests.security.test_paper_tripwires tests.test_paper_boundary -v`
 
 Expected: verifier and all P6-PAP tests PASS; no tripwire is called.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Commit a Lore record documenting local paper-only accounting and the absence of any transport/account/raw-API surface.
 
@@ -590,33 +608,33 @@ Commit a Lore record documenting local paper-only accounting and the absence of 
 - Test: `tmf-research-agent/tests/replay/test_determinism.py`
 - Test: `tmf-research-agent/tests/replay/test_faults.py`
 
-- [ ] **Step 1: Write P6-INF/P6-REP failing tests**
+- [x] **Step 1: Write P6-INF/P6-REP failing tests**
 
 Assert one inference per complete 1m bar, the 14 SPEC 35 checks in order, immutable frozen configuration, complete SPEC 36 JSON, `APPROVED_FOR_PAPER` enforcement, shared live/replay event interfaces, event-time operation, byte-identical two-process replay, version non-overwrite, fault equivalence, and complete trace IDs.
 
-- [ ] **Step 2: Run inference/replay tests before implementation**
+- [x] **Step 2: Run inference/replay tests before implementation**
 
 Run: `cd tmf-research-agent && PYTHONPATH=src python3 -m unittest tests.unit.test_prediction tests.integration.test_live_inference tests.integration.test_model_registry tests.replay.test_replay tests.replay.test_determinism tests.replay.test_faults -v`
 
 Expected: FAIL with missing runtime/replay modules.
 
-- [ ] **Step 3: Implement fail-closed frozen inference**
+- [x] **Step 3: Implement fail-closed frozen inference**
 
 Execute connection, target, rollover, tick freshness, BidAsk freshness, quality, features, feature version, model checksum, probability, thresholds, prediction, paper handoff, persistence in exact order. Any failure persists a reasoned NO_TRADE result. Runtime setters for features, coefficients, scaler, thresholds, stop, target, and horizon do not exist.
 
-- [ ] **Step 4: Implement complete prediction serialization**
+- [x] **Step 4: Implement complete prediction serialization**
 
 Serialize the exact SPEC 36 schema with point value 10, probabilities, signal, paper plan, quality, model/feature/label versions, reasons, missing features, warnings, and traceability to raw checksum/dataset/experiment/commit/ledger.
 
-- [ ] **Step 5: Implement event-time replay and canonical manifests**
+- [x] **Step 5: Implement event-time replay and canonical manifests**
 
 Replay consumes the same immutable events as live research, performs no network access, and derives time only from event data. Canonical manifests fix raw checksum, dataset/feature/label/model versions, experiment, commit, seed, calendar, and cost versions; exclude volatile path/duration metadata from canonical output.
 
-- [ ] **Step 6: Prove cross-process determinism and fault equivalence**
+- [x] **Step 6: Prove cross-process determinism and fault equivalence**
 
 Run two subprocesses in different temporary directories with timezone/locale noise. Compare normalized events, bars, features, labels, probabilities, signals, fills, PnL, reports, and final SHA-256 byte-for-byte. Inject disconnect, drop, stale, rollover, and session faults and compare live/replay NO_TRADE or exit outcomes.
 
-- [ ] **Step 7: Run the complete Phase 6 gate**
+- [x] **Step 7: Run the complete Phase 6 gate**
 
 Run:
 
@@ -630,7 +648,7 @@ PYTHONPATH=src python3 -m unittest tests.unit.test_prediction tests.integration.
 
 Expected: all P6 mappings PASS; only approved compatible bundles enable paper plans.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 Commit a Lore record documenting shared event-time interfaces, immutable runtime configuration, and canonical replay identity.
 
@@ -642,7 +660,7 @@ Commit a Lore record documenting shared event-time interfaces, immutable runtime
 - Modify: `.github/workflows/tmf-research-sidecar.yml`
 - Modify: `docs/superpowers/plans/2026-07-15-tmf-research-sidecar-phase1-6.md`
 
-- [ ] **Step 1: Run verifier and all offline sidecar suites in phase order**
+- [x] **Step 1: Run verifier and all offline sidecar suites in phase order**
 
 Run:
 
@@ -660,7 +678,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests/regression -v
 
 Expected: verifier prints `READONLY VERIFIED`; every offline suite exits 0.
 
-- [ ] **Step 2: Run lint, strict typecheck, compile/install smoke**
+- [x] **Step 2: Run lint, strict typecheck, compile/install smoke**
 
 Run the pinned lint and strict typecheck commands, then:
 
@@ -675,7 +693,7 @@ PYTHONPATH=/tmp/tmf-research-install-smoke python3 -m tmf_research.cli verify-re
 
 Expected: all commands exit 0 and the installed CLI prints `READONLY VERIFIED`.
 
-- [ ] **Step 3: Run host regressions and isolation audit**
+- [x] **Step 3: Run host regressions and isolation audit**
 
 Run from repository root:
 
@@ -687,7 +705,7 @@ rg -n 'tmf-research-agent|tmf_research' src tests package.json workflows || true
 
 Expected: host tests PASS; no host integration diff/reference exists.
 
-- [ ] **Step 4: Record credentialed/real-data evidence honestly**
+- [x] **Step 4: Record credentialed/real-data evidence honestly**
 
 If authorized credentials and an open market are available, run only:
 
@@ -698,11 +716,11 @@ TMF_RUN_CREDENTIALED=1 PYTHONPATH=src python3 -m unittest discover -s tests/cred
 
 Otherwise record `CREDENTIALED_VALIDATION_NOT_RUN`. Never translate an unavailable boundary into PASS and never claim positive EV, calibration, stability, or paper approval from synthetic fixtures.
 
-- [ ] **Step 5: Reconcile README, traceability, and plan checkboxes**
+- [x] **Step 5: Reconcile README, traceability, and plan checkboxes**
 
 Document exact commands, phase gates, generated artifact locations, state meanings, credentialed gaps, and the permanent no-brokerage boundary. Map every SPEC 46 row to P0–P6 evidence from the companion test spec.
 
-- [ ] **Step 6: Run final repository checks**
+- [x] **Step 6: Run final repository checks**
 
 Run:
 
@@ -714,7 +732,7 @@ git diff --stat
 
 Expected: no whitespace errors, no debug artifacts, and only approved sidecar/CI/docs paths changed.
 
-- [ ] **Step 7: Independent reviews and final Lore commit**
+- [x] **Step 7: Independent reviews and final Lore commit**
 
 Obtain independent code-reviewer and architect approval after the full evidence is fresh. Commit a Lore record with constraints, rejected unsafe alternatives, confidence, scope risk, exact tests, and explicit not-tested credentialed/real-data gaps.
 

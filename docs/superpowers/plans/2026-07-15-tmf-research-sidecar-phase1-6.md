@@ -29,6 +29,16 @@
   no credentials in this environment). Software-complete does not claim
   research-capable or approved-for-paper: both still require real TMF data
   through the unchanged pipeline.
+- **Review evidence:** the uncommitted Phase 5 diff (authored by the previous
+  agent) received an independent line-by-line review before commit,
+  confirming no caller-authored or synthetic evidence can promote a model.
+  The Phase 6 commits received an adversarial review pass focused on
+  promotion integrity, SPEC 35 ordering, cost accounting, and replay
+  determinism; it found and fixed one hardening gap (the live runner now
+  re-verifies the frozen runtime seal, so a hand-assembled runtime cannot
+  claim APPROVED_FOR_PAPER authority). A fully independent multi-agent
+  review was attempted but blocked by session limits; re-run
+  `/code-review` on this branch when available.
 
 ---
 

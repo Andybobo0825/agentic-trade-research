@@ -189,6 +189,36 @@ class LiveInferenceTests(unittest.TestCase):
                 log=self.runner.log,
             )
 
+    def test_runner_reverifies_the_runtime_seal_against_forgery(self) -> None:
+        from tmf_research.paper.broker import PaperBroker
+        from tmf_research.runtime.feature_state import BarCloseGate
+        from tmf_research.runtime.live_research import (
+            FrozenLiveRuntime,
+            PredictionLog,
+        )
+
+        forged = object.__new__(FrozenLiveRuntime)
+        for name in FrozenLiveRuntime.__slots__:
+            if name == "_seal":
+                object.__setattr__(forged, name, object())
+            elif name in ("authority",):
+                object.__setattr__(forged, name, "APPROVED_FOR_PAPER")
+            elif name in ("approval",):
+                object.__setattr__(forged, name, None)
+            else:
+                object.__setattr__(forged, name, getattr(self.runtime, name))
+
+        for candidate in (forged, object.__new__(FrozenLiveRuntime)):
+            with self.subTest(candidate=type(candidate).__name__):
+                with self.assertRaises((TypeError, AttributeError)):
+                    LiveResearchRunner(
+                        runtime=candidate,
+                        loaded_checksum=self.checksum,
+                        broker=PaperBroker(),
+                        gate=BarCloseGate(),
+                        log=PredictionLog(),
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

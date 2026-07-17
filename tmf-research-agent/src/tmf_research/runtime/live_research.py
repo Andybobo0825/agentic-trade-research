@@ -364,6 +364,7 @@ class LiveResearchRunner:
     ) -> None:
         if not isinstance(runtime, FrozenLiveRuntime):
             raise TypeError("runner requires a frozen live runtime")
+        runtime.__post_init__()
         if not isinstance(broker, PaperBroker):
             raise TypeError("runner requires the paper broker boundary")
         self.runtime = runtime

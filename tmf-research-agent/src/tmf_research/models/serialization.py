@@ -335,8 +335,34 @@ def load_model_bundle(root: Path, expected: ExpectedModelContract) -> ModelLoadR
     return ModelLoadResult(bundle, None, (), actual)
 
 
-def load_approved_model_bundle(_root: Path, _expected: ExpectedModelContract) -> ModelLoadResult:
-    return _rejected("PHASE6_APPROVED_LOADER_NOT_IMPLEMENTED")
+def load_approved_model_bundle(
+    root: Path,
+    expected: ExpectedModelContract,
+    *,
+    approval: object,
+) -> ModelLoadResult:
+    """Load a bundle for live paper research; requires the sealed approval.
+
+    Any object other than the Phase 5 gate-issued ApprovalCapability, and any
+    candidate-hash mismatch between the approval and the stored bundle, is a
+    persisted NO_TRADE.
+    """
+
+    from tmf_research.experiments.registry import phase4_candidate_hashes
+    from tmf_research.validation.approval import ApprovalCapability
+
+    if not isinstance(approval, ApprovalCapability):
+        return _rejected("MODEL_NOT_APPROVED_FOR_PAPER")
+    result = load_model_bundle(root, expected)
+    if result.bundle is None:
+        return result
+    if dict(phase4_candidate_hashes(result.bundle)) != dict(
+        approval.candidate_hashes
+    ):
+        return _rejected(
+            "APPROVAL_CANDIDATE_BUNDLE_MISMATCH", checksum=result.checksum,
+        )
+    return result
 
 
 def _contract_mismatches(bundle: ModelBundle, expected: ExpectedModelContract) -> tuple[str, ...]:

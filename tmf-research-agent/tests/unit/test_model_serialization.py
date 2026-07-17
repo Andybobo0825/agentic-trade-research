@@ -269,8 +269,11 @@ class ModelSerializationTests(unittest.TestCase):
         approved = load_approved_model_bundle(
             Path("unused"),
             ExpectedModelContract.from_bundle(original, model_checksum="0" * 64),
+            approval=None,
         )
-        self.assertEqual(approved.reasons, ("PHASE6_APPROVED_LOADER_NOT_IMPLEMENTED",))
+        self.assertIsNone(approved.bundle)
+        self.assertEqual(approved.signal, "NO_TRADE")
+        self.assertEqual(approved.reasons, ("MODEL_NOT_APPROVED_FOR_PAPER",))
 
     def test_bundle_rejects_manifest_or_calibration_provenance_disagreement(self) -> None:
         original = bundle()

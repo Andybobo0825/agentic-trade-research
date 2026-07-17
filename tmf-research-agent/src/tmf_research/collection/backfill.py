@@ -110,7 +110,23 @@ def normalize_tick_batch(batch: TickBatch) -> tuple[HistoricalTickRecord, ...]:
     count = lengths.pop()
     if count == 0:
         return ()
-    target_code, delivery_date = derived_near_target(date.fromisoformat(batch.date))
+    trading_date = date.fromisoformat(batch.date)
+    window_start = datetime.combine(
+        trading_date - timedelta(days=1), datetime.min.time(), tzinfo=TAIPEI,
+    ) + timedelta(hours=15)
+    window_end = datetime.combine(
+        trading_date, datetime.min.time(), tzinfo=TAIPEI,
+    ) + timedelta(hours=13, minutes=46)
+    times = tuple(_tick_time(batch.date, value) for value in columns["ts"])
+    inside = sum(window_start <= value < window_end for value in times)
+    if inside == 0:
+        return ()
+    if inside != count:
+        raise BackfillError(
+            f"{batch.date}: payload mixes ticks inside and outside the"
+            " trading-date window"
+        )
+    target_code, delivery_date = derived_near_target(trading_date)
     records = []
     for index in range(count):
         records.append(HistoricalTickRecord(
@@ -118,7 +134,7 @@ def normalize_tick_batch(batch: TickBatch) -> tuple[HistoricalTickRecord, ...]:
             event_id=(
                 f"hist-tick-{batch.contract.alias_code}-{batch.date}-{index:06d}"
             ),
-            exchange_datetime=_tick_time(batch.date, columns["ts"][index]),
+            exchange_datetime=times[index],
             received_at=batch.fetched_at,
             source=SOURCE,
             alias_code=batch.contract.alias_code,

@@ -284,3 +284,48 @@ class TargetDerivationTests(unittest.TestCase):
             derived_near_target(date(2026, 12, 17)),
             ("TMF202701", "2027-01-20"),
         )
+
+
+class VendorWindowTests(unittest.TestCase):
+    def test_payload_entirely_outside_the_date_window_is_no_data(self) -> None:
+        stale = {
+            "ts": [wall_ns(2026, 7, 9, 15, 0), wall_ns(2026, 7, 10, 4, 59)],
+            "close": [21500.0, 21501.0],
+        }
+
+        records = normalize_tick_batch(TickBatch(
+            contract=contract(), date="2026-07-12",
+            fetched_at=FIXED_NOW, payload=stale,
+        ))
+
+        self.assertEqual(records, ())
+
+    def test_partially_out_of_window_payload_fails_closed(self) -> None:
+        mixed = {
+            "ts": [wall_ns(2026, 7, 11, 15, 0), wall_ns(2026, 7, 9, 15, 0)],
+            "close": [21500.0, 21501.0],
+        }
+
+        with self.assertRaisesRegex(BackfillError, "window"):
+            normalize_tick_batch(TickBatch(
+                contract=contract(), date="2026-07-12",
+                fetched_at=FIXED_NOW, payload=mixed,
+            ))
+
+    def test_night_and_day_session_bounds_stay_inside_the_window(self) -> None:
+        edges = {
+            "ts": [
+                wall_ns(2026, 7, 15, 15, 0),
+                wall_ns(2026, 7, 16, 4, 59, 59),
+                wall_ns(2026, 7, 16, 8, 45),
+                wall_ns(2026, 7, 16, 13, 44, 59),
+            ],
+            "close": [1.0, 2.0, 3.0, 4.0],
+        }
+
+        records = normalize_tick_batch(TickBatch(
+            contract=contract(), date="2026-07-16",
+            fetched_at=FIXED_NOW, payload=edges,
+        ))
+
+        self.assertEqual(len(records), 4)

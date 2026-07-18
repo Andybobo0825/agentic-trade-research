@@ -168,11 +168,18 @@ class FailClosedTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoricalAdapterError, "close"):
             decode_historical_day(DAY, [incomplete])
 
-    def test_rejects_non_monotonic_times_and_mixed_targets(self) -> None:
+    def test_out_of_order_vendor_ticks_are_processed_in_time_order(self) -> None:
         backwards = [record(0, DAY_TIME), record(1, NIGHT_TIME)]
-        with self.assertRaisesRegex(HistoricalAdapterError, "order"):
-            decode_historical_day(DAY, backwards)
 
+        ticks, _quotes = decode_historical_day(DAY, backwards)
+
+        self.assertEqual(
+            [tick.exchange_datetime.isoformat() for tick in ticks],
+            sorted(tick.exchange_datetime.isoformat() for tick in ticks),
+        )
+        self.assertEqual(ticks[0].event_id, f"hist-tick-TMFR1-{DAY}-000001")
+
+    def test_rejects_mixed_targets(self) -> None:
         mixed = [record(0, NIGHT_TIME), record(1, DAY_TIME)]
         mixed[1]["derived_target_code"] = "TMF202609"
         with self.assertRaisesRegex(HistoricalAdapterError, "target"):

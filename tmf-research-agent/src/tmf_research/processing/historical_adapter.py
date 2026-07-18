@@ -34,15 +34,24 @@ def decode_historical_day(
     holiday-eve night belongs to the next trading date instead of the queried
     segment day, and a tick outside every calendar session fails closed.
     Without a calendar, the segment day and an hour heuristic apply.
+
+    Records process in timestamp order regardless of vendor array position
+    (real payloads occasionally misplace a night tick after the day close);
+    ties keep their stored order, so output stays deterministic. Events do
+    not duplicate the raw fields in memory: the append-only segments remain
+    the immutable raw evidence.
     """
 
     resolver = None if calendar is None else SessionResolver(calendar)
     ticks: list[TickEvent] = []
     quotes: list[BidAskEvent] = []
-    previous_time: datetime | None = None
     previous_level: tuple[float, int, float, int] | None = None
     target_code: str | None = None
-    for record in records:
+    ordered = sorted(
+        enumerate(records),
+        key=lambda item: (_time(item[1], "exchange_datetime", day), item[0]),
+    )
+    for _original_index, record in ordered:
         source = record.get("source")
         if source != HISTORICAL_TICK_SOURCE:
             raise HistoricalAdapterError(f"{day}: unexpected record source {source!r}")
@@ -60,9 +69,6 @@ def decode_historical_day(
             )
         exchange_datetime = _time(record, "exchange_datetime", day)
         received_at = _time(record, "received_at", day)
-        if previous_time is not None and exchange_datetime < previous_time:
-            raise HistoricalAdapterError(f"{day}: ticks are not in time order")
-        previous_time = exchange_datetime
         fields = record.get("fields")
         if not isinstance(fields, Mapping):
             raise HistoricalAdapterError(f"{day}: record fields are missing")
@@ -89,7 +95,7 @@ def decode_historical_day(
             close=_number(fields, "close", day),
             volume=_integer(fields, "volume", day),
             simtrade=False,
-            raw_payload=dict(fields),
+            raw_payload={},
             trading_date=trading_date,
             session=session,
             tick_type=_optional_integer(fields.get("tick_type")),
@@ -112,7 +118,7 @@ def decode_historical_day(
                 ask_prices=(ask_price,),
                 ask_volumes=(ask_volume,),
                 simtrade=False,
-                raw_payload={"source": HISTORICAL_QUOTE_SOURCE, **dict(fields)},
+                raw_payload={"source": HISTORICAL_QUOTE_SOURCE},
                 trading_date=trading_date,
                 session=session,
             ))

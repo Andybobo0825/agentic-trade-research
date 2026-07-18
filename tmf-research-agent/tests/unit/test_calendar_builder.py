@@ -166,3 +166,35 @@ class CalendarBuilderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MidnightFragmentTests(unittest.TestCase):
+    def test_after_midnight_night_fragment_starts_the_previous_evening(self) -> None:
+        payload = build_calendar_payload([
+            manifest(
+                "2024-12-31",
+                "2024-12-30T15:00:00.012000+08:00",
+                "2024-12-31T13:44:59.748000+08:00",
+            ),
+            manifest(
+                "2025-01-01",
+                "2025-01-01T00:00:01.738000+08:00",
+                "2025-01-01T04:59:59.603000+08:00",
+            ),
+            manifest(
+                "2025-01-02",
+                "2025-01-02T08:45:00.027000+08:00",
+                "2025-01-02T13:44:59.888000+08:00",
+            ),
+        ], version="cal-v1")
+
+        days = payload["days"]
+        assert isinstance(days, list)
+        by_date = {
+            entry["trading_date"]: entry
+            for entry in days
+            if isinstance(entry, dict)
+        }
+        entry = by_date["2025-01-02"]
+        self.assertEqual(entry["night_open"], "2024-12-31T15:00:00")
+        self.assertEqual(entry["night_close"], "2025-01-01T05:00:01")

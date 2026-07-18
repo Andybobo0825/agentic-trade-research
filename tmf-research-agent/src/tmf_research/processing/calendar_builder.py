@@ -47,7 +47,11 @@ def build_calendar_payload(
         has_night = minimum.date() < segment_day or minimum.hour < 8
         has_day = maximum.date() == segment_day and maximum.hour >= 8
         if has_night:
-            night_starts.append(minimum.date())
+            night_starts.append(
+                minimum.date()
+                if minimum.hour >= 15
+                else minimum.date() - timedelta(days=1)
+            )
         if has_day:
             existing = day_evidence.get(segment_day)
             if existing is None or maximum > existing:

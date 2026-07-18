@@ -49,6 +49,14 @@ def build_parser() -> argparse.ArgumentParser:
     phase5.add_argument("--raw-root", type=Path, required=True)
     phase5.add_argument("--calendar", type=Path, required=True)
     phase5.add_argument("--witness-db", type=Path, required=True)
+    phase5.add_argument("--feature-version", default="features-v1")
+    calendar_command = commands.add_parser(
+        "build-calendar",
+        help="derive a trading calendar from stored historical segment evidence",
+    )
+    calendar_command.add_argument("--data-root", type=Path, default=Path("data"))
+    calendar_command.add_argument("--out", type=Path, required=True)
+    calendar_command.add_argument("--calendar-version", default="")
     backfill = commands.add_parser(
         "backfill",
         help="download historical TMF ticks into the append-only raw store",
@@ -76,7 +84,14 @@ def main(
     output = stdout or sys.stdout
     args = build_parser().parse_args(argv)
     if args.command == "phase5-status":
-        return _phase5_status(args.raw_root, args.calendar, args.witness_db, output)
+        return _phase5_status(
+            args.raw_root, args.calendar, args.witness_db, output,
+            feature_version=str(args.feature_version),
+        )
+    if args.command == "build-calendar":
+        return _build_calendar(
+            Path(args.data_root), Path(args.out), str(args.calendar_version), output,
+        )
     if args.command == "backfill":
         return _backfill(args, output, gateway_factory)
     if args.command != "verify-readonly":
@@ -176,8 +191,59 @@ def _backfill(
     return 0
 
 
-def _phase5_status(raw_root: Path, calendar: Path, witness_db: Path, output: TextIO) -> int:
+def _build_calendar(
+    data_root: Path,
+    out: Path,
+    calendar_version: str,
+    output: TextIO,
+) -> int:
+    from tmf_research.processing.calendar_builder import (
+        CalendarBuilderError,
+        build_calendar_payload,
+    )
+
+    manifest_path = data_root / "manifest.ndjson"
+    if not manifest_path.is_file():
+        print(f"CALENDAR FAILED: no manifest at {manifest_path}", file=output)
+        return 1
+    rows = [
+        json.loads(line)
+        for line in manifest_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    try:
+        payload = build_calendar_payload(
+            rows,
+            version=calendar_version or "tmf-historical-evidence-v1",
+        )
+    except (CalendarBuilderError, ValueError) as error:
+        print(f"CALENDAR FAILED: {error}", file=output)
+        return 1
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8",
+    )
+    days = payload["days"]
+    assert isinstance(days, list)
+    print(
+        f"CALENDAR WRITTEN days={len(days)} version={payload['version']}"
+        f" out={out}",
+        file=output,
+    )
+    return 0
+
+
+def _phase5_status(
+    raw_root: Path,
+    calendar: Path,
+    witness_db: Path,
+    output: TextIO,
+    *,
+    feature_version: str = "features-v1",
+) -> int:
     status = "REJECTED_INSUFFICIENT_DATA"
+    reasons: tuple[str, ...] = ()
+    detail: dict[str, object] = {}
     try:
         from tmf_research.features.context_builder import ResearchBuildSpec
         from tmf_research.infrastructure.raw_store import AppendOnlyRawStore, SegmentManifest
@@ -198,14 +264,29 @@ def _phase5_status(raw_root: Path, calendar: Path, witness_db: Path, output: Tex
             evidence = Phase5DatasetIssuer().issue(
                 raw_store=store,
                 manifests=manifests,
-                spec=ResearchBuildSpec(calendar=calendar),
+                spec=ResearchBuildSpec(
+                    calendar=calendar, feature_version=feature_version,
+                ),
                 holdout_root=raw_root.parent / "phase5-holdout",
                 witness=SqliteTrustedWitness(witness_db.resolve()),
             )
             status = evidence.status
-    except (OSError, ValueError, TypeError, RuntimeError, json.JSONDecodeError):
+            reasons = evidence.rejection_reasons
+            detail = {
+                "development_samples": len(evidence.development_samples),
+                "outer_folds": len(evidence.fold_capabilities),
+            }
+    except (OSError, ValueError, TypeError, RuntimeError, json.JSONDecodeError) as error:
         status = "REJECTED_INSUFFICIENT_DATA"
-    print(json.dumps({"status": status}, separators=(",", ":")), file=output)
+        reasons = (f"BUILD_ERROR:{type(error).__name__}:{error}",)
+    print(
+        json.dumps(
+            {"status": status, "reasons": list(reasons), **detail},
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ),
+        file=output,
+    )
     return 0
 
 

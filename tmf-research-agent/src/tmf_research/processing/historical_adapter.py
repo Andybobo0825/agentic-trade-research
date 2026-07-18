@@ -6,6 +6,8 @@ from datetime import datetime
 
 from tmf_research.collection.backfill import SOURCE as HISTORICAL_TICK_SOURCE
 from tmf_research.domain.events import BidAskEvent, Session, TickEvent
+from tmf_research.domain.sessions import TradingCalendar
+from tmf_research.processing.session_resolver import SessionResolver
 
 
 HISTORICAL_QUOTE_SOURCE = "DERIVED_FROM_HISTORICAL_TICK_L1"
@@ -18,6 +20,8 @@ class HistoricalAdapterError(ValueError):
 def decode_historical_day(
     day: str,
     records: Sequence[Mapping[str, object]],
+    *,
+    calendar: TradingCalendar | None = None,
 ) -> tuple[tuple[TickEvent, ...], tuple[BidAskEvent, ...]]:
     """Turn one verified historical-tick day into pipeline-ready events.
 
@@ -25,8 +29,14 @@ def decode_historical_day(
     changes, always carry their source tick's timestamps (never earlier),
     and are explicitly marked as derived. Invalid embedded quotes (zero or
     crossed) derive nothing, so downstream staleness rules apply.
+
+    With a calendar, trading date and session come from the resolver, so a
+    holiday-eve night belongs to the next trading date instead of the queried
+    segment day, and a tick outside every calendar session fails closed.
+    Without a calendar, the segment day and an hour heuristic apply.
     """
 
+    resolver = None if calendar is None else SessionResolver(calendar)
     ticks: list[TickEvent] = []
     quotes: list[BidAskEvent] = []
     previous_time: datetime | None = None
@@ -56,7 +66,18 @@ def decode_historical_day(
         fields = record.get("fields")
         if not isinstance(fields, Mapping):
             raise HistoricalAdapterError(f"{day}: record fields are missing")
-        session = _session_for(exchange_datetime, day)
+        if resolver is None:
+            session: Session = _session_for(exchange_datetime, day)
+            trading_date = day
+        else:
+            resolution = resolver.resolve(exchange_datetime)
+            if resolution.session == "CLOSED" or resolution.trading_date is None:
+                raise HistoricalAdapterError(
+                    f"{day}: tick at {exchange_datetime.isoformat()} falls"
+                    " outside every calendar session"
+                )
+            session = resolution.session
+            trading_date = resolution.trading_date.isoformat()
         tick = TickEvent(
             event_id=event_id,
             received_at=received_at,
@@ -69,7 +90,7 @@ def decode_historical_day(
             volume=_integer(fields, "volume", day),
             simtrade=False,
             raw_payload=dict(fields),
-            trading_date=day,
+            trading_date=trading_date,
             session=session,
             tick_type=_optional_integer(fields.get("tick_type")),
         )
@@ -92,7 +113,7 @@ def decode_historical_day(
                 ask_volumes=(ask_volume,),
                 simtrade=False,
                 raw_payload={"source": HISTORICAL_QUOTE_SOURCE, **dict(fields)},
-                trading_date=day,
+                trading_date=trading_date,
                 session=session,
             ))
     return tuple(ticks), tuple(quotes)

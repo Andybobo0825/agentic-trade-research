@@ -12,8 +12,12 @@ from typing import Literal
 
 from tmf_research.domain.events import BidAskEvent, TickEvent
 from tmf_research.features.context_builder import ResearchBuildSpec, build_feature_context
-from tmf_research.features.definitions import default_feature_manifest
+from tmf_research.features.definitions import (
+    default_feature_manifest,
+    historical_l1_feature_manifest,
+)
 from tmf_research.features.pipeline import FeaturePipeline
+from tmf_research.processing.historical_adapter import decode_historical_day
 from tmf_research.infrastructure.raw_store import AppendOnlyRawStore, SegmentManifest
 from tmf_research.infrastructure.trusted_witness import TrustedWitness
 from tmf_research.labeling.executable_prices import ExecutablePricePolicy
@@ -317,12 +321,24 @@ class Phase5DatasetIssuer:
         provenance = raw_store.phase5_provenance(manifests)
         ticks: list[TickEvent] = []
         quotes: list[BidAskEvent] = []
+        historical_calendar = (
+            spec.trading_calendar()
+            if any(manifest.event_type == "historical-tick" for manifest in manifests)
+            else None
+        )
         for manifest in manifests:
             records = raw_store.read_verified(manifest)
             if manifest.event_type == "tick":
                 ticks.extend(decode_tick(record) for record in records)
             elif manifest.event_type == "bidask":
                 quotes.extend(decode_bidask(record) for record in records)
+            elif manifest.event_type == "historical-tick":
+                day = manifest.segment_id.rpartition("TMFR1-")[2]
+                day_ticks, day_quotes = decode_historical_day(
+                    day, records, calendar=historical_calendar,
+                )
+                ticks.extend(day_ticks)
+                quotes.extend(day_quotes)
         try:
             samples, outcomes = _derive_samples(
                 tuple(ticks), tuple(quotes), tuple(manifests), spec,
@@ -392,7 +408,11 @@ def _derive_samples(
 ) -> tuple[tuple[TemporalSample, ...], tuple[ExecutableOutcome, ...]]:
     result: list[TemporalSample] = []
     outcomes: list[ExecutableOutcome] = []
-    feature_manifest = replace(default_feature_manifest(), version=spec.feature_version)
+    feature_manifest = (
+        historical_l1_feature_manifest()
+        if spec.feature_version == "phase3-features-hist-l1-v1"
+        else replace(default_feature_manifest(), version=spec.feature_version)
+    )
     feature_pipeline = FeaturePipeline(feature_manifest)
     label_pipeline = LabelPipeline()
     price_policy = ExecutablePricePolicy(entry_slippage=0.0, exit_slippage=spec.cost_points)

@@ -25,10 +25,11 @@ class CliTests(unittest.TestCase):
             ], stdout=output)
 
         self.assertEqual(status, 0)
-        self.assertEqual(
-            output.getvalue(),
-            '{"status":"REJECTED_INSUFFICIENT_DATA"}\n',
-        )
+        import json as json_module
+
+        payload = json_module.loads(output.getvalue())
+        self.assertEqual(payload["status"], "REJECTED_INSUFFICIENT_DATA")
+        self.assertIsInstance(payload["reasons"], list)
 
     def test_verify_readonly_succeeds_for_the_sidecar(self) -> None:
         output = StringIO()

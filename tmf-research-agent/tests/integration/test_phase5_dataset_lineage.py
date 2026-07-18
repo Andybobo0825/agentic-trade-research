@@ -75,8 +75,11 @@ class Phase5DatasetLineageTests(unittest.TestCase):
 
             self.assertEqual(main(argv, stdout=first), 0)
             self.assertEqual(main(argv, stdout=second), 0)
-            self.assertEqual(first.getvalue(), '{"status":"READY"}\n')
-            self.assertEqual(second.getvalue(), first.getvalue())
+
+        payload = json.loads(first.getvalue())
+        self.assertEqual(payload["status"], "READY")
+        self.assertEqual(payload["outer_folds"], 5)
+        self.assertEqual(second.getvalue(), first.getvalue())
 
     def test_existing_lineage_version_mismatch_fails_closed_without_overwrite(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec

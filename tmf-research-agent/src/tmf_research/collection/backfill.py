@@ -184,6 +184,7 @@ def run_backfill(
     end_date: str,
     clock: Clock | None = None,
     pause: Callable[[], None] | None = None,
+    on_result: Callable[[BackfillDayResult], None] | None = None,
 ) -> BackfillSummary:
     """Fetch historical ticks day by day into create-once raw segments.
 
@@ -202,6 +203,8 @@ def run_backfill(
         segment_id = f"backfill-tick-{contract.alias_code}-{day}"
         if current.weekday() >= 5:
             results.append(BackfillDayResult(day, "NON_TRADING_DAY", 0, None))
+            if on_result is not None:
+                on_result(results[-1])
             current += timedelta(days=1)
             continue
         if store.has_segment(EVENT_TYPE, segment_id):
@@ -229,6 +232,8 @@ def run_backfill(
                 ))
             if pause is not None and current < last:
                 pause()
+        if on_result is not None:
+            on_result(results[-1])
         current += timedelta(days=1)
     return BackfillSummary(
         alias_code=contract.alias_code,

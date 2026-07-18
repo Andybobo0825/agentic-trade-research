@@ -118,7 +118,11 @@ def _backfill(
         )
         return 1
 
-    from tmf_research.collection.backfill import BackfillError, run_backfill
+    from tmf_research.collection.backfill import (
+        BackfillDayResult,
+        BackfillError,
+        run_backfill,
+    )
     from tmf_research.infrastructure.raw_store import AppendOnlyRawStore
 
     if gateway_factory is None:
@@ -139,6 +143,14 @@ def _backfill(
         dataset_version=str(args.dataset_version),
     )
     pause_seconds = max(0.0, float(args.pause_seconds))
+
+    def emit(result: BackfillDayResult) -> None:
+        print(
+            f"{result.date} {result.status} records={result.record_count}",
+            file=output,
+            flush=True,
+        )
+
     try:
         summary = run_backfill(
             gateway,
@@ -146,15 +158,11 @@ def _backfill(
             start_date=str(args.start),
             end_date=str(args.end),
             pause=(lambda: time.sleep(pause_seconds)) if pause_seconds else None,
+            on_result=emit,
         )
     except BackfillError as error:
         print(f"BACKFILL FAILED: {error}", file=output)
         return 1
-    for result in summary.results:
-        print(
-            f"{result.date} {result.status} records={result.record_count}",
-            file=output,
-        )
     print(
         f"BACKFILL COMPLETE alias={summary.alias_code}"
         f" dataset={summary.dataset_version}"

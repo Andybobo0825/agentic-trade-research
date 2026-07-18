@@ -40,9 +40,9 @@ class CalendarBuilderTests(unittest.TestCase):
         entry = days[0]
         assert isinstance(entry, dict)
         self.assertEqual(entry["trading_date"], "2024-08-01")
-        self.assertEqual(entry["day_close"], "13:45:00")
+        self.assertEqual(entry["day_close"], "13:45:01")
         self.assertEqual(entry["night_open"], "2024-07-31T15:00:00")
-        self.assertEqual(entry["night_close"], "2024-08-01T05:00:00")
+        self.assertEqual(entry["night_close"], "2024-08-01T05:00:01")
         self.assertFalse(entry["is_expiry"])
 
     def test_expiry_day_closes_1330_and_is_flagged(self) -> None:
@@ -58,7 +58,7 @@ class CalendarBuilderTests(unittest.TestCase):
         assert isinstance(days, list)
         entry = days[0]
         assert isinstance(entry, dict)
-        self.assertEqual(entry["day_close"], "13:30:00")
+        self.assertEqual(entry["day_close"], "13:30:01")
         self.assertTrue(entry["is_expiry"])
 
     def test_holiday_night_attaches_to_the_next_trading_date(self) -> None:
@@ -89,7 +89,7 @@ class CalendarBuilderTests(unittest.TestCase):
         expiry_day = days[1]
         assert isinstance(expiry_day, dict)
         self.assertEqual(expiry_day["night_open"], "2024-09-16T15:00:00")
-        self.assertEqual(expiry_day["night_close"], "2024-09-17T05:00:00")
+        self.assertEqual(expiry_day["night_close"], "2024-09-17T05:00:01")
 
     def test_day_only_first_day_has_no_night(self) -> None:
         payload = build_calendar_payload([

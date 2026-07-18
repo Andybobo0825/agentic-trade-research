@@ -25,7 +25,9 @@ def build_calendar_payload(
     is a date with day-session evidence, and every night block attaches to
     the next such trading date. Holiday and typhoon nights therefore roll
     forward instead of forming phantom trading dates. Expiry days close at
-    13:30 as observed; everything else closes at 13:45.
+    13:30 as observed; everything else closes at 13:45. Closes carry one
+    second of tolerance because closing-auction matches print up to ~80ms
+    after the nominal close in real payloads.
     """
 
     if not version.strip():
@@ -71,7 +73,9 @@ def build_calendar_payload(
     days: list[dict[str, object]] = []
     for trading_date in trading_dates:
         last_day_tick = day_evidence[trading_date]
-        day_close = time(13, 30) if last_day_tick.time() <= time(13, 31) else time(13, 45)
+        day_close = (
+            time(13, 30, 1) if last_day_tick.time() <= time(13, 31) else time(13, 45, 1)
+        )
         night_start = nights.get(trading_date)
         entry: dict[str, object] = {
             "trading_date": trading_date.isoformat(),
@@ -85,7 +89,7 @@ def build_calendar_payload(
         if night_start is not None:
             entry["night_open"] = f"{night_start.isoformat()}T15:00:00"
             night_close = night_start + timedelta(days=1)
-            entry["night_close"] = f"{night_close.isoformat()}T05:00:00"
+            entry["night_close"] = f"{night_close.isoformat()}T05:00:01"
         days.append(entry)
     return {"version": version, "timezone": TIMEZONE, "days": days}
 

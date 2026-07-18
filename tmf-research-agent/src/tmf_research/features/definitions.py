@@ -159,50 +159,96 @@ class FeatureRow:
         )
 
 
-def default_feature_manifest() -> FeatureManifest:
-    grouped: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("price", ("return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars", "body_to_range_ratio", "upper_wick_ratio")),
-        ("vwap", ("session_vwap", "rolling_vwap_5m", "price_to_session_vwap_atr", "vwap_slope_5m")),
-        ("flow", ("aggressive_buy_volume_10s", "aggressive_sell_volume_10s", "trade_imbalance_10s", "unknown_trade_ratio", "large_trade_ratio")),
-        ("orderbook", ("spread_points", "midpoint", "microprice", "microprice_minus_midpoint", "level1_book_imbalance", "quote_update_rate")),
-        ("basis", ("basis_points", "basis_change_10s", "basis_change_1m")),
-        ("volatility", ("true_range_1m", "atr_5m", "realized_vol_5m", "range_expansion_ratio")),
-        ("structure", ("distance_previous_day_high_atr", "distance_previous_day_low_atr", "distance_previous_close_atr", "distance_night_high_atr", "break_previous_high", "false_breakout_high")),
-        ("time", ("session_day", "session_night", "minutes_from_session_open", "minutes_to_session_close", "days_to_expiry", "is_rollover_day")),
-    )
+_FEATURE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("price", ("return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars", "body_to_range_ratio", "upper_wick_ratio")),
+    ("vwap", ("session_vwap", "rolling_vwap_5m", "price_to_session_vwap_atr", "vwap_slope_5m")),
+    ("flow", ("aggressive_buy_volume_10s", "aggressive_sell_volume_10s", "trade_imbalance_10s", "unknown_trade_ratio", "large_trade_ratio")),
+    ("orderbook", ("spread_points", "midpoint", "microprice", "microprice_minus_midpoint", "level1_book_imbalance", "quote_update_rate")),
+    ("basis", ("basis_points", "basis_change_10s", "basis_change_1m")),
+    ("volatility", ("true_range_1m", "atr_5m", "realized_vol_5m", "range_expansion_ratio")),
+    ("structure", ("distance_previous_day_high_atr", "distance_previous_day_low_atr", "distance_previous_close_atr", "distance_night_high_atr", "break_previous_high", "false_breakout_high")),
+    ("time", ("session_day", "session_night", "minutes_from_session_open", "minutes_to_session_close", "days_to_expiry", "is_rollover_day")),
+)
+_MISSING_INDICATORS: tuple[MissingIndicatorDefinition, ...] = (
+    MissingIndicatorDefinition("underlying_missing", "basis_points"),
+    MissingIndicatorDefinition("quote_missing", "spread_points"),
+    MissingIndicatorDefinition("atr_missing", "atr_5m"),
+    MissingIndicatorDefinition("previous_day_missing", "distance_previous_close_atr"),
+    MissingIndicatorDefinition("night_range_missing", "distance_night_high_atr"),
+)
+_FORMAL_FEATURES: tuple[str, ...] = (
+    "return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars",
+    "body_to_range_ratio", "session_vwap", "rolling_vwap_5m",
+    "price_to_session_vwap_atr", "vwap_slope_5m",
+    "aggressive_buy_volume_10s", "aggressive_sell_volume_10s",
+    "trade_imbalance_10s", "large_trade_ratio", "spread_points",
+    "midpoint", "microprice", "microprice_minus_midpoint",
+    "basis_points", "basis_change_10s", "basis_change_1m",
+    "true_range_1m", "atr_5m", "realized_vol_5m",
+    "range_expansion_ratio", "distance_previous_day_high_atr",
+    "distance_previous_day_low_atr", "session_day",
+    "minutes_from_session_open", "minutes_to_session_close", "days_to_expiry",
+)
+_INTERACTIONS: tuple[InteractionDefinition, ...] = (
+    InteractionDefinition("return_x_flow", ("return_1m", "trade_imbalance_10s"), "momentum confirmed by aggressive flow"),
+    InteractionDefinition("spread_x_volatility", ("spread_points", "atr_5m"), "liquidity under volatility"),
+)
+
+
+def _manifest_from(
+    version: str,
+    groups: tuple[tuple[str, tuple[str, ...]], ...],
+    missing: tuple[MissingIndicatorDefinition, ...],
+    formal: tuple[str, ...],
+    interactions: tuple[InteractionDefinition, ...],
+) -> FeatureManifest:
     definitions = tuple(
         FeatureDefinition(name=name, group=group, mechanism=f"{group} market mechanism")
-        for group, names in grouped
+        for group, names in groups
         for name in names
     )
-    missing = (
-        MissingIndicatorDefinition("underlying_missing", "basis_points"),
-        MissingIndicatorDefinition("quote_missing", "spread_points"),
-        MissingIndicatorDefinition("atr_missing", "atr_5m"),
-        MissingIndicatorDefinition("previous_day_missing", "distance_previous_close_atr"),
-        MissingIndicatorDefinition("night_range_missing", "distance_night_high_atr"),
-    )
     return FeatureManifest(
-        version="phase3-features-v1",
+        version=version,
         primary_features=definitions,
         missing_indicators=missing,
-        formal_features=(
-            "return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars",
-            "body_to_range_ratio", "session_vwap", "rolling_vwap_5m",
-            "price_to_session_vwap_atr", "vwap_slope_5m",
-            "aggressive_buy_volume_10s", "aggressive_sell_volume_10s",
-            "trade_imbalance_10s", "large_trade_ratio", "spread_points",
-            "midpoint", "microprice", "microprice_minus_midpoint",
-            "basis_points", "basis_change_10s", "basis_change_1m",
-            "true_range_1m", "atr_5m", "realized_vol_5m",
-            "range_expansion_ratio", "distance_previous_day_high_atr",
-            "distance_previous_day_low_atr", "session_day",
-            "minutes_from_session_open", "minutes_to_session_close", "days_to_expiry",
-        ),
-        interactions=(
-            InteractionDefinition("return_x_flow", ("return_1m", "trade_imbalance_10s"), "momentum confirmed by aggressive flow"),
-            InteractionDefinition("spread_x_volatility", ("spread_points", "atr_5m"), "liquidity under volatility"),
-        ),
+        formal_features=formal,
+        interactions=interactions,
+    )
+
+
+def default_feature_manifest() -> FeatureManifest:
+    return _manifest_from(
+        "phase3-features-v1",
+        _FEATURE_GROUPS,
+        _MISSING_INDICATORS,
+        _FORMAL_FEATURES,
+        _INTERACTIONS,
+    )
+
+
+def historical_l1_feature_manifest() -> FeatureManifest:
+    """Reduced manifest for historical tick data, which carries no spot index.
+
+    Shioaji serves no historical spot index, so the BASIS group is missing in
+    every row and would crash the imputer. This manifest drops the basis group
+    and its underlying-missing indicator, keeping the other seven groups whose
+    features are computable from tick-embedded L1 evidence. It is therefore
+    only seven of the eight ablation groups: datasets on this version can
+    validate the pipeline and develop features on real data, but cannot pass
+    the full eight-group Phase 5 ablation gate or reach APPROVED_FOR_PAPER.
+    """
+
+    groups = tuple((group, names) for group, names in _FEATURE_GROUPS if group != "basis")
+    basis_features = frozenset(
+        name for group, names in _FEATURE_GROUPS if group == "basis" for name in names
+    )
+    missing = tuple(
+        indicator for indicator in _MISSING_INDICATORS
+        if indicator.source_feature not in basis_features
+    )
+    formal = tuple(name for name in _FORMAL_FEATURES if name not in basis_features)
+    return _manifest_from(
+        "phase3-features-hist-l1-v1", groups, missing, formal, _INTERACTIONS,
     )
 
 

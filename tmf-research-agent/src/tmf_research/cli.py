@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     phase5.add_argument("--calendar", type=Path, required=True)
     phase5.add_argument("--witness-db", type=Path, required=True)
     phase5.add_argument("--feature-version", default="features-v1")
+    phase5.add_argument("--start-date", default="")
+    phase5.add_argument("--end-date", default="")
     calendar_command = commands.add_parser(
         "build-calendar",
         help="derive a trading calendar from stored historical segment evidence",
@@ -87,6 +89,8 @@ def main(
         return _phase5_status(
             args.raw_root, args.calendar, args.witness_db, output,
             feature_version=str(args.feature_version),
+            start_date=str(args.start_date),
+            end_date=str(args.end_date),
         )
     if args.command == "build-calendar":
         return _build_calendar(
@@ -240,6 +244,8 @@ def _phase5_status(
     output: TextIO,
     *,
     feature_version: str = "features-v1",
+    start_date: str = "",
+    end_date: str = "",
 ) -> int:
     status = "REJECTED_INSUFFICIENT_DATA"
     reasons: tuple[str, ...] = ()
@@ -254,7 +260,11 @@ def _phase5_status(
             json.loads(line)
             for line in (raw_root / "manifest.ndjson").read_text(encoding="utf-8").splitlines()
         )
-        manifests = tuple(SegmentManifest(**record) for record in records)
+        manifests = tuple(
+            manifest
+            for manifest in (SegmentManifest(**record) for record in records)
+            if _manifest_in_range(manifest.segment_id, start_date, end_date)
+        )
         if manifests:
             store = AppendOnlyRawStore(
                 raw_root,
@@ -288,6 +298,19 @@ def _phase5_status(
         file=output,
     )
     return 0
+
+
+def _manifest_in_range(segment_id: str, start_date: str, end_date: str) -> bool:
+    """Filter backfill segments by their trading day; non-dated ids always pass."""
+
+    _prefix, separator, suffix = segment_id.rpartition("TMFR1-")
+    if not separator:
+        return True
+    if start_date and suffix < start_date:
+        return False
+    if end_date and suffix > end_date:
+        return False
+    return True
 
 
 def discover_project_root(start: Path | None = None) -> Path:

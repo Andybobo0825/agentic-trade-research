@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -11,7 +12,6 @@ from zoneinfo import ZoneInfo
 from tmf_research.domain.sessions import SessionResolution, TradingCalendar, TradingDay
 from tmf_research.features.definitions import FeatureContext
 from tmf_research.processing.bars import Bar
-from tmf_research.processing.one_second import OneSecondState
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +103,7 @@ def build_feature_context(
     resolution: SessionResolution,
     *,
     prior_bars: tuple[Bar, ...],
-    prior_states: tuple[OneSecondState, ...],
+    prior_volume_counts: Mapping[int, int],
 ) -> FeatureContext:
     if (
         resolution.session not in ("DAY", "NIGHT")
@@ -115,10 +115,7 @@ def build_feature_context(
     closes = tuple(bar.close for bar in prior_bars if bar.close is not None)
     highs = tuple(bar.high for bar in prior_bars if bar.high is not None)
     lows = tuple(bar.low for bar in prior_bars if bar.low is not None)
-    volumes = sorted(
-        state.volume for state in prior_states if state.volume > 0
-    )
-    threshold = volumes[max(0, int(len(volumes) * 0.9) - 1)] if volumes else 1
+    threshold = _percentile_volume(prior_volume_counts)
     return FeatureContext(
         session=resolution.session,
         session_start=resolution.session_start,
@@ -136,6 +133,21 @@ def build_feature_context(
         large_trade_threshold=int(threshold),
         large_trade_threshold_fit_end=resolution.session_start - timedelta(microseconds=1),
     )
+
+
+def _percentile_volume(counts: Mapping[int, int]) -> int:
+    """Exact 90th-percentile positive volume: sorted[max(0, int(n*0.9)-1)]."""
+
+    total = sum(counts.values())
+    if total == 0:
+        return 1
+    index = max(0, int(total * 0.9) - 1)
+    cumulative = 0
+    for volume in sorted(counts):
+        cumulative += counts[volume]
+        if cumulative > index:
+            return volume
+    raise AssertionError("volume histogram counts changed during iteration")
 
 
 def _optional_datetime(value: object, zone: ZoneInfo) -> datetime | None:

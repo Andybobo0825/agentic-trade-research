@@ -4,7 +4,11 @@ import unittest
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
-from tmf_research.features.definitions import FeatureContext, default_feature_manifest
+from tmf_research.features.definitions import (
+    FeatureContext,
+    default_feature_manifest,
+    historical_l1_feature_manifest,
+)
 from tmf_research.features.pipeline import FeaturePipeline
 from tmf_research.processing.bars import Bar
 from tmf_research.processing.one_second import OneSecondState
@@ -170,6 +174,21 @@ class FeaturePipelineTests(unittest.TestCase):
                     large_trade_threshold_fit_end=complete.bar_end + timedelta(seconds=1),
                 ),
             )
+
+    def test_historical_l1_manifest_computes_without_basis_group(self) -> None:
+        bars = tuple(bar(index, 100.0 + index) for index in range(6))
+        states = tuple(state(offset, underlying=None) for offset in range(10))
+
+        row = FeaturePipeline(historical_l1_feature_manifest()).compute(
+            bars=bars,
+            states=states,
+            decision_time=bars[-1].bar_end,
+            context=context(),
+        )
+
+        self.assertNotIn("basis_points", row.values)
+        self.assertNotIn("underlying_missing", row.missing_indicators)
+        self.assertEqual(row.feature_version, historical_l1_feature_manifest().version)
 
 
 if __name__ == "__main__":

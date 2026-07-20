@@ -71,7 +71,8 @@ class FeaturePipeline:
         values["vwap_slope_5m"] = session_vwap - older_vwap if session_vwap is not None and older_vwap is not None else None
         values.update(flow(causal_states, context.large_trade_threshold))
         values.update(book(causal_states))
-        values.update(basis_features(causal_states))
+        if any(item.group == "basis" for item in self._manifest.primary_features):
+            values.update(basis_features(causal_states))
         values.update(vol)
         values.update(structure_features(complete, atr, context))
         values.update(time_features(decision_time, context))
@@ -79,11 +80,8 @@ class FeaturePipeline:
         if set(values) != primary_names:
             raise ValueError("feature implementation does not match manifest")
         missing = {
-            "underlying_missing": float(values["basis_points"] is None),
-            "quote_missing": float(values["spread_points"] is None),
-            "atr_missing": float(values["atr_5m"] is None),
-            "previous_day_missing": float(values["distance_previous_close_atr"] is None),
-            "night_range_missing": float(values["distance_night_high_atr"] is None),
+            indicator.name: float(values[indicator.source_feature] is None)
+            for indicator in self._manifest.missing_indicators
         }
         evidence = max(
             latest.bar_end,

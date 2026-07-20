@@ -125,7 +125,14 @@ class Phase5FoldPlanner:
             validation_start = raw_validation[0].decision_time
             outer_test_start = outer_test[0].decision_time
             inner_train = purge_and_embargo(raw_train, validation_start, self._embargo)
-            inner_validation = purge_and_embargo(raw_validation, outer_test_start, self._embargo)
+            # Sealed inner-validation datasets only admit complete known
+            # outcomes, so ineligible rows leave this role (and only this
+            # role) before the fold commitment is issued.
+            inner_validation = tuple(
+                row
+                for row in purge_and_embargo(raw_validation, outer_test_start, self._embargo)
+                if row.source.label != "AMBIGUOUS" and row.source.is_complete
+            )
             if inner_train and inner_validation:
                 number = len(planned) + 1
                 outer_id = f"outer-{number:03d}"

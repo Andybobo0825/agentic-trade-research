@@ -50,3 +50,7 @@ test-results/
 playwright-report/
 
 .worktrees/
+
+# Phase 5 locked holdout (write-once artifacts rebuilt deterministically from raw data)
+tmf-research-agent/phase5-holdout/
+tmf-research-agent/.phase5-holdout.phase5-holdout-audit/

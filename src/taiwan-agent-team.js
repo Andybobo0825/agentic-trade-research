@@ -13,7 +13,7 @@ const AGENT_LANES = Object.freeze([
   { name: 'data-agent', responsibility: 'Inventory repository evidence and prepare point-in-time data in screen mode.' },
   { name: 'strategy-agent', responsibility: 'Run Phase 3 dataset and technical screening only for stock-screening requests.' },
   { name: 'market-agent', responsibility: 'Collect read-only index, ticker, pre-open, sector, and peer context.' },
-  { name: 'external-confidence-agent', responsibility: 'Collect company, news, announcement, financial, revenue, valuation, and ETF evidence.' },
+  { name: 'external-confidence-agent', responsibility: 'Collect company, news, announcement, financial, revenue, valuation, ETF, and Gooaye topic evidence.' },
   { name: 'dom-agent', responsibility: 'Read Shioaji DOM after research and preserve four manual reference prices.' },
   { name: 'verifier', responsibility: 'Audit order, failures, eligibility boundaries, redaction, and read-only safety.' },
 ]);
@@ -178,7 +178,10 @@ export async function buildTaiwanAgentTeam(args = {}, deps = {}) {
         const screenRun = await runRecorded({
           key: 'phase3_screen',
           name: 'phase3-screen',
-          args: { startDate, endDate, evidenceRoot, top: maxTickers, includeRejected: true },
+          // Dataset bounds control evidence collection only. Omitting a screening
+          // window makes phase3-screen evaluate the latest complete decision date
+          // instead of re-ranking every historical signal in that collection range.
+          args: { evidenceRoot, top: maxTickers, includeRejected: true },
           stage: 'phase3-screen',
           agent: 'strategy-agent',
         });
@@ -238,6 +241,17 @@ export async function buildTaiwanAgentTeam(args = {}, deps = {}) {
           agent: 'external-confidence-agent',
           ticker,
         });
+      }
+
+      await runRecorded({
+        key: 'gooaye_market_context',
+        name: 'gooaye-topic-research',
+        args: { date, tickers: targets.join(',') },
+        stage: 'external-confidence',
+        agent: 'external-confidence-agent',
+      });
+
+      for (const ticker of targets) {
         await runRecorded({
           key: `dom_${ticker}`,
           name: 'phase3-dom-confidence',
@@ -280,6 +294,7 @@ export async function buildTaiwanAgentTeam(args = {}, deps = {}) {
       safety: [
         'Phase 3 is the sole technical eligibility mechanism and runs only in screen mode.',
         'External research and DOM cannot change Phase 3 eligibility.',
+        'A final actionable shortlist must disclose Gooaye/theme alignment; a mismatch may retire the recommendation without rewriting technical eligibility.',
         'All Shioaji/DOM access is read-only; no order API is called.',
         'Four prices are manual reference data, never executable orders.',
       ],
@@ -362,6 +377,12 @@ export function renderTaiwanAgentTeamMarkdown(result) {
     `- Eligible: ${result.phase3?.screen?.eligibleCount ?? (result.workflowMode === 'screen' ? 0 : 'not_evaluated')}`,
     `- Rejected: ${result.phase3?.screen?.rejectedCount ?? (result.workflowMode === 'screen' ? 0 : 'not_evaluated')}`,
     '',
+    '## Gooaye topic context',
+    `- Status: ${result.toolResults?.gooaye_market_context?.status || 'unavailable'}`,
+    `- Episode: ${result.toolResults?.gooaye_market_context?.episode?.title || '—'}`,
+    `- Research: ${result.toolResults?.gooaye_market_context?.research?.title || '—'}`,
+    `- Themes: ${(result.toolResults?.gooaye_market_context?.research?.themes || []).join(', ') || '—'}`,
+    '',
     '## Ticker confidence and four prices',
     toMarkdownTable(tickerRows, [
       { label: 'Ticker', value: (r) => r.ticker },
@@ -416,7 +437,8 @@ function buildResearchPlan(parameters) {
     constraints: [
       'Phase 3 screens only when stock-screening intent is resolved',
       'only eligible screen candidates may enter downstream research',
-      'external research precedes DOM and cannot alter eligibility',
+      'external research, including Gooaye topic context, precedes DOM and cannot alter eligibility',
+      'final recommendations disclose trend alignment and may demote unrelated candidates after Phase 3',
       'DOM is read-only and always returns four manual reference fields or explicit nulls',
     ],
     parameters,
@@ -425,7 +447,7 @@ function buildResearchPlan(parameters) {
       { id: 'S2', owner: 'data-agent', goal: screen ? 'Inventory evidence and prepare point-in-time Phase 3 data.' : 'Inventory repo evidence without Phase 3.' },
       { id: 'S3', owner: 'strategy-agent', goal: screen ? 'Run Phase 3 and emit eligible candidates only.' : 'Mark named tickers not_evaluated by Phase 3.' },
       { id: 'S4', owner: 'market-agent', goal: 'Collect index, target, pre-open, sector, and peer context.' },
-      { id: 'S5', owner: 'external-confidence-agent', goal: 'Collect point-in-time external confidence evidence for each target.' },
+      { id: 'S5', owner: 'external-confidence-agent', goal: 'Collect point-in-time company, industry, ETF, and Gooaye topic evidence before DOM.' },
       { id: 'S6', owner: 'dom-agent', goal: 'Read DOM after research and derive four manual reference prices.' },
       { id: 'S7', owner: 'verifier', goal: 'Audit stage order, failures, eligibility isolation, and read-only safety.' },
     ],
@@ -434,9 +456,12 @@ function buildResearchPlan(parameters) {
 
 function buildTickerAnalysis({ targets, workflowMode, toolResults, errors }) {
   return targets.map((ticker) => {
-    const sourceKeys = [`research_${ticker}`, `industry_${ticker}`, `xiaoyu_${ticker}`];
-    const available = sourceKeys.filter((key) => toolResults[key] !== undefined);
-    const unavailable = sourceKeys.filter((key) => errors[key] !== undefined);
+    const sourceKeys = [`research_${ticker}`, `industry_${ticker}`, `xiaoyu_${ticker}`, 'gooaye_market_context'];
+    const available = sourceKeys.filter((key) => key === 'gooaye_market_context'
+      ? Boolean(toolResults[key]?.research)
+      : toolResults[key] !== undefined);
+    const unavailable = sourceKeys.filter((key) => errors[key] !== undefined
+      || (key === 'gooaye_market_context' && toolResults[key] !== undefined && !toolResults[key]?.research));
     const rawDom = toolResults[`dom_${ticker}`];
     const referencePrices = rawDom?.referencePrices || {};
     const prices = {
@@ -500,7 +525,8 @@ function synthesizeAgentTeam({ inventory, backtests, toolResults, errors, offlin
     ],
     evidenceBoundaries: [
       'Phase 3 is the sole technical eligibility path and runs only in screen mode.',
-      'External company/news/financial evidence is a post-screen confidence layer, not an eligibility gate.',
+      'External company/news/financial/Gooaye evidence is a post-screen confidence layer, not an eligibility gate.',
+      'Gooaye/theme mismatch may remove a ticker from the actionable shortlist while preserving its historical Phase 3 result.',
       'DOM is sampled only after external research and does not enter Phase 3 features or eligibility.',
       'Four prices are visible-book references for manual decisions, not guaranteed fills or orders.',
       'Backtest artifacts are auditable historical evidence, not a second active strategy.',

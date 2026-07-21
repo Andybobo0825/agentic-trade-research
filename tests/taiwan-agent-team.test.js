@@ -55,6 +55,17 @@ function commonResult(name, args) {
   if (name === 'preopen-brief') return { status: 'partial' };
   if (name === 'research-pack') return { ticker: args.ticker, sources: ['tw-news'] };
   if (name === 'ic-tpex-chain') return { ticker: args.ticker, peers: ['2303'] };
+  if (name === 'gooaye-topic-research') return {
+    status: 'ready',
+    episode: { number: 678, title: 'EP678 | 🎮', pubDate: '2026-07-11' },
+    research: {
+      title: '股癌 Gooaye EP678 AI供應鏈輪動研究報告',
+      date: '2026-07-11',
+      themes: ['AI供應鏈', '被動元件', '光通訊', '記憶體', '半導體'],
+      url: 'https://gooaye.teamtaiwan.win/research/gooaye-ep678-kami/report.html',
+    },
+    readOnly: true,
+  };
   if (name === 'phase3-dom-confidence') return dom(args.ticker);
   return {};
 }
@@ -120,7 +131,13 @@ test('analyze mode skips Phase 3, runs research before DOM, and returns all four
   assert.deepEqual(result.targets, ['2330']);
   assert.equal(result.tickerAnalysis[0].phase3Eligibility, 'not_evaluated');
   assert.equal(calls.some((call) => call.name === 'phase3-dataset' || call.name === 'phase3-screen'), false);
-  assert.ok(calls.findIndex((call) => call.name === 'research-pack') < calls.findIndex((call) => call.name === 'phase3-dom-confidence'));
+  const researchIndex = calls.findIndex((call) => call.name === 'research-pack');
+  const gooayeIndex = calls.findIndex((call) => call.name === 'gooaye-topic-research');
+  const domIndex = calls.findIndex((call) => call.name === 'phase3-dom-confidence');
+  assert.ok(researchIndex < gooayeIndex && gooayeIndex < domIndex);
+  assert.equal(calls.filter((call) => call.name === 'gooaye-topic-research').length, 1);
+  assert.deepEqual(calls[gooayeIndex].args.tickers, '2330');
+  assert.equal(result.tickerAnalysis[0].externalConfidence.availableCount, 4);
   assert.deepEqual(result.tickerAnalysis[0].prices, {
     activeEntryLimit: 101,
     patientEntryPrice: 100.5,
@@ -142,6 +159,7 @@ test('analyze mode skips Phase 3, runs research before DOM, and returns all four
   assert.match(markdown, /not_evaluated/);
   assert.match(markdown, /Active entry limit.*101/i);
   assert.match(markdown, /Take-profit.*103/i);
+  assert.match(markdown, /Gooaye EP678/);
 });
 
 test('screen mode runs Phase 3 first and researches only eligible candidates', async () => {
@@ -172,14 +190,19 @@ test('screen mode runs Phase 3 first and researches only eligible candidates', a
   assert.deepEqual(result.targets, ['2330', '2303']);
   assert.deepEqual(result.tickerAnalysis.map((row) => row.phase3Eligibility), ['eligible', 'eligible']);
   assert.equal(calls.filter((call) => call.name === 'research-pack').length, 2);
+  assert.equal(calls.filter((call) => call.name === 'gooaye-topic-research').length, 1);
   assert.equal(calls.some((call) => call.args?.ticker === '1504'), false);
   assert.ok(calls.findIndex((call) => call.name === 'phase3-dataset') < calls.findIndex((call) => call.name === 'phase3-screen'));
+  const screenCall = calls.find((call) => call.name === 'phase3-screen');
+  assert.equal(screenCall.args.startDate, undefined);
+  assert.equal(screenCall.args.endDate, undefined);
   for (const ticker of result.targets) {
     const research = calls.findIndex((call) => call.name === 'research-pack' && call.args.ticker === ticker);
     const industry = calls.findIndex((call) => call.name === 'ic-tpex-chain' && call.args.ticker === ticker);
     const etf = calls.findIndex((call) => call.name === 'xiaoyu-etf' && call.args.mode === 'stock' && call.args.ticker === ticker);
     const domCall = calls.findIndex((call) => call.name === 'phase3-dom-confidence' && call.args.ticker === ticker);
-    assert.ok(research < industry && industry < etf && etf < domCall);
+    const gooaye = calls.findIndex((call) => call.name === 'gooaye-topic-research');
+    assert.ok(research < industry && industry < etf && etf < gooaye && gooaye < domCall);
   }
   assert.equal(result.phase3.screen.eligibleCount, 2);
 });
@@ -199,7 +222,7 @@ test('screen mode with zero eligible candidates stops all target-specific calls'
 
   assert.deepEqual(result.targets, []);
   assert.deepEqual(result.tickerAnalysis, []);
-  assert.equal(calls.some((call) => ['research-pack', 'ic-tpex-chain', 'phase3-dom-confidence', 'preopen-brief'].includes(call.name)), false);
+  assert.equal(calls.some((call) => ['research-pack', 'ic-tpex-chain', 'gooaye-topic-research', 'phase3-dom-confidence', 'preopen-brief'].includes(call.name)), false);
   assert.equal(calls.some((call) => call.name === 'shioaji-snapshots' && !call.args.securityType), false);
   assert.equal(calls.some((call) => call.name === 'xiaoyu-etf' && call.args.mode === 'stock'), false);
   assert.ok(result.synthesis.dataGaps.some((gap) => /zero eligible/i.test(gap)));
@@ -213,12 +236,14 @@ test('external research failure does not suppress DOM, while DOM failure returns
     runTool: async (name, args) => {
       calls.push({ name, args });
       if (name === 'research-pack' && args.ticker === '2330') throw new Error('news unavailable');
+      if (name === 'gooaye-topic-research') throw new Error('Gooaye unavailable');
       if (name === 'phase3-dom-confidence' && args.ticker === '2303') throw new Error('DOM unavailable');
       return commonResult(name, args);
     },
   });
 
   assert.equal(calls.some((call) => call.name === 'phase3-dom-confidence' && call.args.ticker === '2330'), true);
+  assert.ok(calls.findIndex((call) => call.name === 'gooaye-topic-research') < calls.findIndex((call) => call.name === 'phase3-dom-confidence'));
   const failedDom = result.tickerAnalysis.find((row) => row.ticker === '2303');
   assert.deepEqual(failedDom.prices, {
     activeEntryLimit: null,
@@ -227,7 +252,7 @@ test('external research failure does not suppress DOM, while DOM failure returns
     stopLossPrice: null,
   });
   assert.equal(failedDom.dom.reliability, 'unavailable');
-  assert.ok(result.synthesis.dataGaps.some((gap) => /news unavailable|DOM unavailable/.test(gap)));
+  assert.ok(result.synthesis.dataGaps.some((gap) => /news unavailable|Gooaye unavailable|DOM unavailable/.test(gap)));
   const markdown = renderTaiwanAgentTeamMarkdown(result);
   assert.match(markdown, /2303 price references[\s\S]*Active entry limit: null[\s\S]*Stop-loss price: null/);
   assert.match(markdown, /DOM gap: no valid sample; all four price fields are null/);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConfigError } from '../src/errors.js';
-import { finmindData, fugleMarketData, getFugleCandles, getFugleConfig, getFugleQuote, getFugleSnapshot, getTaiwanPrice, listTaiwanEndpoints, taiwanProviderEnvelope, tpexOpenApi, twseOpenApi } from '../src/taiwan-market.js';
+import { finmindData, fugleMarketData, getFugleCandles, getFugleConfig, getFugleQuote, getFugleSnapshot, getTaiwanNews, getTaiwanPrice, listTaiwanEndpoints, taiwanProviderEnvelope, tpexOpenApi, twseOpenApi } from '../src/taiwan-market.js';
 import { renderToolResult } from '../src/tools.js';
 
 test('listTaiwanEndpoints exposes free provider groups', () => {
@@ -65,6 +65,23 @@ test('getTaiwanPrice auto falls through TWSE to TPEx when ticker is OTC', async 
     };
     const result = await getTaiwanPrice({ ticker: '6488', provider: 'auto' });
     assert.deepEqual(result.data, [{ SecuritiesCompanyCode: '6488', Close: '100' }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('getTaiwanNews queries one point-in-time day without unsupported end_date', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      const parsed = new URL(String(url));
+      assert.equal(parsed.searchParams.get('dataset'), 'TaiwanStockNews');
+      assert.equal(parsed.searchParams.get('data_id'), '2330');
+      assert.equal(parsed.searchParams.get('start_date'), '2026-07-14');
+      assert.equal(parsed.searchParams.has('end_date'), false);
+      return new Response(JSON.stringify({ status: 200, msg: 'success', data: [] }), { status: 200 });
+    };
+    await getTaiwanNews({ ticker: '2330', startDate: '2026-04-01', endDate: '2026-07-14', limit: 10 });
   } finally {
     globalThis.fetch = originalFetch;
   }

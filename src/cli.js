@@ -31,6 +31,7 @@ US / global commands:
   phase3-dataset [--universe-file .omx/evidence/phase3/universe.json] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--format markdown]
   phase3-screen [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--top 20] [--include-rejected] [--format markdown]
   phase3-dom-confidence --ticker 2330 [--exchange TSE|OTC] [--samples 3] [--interval-ms 5000] [--timeout-ms 3000] [--format markdown]
+  gooaye-topic-research [--date YYYY-MM-DD] [--tickers 2330,2303] [--timeout-ms 15000] [--format markdown]
   xiaoyu-etf    [--mode stock|etf|rank|overview] [--ticker 2330] [--etf 00981A] [--scope active|market] [--window d1|d5|d10|d20|d60] [--direction buy|sell] [--limit 10] [--format markdown]
   taiwan-agent-team [--query "選股或分析指定股票"] [--mode auto|screen|analyze] [--detail brief|full] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--capital 500000] [--offline] [--format markdown]
   memory-sync   [--memory-dir .omx/memory] [--entry-file entries.json] [--entry "text" --date YYYY-MM-DD --category decision|verified-fix|failure-case|milestone] [--now YYYY-MM-DD] [--format markdown]
@@ -304,6 +305,18 @@ export async function main(argv = process.argv.slice(2)) {
       }
       return [keyMap[key], String(args[key])];
     })));
+  } else if (command === 'gooaye-topic-research') {
+    const rawKeys = Object.keys(args).filter((key) => !['_', 'format'].includes(key));
+    const allowed = new Set(['date', 'tickers', 'ticker', 'timeout-ms']);
+    for (const key of rawKeys) {
+      if (!allowed.has(key)) throw new UsageError(`gooaye-topic-research forbids --${key}`);
+    }
+    toolArgs = {
+      date: args.date ? String(args.date) : undefined,
+      tickers: args.tickers ? String(args.tickers) : undefined,
+      ticker: args.ticker ? String(args.ticker) : undefined,
+      timeoutMs: optionalInt(args, 'timeout-ms', undefined),
+    };
   } else if (command === 'chip-study') {
     toolArgs = {
       ticker: requireArg(args, 'ticker').toUpperCase(),

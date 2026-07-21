@@ -265,7 +265,7 @@ export function readLineBridgeConfig(env = process.env) {
     tmuxTarget,
     port: positiveInt(env.LINE_BRIDGE_PORT, 8787),
     path: env.LINE_BRIDGE_PATH || '/line/webhook',
-    completionTimeoutMs: positiveInt(env.LINE_BRIDGE_COMPLETION_TIMEOUT_MS, 10 * 60 * 1000),
+    completionTimeoutMs: positiveInt(env.LINE_BRIDGE_COMPLETION_TIMEOUT_MS, 60 * 60 * 1000),
     completionPollMs: positiveInt(env.LINE_BRIDGE_COMPLETION_POLL_MS, 2000),
     turnLogDir: env.LINE_BRIDGE_TURN_LOG_DIR || '.omx/logs',
     captureLines: positiveInt(env.LINE_BRIDGE_CAPTURE_LINES, 140),

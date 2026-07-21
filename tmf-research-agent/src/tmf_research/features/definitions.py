@@ -252,6 +252,43 @@ def historical_l1_feature_manifest() -> FeatureManifest:
     )
 
 
+def historical_l1_reduced_feature_manifest() -> FeatureManifest:
+    """Historical L1 manifest with real-data-observed missing indicators.
+
+    Real TMFR1 tick data (2024-07 to 2026-07) shows 12 formal features are
+    occasionally null at session-start candidates lacking enough prior
+    history, not just the two the base hist-l1 manifest anticipated
+    (spread/ATR, which turn out to never be null in practice here — so they
+    stay required, matching reality, freeing the manifest's 10-indicator
+    budget for the ten that really are). The training contract also caps
+    declared-optional features at 10, so the two highest null-rate features
+    (large_trade_ratio, trade_imbalance_10s, each ~7% null) are dropped from
+    the formal set entirely rather than declared optional; the other ten
+    (each under 1% null) keep their signal via a missing indicator instead.
+    """
+
+    base = historical_l1_feature_manifest()
+    dropped = frozenset({"large_trade_ratio", "trade_imbalance_10s"})
+    formal = tuple(name for name in base.formal_features if name not in dropped)
+    missing = (
+        MissingIndicatorDefinition("return_1m_missing", "return_1m"),
+        MissingIndicatorDefinition("return_5m_missing", "return_5m"),
+        MissingIndicatorDefinition("ema_distance_5_missing", "ema_distance_5"),
+        MissingIndicatorDefinition("body_to_range_ratio_missing", "body_to_range_ratio"),
+        MissingIndicatorDefinition("vwap_slope_5m_missing", "vwap_slope_5m"),
+        MissingIndicatorDefinition("price_to_session_vwap_atr_missing", "price_to_session_vwap_atr"),
+        MissingIndicatorDefinition("realized_vol_5m_missing", "realized_vol_5m"),
+        MissingIndicatorDefinition("range_expansion_ratio_missing", "range_expansion_ratio"),
+        MissingIndicatorDefinition("previous_day_high_missing", "distance_previous_day_high_atr"),
+        MissingIndicatorDefinition("previous_day_low_missing", "distance_previous_day_low_atr"),
+    )
+    return _manifest_from(
+        "phase3-features-hist-l1-v2",
+        tuple((group, names) for group, names in _FEATURE_GROUPS if group != "basis"),
+        missing, formal, _INTERACTIONS,
+    )
+
+
 def _require_aware(value: datetime, name: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")

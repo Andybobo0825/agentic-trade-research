@@ -47,7 +47,7 @@ test('line handoff includes phase3 as the main strategy step', () => {
   assert.doesNotMatch(handoff, /phase3-demo-promotion|logistic|walk-forward/i);
 });
 
-test('active guidance places independent DOM confidence after external research', () => {
+test('active guidance places Gooaye after other external research and before independent DOM confidence', () => {
   const workflow = read('docs/standard-workflow-v1.md');
   const handoff = read('docs/line-session-handoff.md');
   const readme = read('README.md');
@@ -56,7 +56,7 @@ test('active guidance places independent DOM confidence after external research'
   for (const document of [workflow, handoff]) {
     assert.match(
       document,
-      /phase3-dataset\s*(?:→|->).*phase3-screen\s*(?:→|->).*news\/earnings\/financial confidence\s*(?:→|->).*phase3-dom-confidence\s*(?:→|->).*manual decision/is,
+      /phase3-dataset\s*(?:→|->).*phase3-screen\s*(?:→|->).*company\/industry\/ETF research\s*(?:→|->).*gooaye-topic-research\s*(?:→|->).*phase3-dom-confidence\s*(?:→|->).*manual decision/is,
     );
   }
   assert.match(combined, /DOM.*(?:不進入|不得進入).*Phase 3.*(?:資料|候選資格|eligibility)/is);

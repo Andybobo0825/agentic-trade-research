@@ -21,43 +21,6 @@ class FakeTickKind(IntEnum):
     TRADE = 1
 
 
-class FakeQuote:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, object, object, object]] = []
-        self.tick_callback: Callable[..., None] | None = None
-        self.bidask_callback: Callable[..., None] | None = None
-
-    def set_on_tick_fop_v1_callback(
-        self,
-        callback: Callable[..., None],
-    ) -> None:
-        self.tick_callback = callback
-
-    def set_on_bidask_fop_v1_callback(
-        self,
-        callback: Callable[..., None],
-    ) -> None:
-        self.bidask_callback = callback
-
-    def subscribe(
-        self,
-        contract: object,
-        *,
-        quote_type: object,
-        version: object,
-    ) -> None:
-        self.calls.append(("subscribe", contract, quote_type, version))
-
-    def unsubscribe(
-        self,
-        contract: object,
-        *,
-        quote_type: object,
-        version: object,
-    ) -> None:
-        self.calls.append(("unsubscribe", contract, quote_type, version))
-
-
 class FakeApi:
     def __init__(self) -> None:
         self.raw_contract = SimpleNamespace(
@@ -69,29 +32,34 @@ class FakeApi:
             delivery_date="2026-07-15",
         )
         self.Contracts = SimpleNamespace(Futures={"TMFR1": self.raw_contract})
-        self.quote = FakeQuote()
         self.subscription_calls: list[tuple[str, object, object]] = []
         self.history_calls: list[tuple[object, ...]] = []
+        self.quote_callback: Callable[..., None] | None = None
         self.tick_payload: object = {
             "ts": [1, 2],
             "close": [100.0, 101.0],
         }
+
+    def set_on_quote_fop_v1_callback(self, callback: Callable[..., None]) -> None:
+        self.quote_callback = callback
 
     def subscribe(
         self,
         contract: object,
         *,
         quote_type: object,
+        version: object,
     ) -> None:
-        self.subscription_calls.append(("subscribe", contract, quote_type))
+        self.subscription_calls.append(("subscribe", contract, quote_type, version))
 
     def unsubscribe(
         self,
         contract: object,
         *,
         quote_type: object,
+        version: object,
     ) -> None:
-        self.subscription_calls.append(("unsubscribe", contract, quote_type))
+        self.subscription_calls.append(("unsubscribe", contract, quote_type, version))
 
     def ticks(self, contract: object, *, date: str) -> object:
         self.history_calls.append(("ticks", contract, date))
@@ -113,8 +81,7 @@ class ReadonlyGatewayTests(unittest.TestCase):
         self.api = FakeApi()
         self.gateway = ShioajiMarketDataGateway(
             self.api,
-            tick_quote_type="tick",
-            bidask_quote_type="bidask",
+            quote_type="quote",
             quote_version="v1",
             clock=lambda: FIXED_NOW,
         )
@@ -133,44 +100,51 @@ class ReadonlyGatewayTests(unittest.TestCase):
         self.assertFalse(hasattr(contract, "raw_contract"))
         self.assertIsInstance(self.gateway, MarketDataGateway)
 
-    def test_delegates_tick_and_bidask_subscriptions_inside_adapter(self) -> None:
+    def test_delegates_quote_subscription_inside_adapter(self) -> None:
         contract = self.gateway.resolve_near_contract()
 
-        self.gateway.subscribe_tick(contract)
-        self.gateway.subscribe_bidask(contract)
-        self.gateway.unsubscribe_tick(contract)
-        self.gateway.unsubscribe_bidask(contract)
+        self.gateway.subscribe_quote(contract)
+        self.gateway.unsubscribe_quote(contract)
 
         self.assertEqual(
             self.api.subscription_calls,
             [
-                ("subscribe", self.api.raw_contract, "tick"),
-                ("subscribe", self.api.raw_contract, "bidask"),
-                ("unsubscribe", self.api.raw_contract, "tick"),
-                ("unsubscribe", self.api.raw_contract, "bidask"),
+                ("subscribe", self.api.raw_contract, "quote", "v1"),
+                ("unsubscribe", self.api.raw_contract, "quote", "v1"),
             ],
         )
 
-    def test_adapts_raw_sdk_callbacks_to_immutable_mappings(self) -> None:
+    def test_adapts_raw_sdk_callback_to_immutable_mapping(self) -> None:
         received: list[Mapping[str, object]] = []
-        self.gateway.register_tick_callback(received.append)
-        self.gateway.register_bidask_callback(received.append)
+        self.gateway.register_quote_callback(received.append)
 
-        tick = {"code": "TMF202607", "close": [23000.0]}
-        quote = SimpleNamespace(code="TMF202607", bid_price=[22999.0])
-        tick_callback = self.api.quote.tick_callback
-        bidask_callback = self.api.quote.bidask_callback
-        self.assertIsNotNone(tick_callback)
-        self.assertIsNotNone(bidask_callback)
-        assert tick_callback is not None
-        assert bidask_callback is not None
-        tick_callback("futures", tick)
-        bidask_callback("futures", quote)
-        tick["code"] = "MUTATED"
+        quote = {"code": "TMF202607", "close": [23000.0], "bid_price": [22999.0]}
+        quote_callback = self.api.quote_callback
+        self.assertIsNotNone(quote_callback)
+        assert quote_callback is not None
+        quote_callback("futures", quote)
+        quote["code"] = "MUTATED"
 
         self.assertEqual(received[0]["code"], "TMF202607")
         self.assertEqual(received[0]["close"], (23000.0,))
-        self.assertEqual(received[1]["bid_price"], (22999.0,))
+        self.assertEqual(received[0]["bid_price"], (22999.0,))
+
+    def test_adapts_a_to_dict_only_sdk_object_like_real_quotefopv1(self) -> None:
+        class FakeQuoteFOPv1:
+            __slots__ = ()
+
+            def to_dict(self) -> dict[str, object]:
+                return {"code": "TMF202607", "close": 23000.0, "volume": 1}
+
+        received: list[Mapping[str, object]] = []
+        self.gateway.register_quote_callback(received.append)
+
+        quote_callback = self.api.quote_callback
+        assert quote_callback is not None
+        quote_callback(FakeQuoteFOPv1())
+
+        self.assertEqual(received[0]["code"], "TMF202607")
+        self.assertEqual(received[0]["volume"], 1)
 
     def test_fetches_historical_market_data_as_domain_batches(self) -> None:
         contract = self.gateway.resolve_near_contract()
@@ -228,7 +202,7 @@ class ReadonlyGatewayTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ContractResolutionError, "TMF_UNKNOWN"):
-            self.gateway.subscribe_tick(contract)
+            self.gateway.subscribe_quote(contract)
 
     def test_fails_closed_when_near_contract_is_missing(self) -> None:
         self.api.Contracts.Futures = {}

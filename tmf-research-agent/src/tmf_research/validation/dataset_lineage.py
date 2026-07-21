@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import heapq
 import json
@@ -17,8 +18,10 @@ from tmf_research.domain.events import BidAskEvent, TickEvent
 from tmf_research.domain.sessions import SessionResolution, TradingCalendar
 from tmf_research.features.context_builder import ResearchBuildSpec, build_feature_context
 from tmf_research.features.definitions import (
+    FeatureManifest,
     default_feature_manifest,
     historical_l1_feature_manifest,
+    historical_l1_reduced_feature_manifest,
 )
 from tmf_research.features.pipeline import FeaturePipeline
 from tmf_research.processing.historical_adapter import decode_historical_day
@@ -322,10 +325,24 @@ class Phase5DatasetIssuer:
         spec: ResearchBuildSpec,
         holdout_root: Path,
         witness: TrustedWitness,
+        sample_cache: Path | None = None,
     ) -> DatasetBuildResult:
         provenance = raw_store.phase5_provenance(manifests)
+        cache_path = (
+            _sample_cache_path(sample_cache, provenance, spec)
+            if sample_cache is not None else None
+        )
         try:
-            samples, outcomes = _derive_samples(raw_store, tuple(manifests), spec)
+            cached = (
+                _load_cached_samples(cache_path, provenance, spec)
+                if cache_path is not None else None
+            )
+            if cached is None:
+                samples, outcomes = _derive_samples(raw_store, tuple(manifests), spec)
+                if cache_path is not None:
+                    _write_cached_samples(cache_path, provenance, spec, samples, outcomes)
+            else:
+                samples, outcomes = cached
         except DatasetValidationError as error:
             lineage = _issue_evidence(
                 provenance, spec, (), (), (), None, holdout_root, witness,
@@ -528,11 +545,7 @@ def _derive_samples(
 ) -> tuple[tuple[TemporalSample, ...], tuple[ExecutableOutcome, ...]]:
     result: list[TemporalSample] = []
     outcomes: list[ExecutableOutcome] = []
-    feature_manifest = (
-        historical_l1_feature_manifest()
-        if spec.feature_version == "phase3-features-hist-l1-v1"
-        else replace(default_feature_manifest(), version=spec.feature_version)
-    )
+    feature_manifest = _feature_manifest_for(spec)
     feature_pipeline = FeaturePipeline(feature_manifest)
     label_pipeline = LabelPipeline()
     price_policy = ExecutablePricePolicy(entry_slippage=0.0, exit_slippage=spec.cost_points)
@@ -686,6 +699,14 @@ def _last_state_before(
     return states[index - 1]
 
 
+def _feature_manifest_for(spec: ResearchBuildSpec) -> FeatureManifest:
+    if spec.feature_version == "phase3-features-hist-l1-v1":
+        return historical_l1_feature_manifest()
+    if spec.feature_version == "phase3-features-hist-l1-v2":
+        return historical_l1_reduced_feature_manifest()
+    return replace(default_feature_manifest(), version=spec.feature_version)
+
+
 def _event_matches_resolution(
     value: TickEvent | BidAskEvent,
     resolution: object,
@@ -777,6 +798,148 @@ def _issue_evidence(
         object.__setattr__(instance, name, value)
     instance.__post_init__()
     return instance
+
+
+def _sample_cache_path(
+    cache_root: Path,
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+) -> Path:
+    key = canonical_hash({
+        "raw_dataset_hash": provenance.dataset_hash,
+        "build_spec_hash": spec.content_hash,
+    })
+    return cache_root / f"samples-{key[:16]}.ndjson.gz"
+
+
+def _cache_header(
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+) -> dict[str, object]:
+    return {
+        "raw_dataset_hash": provenance.dataset_hash,
+        "build_spec_hash": spec.content_hash,
+    }
+
+
+def _write_cached_samples(
+    path: Path,
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+    samples: tuple[TemporalSample, ...],
+    outcomes: tuple[ExecutableOutcome, ...],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(path.name + ".tmp")
+    with gzip.open(staging, "wt", encoding="utf-8") as stream:
+        stream.write(json.dumps(
+            _cache_header(provenance, spec),
+            sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ) + "\n")
+        for sample, outcome in zip(samples, outcomes, strict=True):
+            stream.write(json.dumps(
+                {"sample": _sample_payload(sample), "outcome": _outcome_payload(outcome)},
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ) + "\n")
+    os.replace(staging, path)
+
+
+def _load_cached_samples(
+    path: Path,
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+) -> tuple[tuple[TemporalSample, ...], tuple[ExecutableOutcome, ...]] | None:
+    """Rebuild sealed samples from the cache, re-verifying every commitment.
+
+    Every row passes back through the sealed constructors, so semantic and
+    content-hash validation runs exactly as in a fresh derivation; a stale
+    header (different raw data or build spec) just misses the cache, while a
+    corrupted row fails the build closed.
+    """
+
+    if path is None or not path.is_file():
+        return None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            header = json.loads(stream.readline())
+            if header != _cache_header(provenance, spec):
+                return None
+            formal_order = _feature_manifest_for(spec).formal_features
+            samples: list[TemporalSample] = []
+            outcomes: list[ExecutableOutcome] = []
+            for line in stream:
+                record = json.loads(line)
+                sample = _sample_from_payload(record["sample"], formal_order)
+                outcome = _outcome_from_payload(record["outcome"], sample.source)
+                samples.append(sample)
+                outcomes.append(outcome)
+    except (OSError, EOFError, KeyError, TypeError, ValueError) as error:
+        raise DatasetValidationError((f"SAMPLE_CACHE_INVALID:{type(error).__name__}",)) from error
+    return tuple(samples), tuple(outcomes)
+
+
+def _sample_from_payload(
+    payload: Mapping[str, object],
+    formal_order: tuple[str, ...],
+) -> TemporalSample:
+    source_payload = payload["source"]
+    if not isinstance(source_payload, Mapping):
+        raise ValueError("cached sample source must be an object")
+    features = source_payload["features"]
+    if not isinstance(features, Mapping):
+        raise ValueError("cached sample features must be an object")
+    if set(features) != set(formal_order):
+        raise ValueError("cached sample features do not match the build's formal feature set")
+    # payload()'s features are alphabetically sorted for canonical hashing; the
+    # sealed row must carry them in the manifest's declared formal order, since
+    # training checks tuple(row.features) against that exact order.
+    source = Phase4SourceRow(
+        str(source_payload["row_id"]),
+        datetime.fromisoformat(str(source_payload["available_at"])),
+        {name: features[name] for name in formal_order},
+        source_payload["label"],
+        float(source_payload["net_return"]),
+        bool(source_payload["is_complete"]),
+    )
+    if source.content_hash != source_payload.get("content_hash", source.content_hash):
+        raise ValueError("cached source row hash mismatch")
+    return TemporalSample(
+        source,
+        datetime.fromisoformat(str(payload["decision_time"])),
+        datetime.fromisoformat(str(payload["outcome_time"])),
+        str(payload["trading_date"]),
+    )
+
+
+def _outcome_from_payload(
+    payload: Mapping[str, object],
+    source: Phase4SourceRow,
+) -> ExecutableOutcome:
+    outcome = _issue_outcome(
+        source=source,
+        long_gross_points=float(payload["long_gross_points"]),
+        short_gross_points=float(payload["short_gross_points"]),
+        long_net_points=float(payload["long_net_points"]),
+        short_net_points=float(payload["short_net_points"]),
+        round_trip_cost_points=float(payload["round_trip_cost_points"]),
+        cost_components=tuple(
+            (str(name), None if value is None else float(value))
+            for name, value in payload["cost_components"]
+        ),
+        cost_complete=bool(payload["cost_complete"]),
+        decision_time=datetime.fromisoformat(str(payload["decision_time"])),
+        outcome_time=datetime.fromisoformat(str(payload["outcome_time"])),
+        event_id=str(payload["event_id"]),
+        regime_tags=tuple(str(tag) for tag in payload["regime_tags"]),
+        target_code=str(payload["target_code"]),
+        atr_sensitivity=tuple(
+            (float(multiplier), str(label), float(long_net), float(short_net))
+            for multiplier, label, long_net, short_net in payload["atr_sensitivity"]
+        ),
+    )
+    if outcome.content_hash != payload["content_hash"]:
+        raise ValueError("cached executable outcome hash mismatch")
+    return outcome
 
 
 def _sample_payload(value: TemporalSample) -> dict[str, object]:

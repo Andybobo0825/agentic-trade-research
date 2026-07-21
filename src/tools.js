@@ -32,6 +32,7 @@ import { buildTaiwanAgentTeam, renderTaiwanAgentTeamMarkdown } from './taiwan-ag
 import { renderPhase3DatasetMarkdown, runPhase3Dataset } from './phase3-dataset.js';
 import { renderPhase3ScreenMarkdown, runPhase3Screen } from './phase3-screen.js';
 import { renderPhase3DomConfidenceMarkdown, runPhase3DomConfidence } from './phase3-dom-confidence.js';
+import { renderGooayeTopicResearchMarkdown, runGooayeTopicResearch } from './gooaye-topic-research.js';
 import { compactJson, compactNumber, shapeForTokenBudget, toMarkdownTable } from './format.js';
 import { detectHmaSignals, evaluateHmaTrendSignal, normalizeCandleRows } from './indicators.js';
 
@@ -593,6 +594,15 @@ export const tools = {
     },
     toMarkdown(result) {
       return renderPhase3DomConfidenceMarkdown(result);
+    },
+  },
+  'gooaye-topic-research': {
+    description: 'Read-only Gooaye 股癌 topic research: verify the official RSS episode, then load the matching point-in-time public research artifact.',
+    async run(args) {
+      return runGooayeTopicResearch(args || {});
+    },
+    toMarkdown(result) {
+      return renderGooayeTopicResearchMarkdown(result);
     },
   },
   'research-pack': {

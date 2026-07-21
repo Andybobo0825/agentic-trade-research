@@ -136,6 +136,16 @@ test('MCP tools/list exposes taiwan-agent-team input schema', async () => {
   assert.match(tool.description, /official Standard Workflow 1\.4/i);
 });
 
+test('MCP tools/list exposes point-in-time Gooaye research inputs', async () => {
+  const response = await callMcp({ jsonrpc: '2.0', id: 14, method: 'tools/list' });
+  const tool = response.result.tools.find((entry) => entry.name === 'gooaye-topic-research');
+  assert.ok(tool);
+  assert.ok(tool.inputSchema.properties.date);
+  assert.ok(tool.inputSchema.properties.tickers);
+  assert.ok(tool.inputSchema.properties.timeoutMs);
+  assert.equal(tool.inputSchema.properties.live, undefined);
+});
+
 test('MCP exposes closed read-only Phase 3 schemas without promotion', async () => {
   const response = await callMcp({ jsonrpc: '2.0', id: 11, method: 'tools/list' });
   const dataset = response.result.tools.find((entry) => entry.name === 'phase3-dataset');

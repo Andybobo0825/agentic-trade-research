@@ -19,19 +19,21 @@
 - 唯一主策略：`phase3_stability`
 - 唯一技術篩選入口：read-only `phase3-screen`
 - 凍結門檻：HMA9 上升、HMA20 非負、收盤不低於 HMA9、距離不超過 6%、20 日平均成交額至少 2,000 萬、五日動能不超過 18%、收盤位置不超過 0.72
-- 外部新聞、法說、財報、股癌與 ETF 籌碼只在技術候選成立後作信心加權
-- 外部研究後才執行 read-only `phase3-dom-confidence`；DOM 不進入 Phase 3 資料或候選資格
+- 外部新聞、法說、財報與 ETF 籌碼只在技術候選成立後作信心加權
+- `gooaye-topic-research` 會先核對官方 RSS，再讀取符合 as-of date 的股癌研究資料；完成後才執行 read-only DOM
+- 最終候選必須揭露與股癌／當前題材的相符性；題材不符可撤下現行名單，但不竄改 Phase 3 歷史技術結果
+- DOM 不進入 Phase 3 資料或候選資格
 - DOM 有有效樣本時固定交付 `activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`；即使等待仍交付全部四個價格
 - 不含預測模型、promotion workflow 或自動下單；使用者手動交易
 
 ```text
-phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
+phase3-dataset → phase3-screen → company/industry/ETF research → gooaye-topic-research → phase3-dom-confidence → manual decision
 ```
 
 只有使用者要求選股、股票篩選或候選名單時才執行 Phase 3；`screen` 模式只允許 eligible 候選進入外部研究與 DOM，零 eligible 候選會停止後續逐檔工具。指定股票的 `analyze` 模式不執行 Phase 3，並明確標示 `phase3Eligibility: not_evaluated`，直接完成市場情境、外部信心、DOM 與四個價格。
 
 ```sh
-# 選股：Phase 3 → eligible-only 外部信心 → DOM → 四個價格
+# 選股：Phase 3 → eligible-only 外部信心 → 股癌題材 → DOM → 四個價格
 node src/cli.js taiwan-agent-team --query "篩選台股候選" --mode screen --format markdown
 
 # 指定股票：不執行 Phase 3，直接研究 2330
@@ -46,7 +48,7 @@ node src/cli.js taiwan-agent-team --query "分析台積電" --mode analyze --tic
 | `data-agent` | 盤點 repo 證據；只有 screen 模式才更新 point-in-time Phase 3 資料。 |
 | `strategy-agent` | 只有 screen 模式呼叫 `phase3-dataset`、`phase3-screen`，並只交付 eligible 候選。 |
 | `market-agent` | 讀取 Shioaji 指數/個股快照、盤前、類股資金流與 IC.TPEX peer context。 |
-| `external-confidence-agent` | 整合公司、新聞、公告、財報、營收、估值與 ETF 信心證據。 |
+| `external-confidence-agent` | 整合公司、新聞、公告、財報、營收、估值、ETF 與股癌題材證據。 |
 | `dom-agent` | 外部研究後讀取永豐 DOM，交付買賣壓力與四個人工參考價格。 |
 | `verifier` | 稽核工具順序、錯誤、資料缺口、eligibility 邊界、redaction 與 read-only 安全。 |
 

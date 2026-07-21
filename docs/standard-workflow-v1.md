@@ -41,7 +41,7 @@ node src/cli.js taiwan-agent-team --mode auto --format markdown
 `screen` 候選成立後的完整執行順序固定為：
 
 ```text
-phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
+phase3-dataset → phase3-screen → company/industry/ETF research → gooaye-topic-research → phase3-dom-confidence → manual decision
 ```
 
 `phase3-dom-confidence` 是外部研究完成後才執行的獨立信心層。DOM 不進入 Phase 3 資料、soft score 或候選資格（eligibility），也不能把 rejected ticker 改成 eligible。它只讀取永豐 Shioaji 五檔委買賣，預設在約 10 秒內取樣三次（0、5、10 秒），提供當下買賣壓力與人工決策參考。
@@ -109,7 +109,8 @@ Shioaji failure gate 標準處理：
 1. 執行 `taiwan-agent-team --mode analyze --tickers <TICKER>`；不執行 Phase 3，也不宣稱 ticker 通過技術篩選。
 2. 讀取大盤、個股 snapshot、盤前與產業鏈 context，並標示 `phase3Eligibility: not_evaluated`。
 3. 補公司、新聞 / 法說 / 財報、營收、估值及 ETF 等外部信心因子。
-4. 外部信心研究完成後才執行 `phase3-dom-confidence --ticker <TICKER>`，取得獨立 DOM 信心分數及四個價格參考。
+4. 全部目標的公司／產業／ETF 研究完成後，執行一次 `gooaye-topic-research --date <AS_OF_DATE> --tickers <TICKERS>`；先以官方 RSS 確認當時最新集數，再只取不晚於 as-of date 的研究 artifact。
+5. 股癌題材 context 已記錄後，才逐檔執行 `phase3-dom-confidence --ticker <TICKER>`，取得獨立 DOM 信心分數及四個價格參考。
 5. `daily-decision-study`、`signal-study`、`chip-study` 僅供歷史診斷，不得形成第二套策略。
 
 選股主流程（`screen`）：
@@ -135,7 +136,7 @@ node src/cli.js phase3-dom-confidence --ticker <TICKER> --format markdown
 Source order:
 
 1. 新聞 / 法說 / 財報 / 股癌只在技術候選成立後使用。
-2. 股癌預設優先查 `https://whatmkreallysaid.com/`；只有「最新一集 / 最新資訊 / 最近股癌」才先讀官方 SoundOn RSS。
+2. 主流程的 `gooaye-topic-research` 一律先查官方 SoundOn RSS 作為集數權威，再取不晚於 as-of date 的公開研究 artifact，避免前視偏誤。
 3. 若需要股癌逐字稿，依 `docs/gooaye-transcript-agent-handoff.md` 的獨立研究流程取得；主策略文件不啟動外部 sidecar。
 4. 題材結論必須回到 Shioaji 量價、IC.TPEX 產業鏈、同族群同步性與 Phase 3 技術訊號。
 

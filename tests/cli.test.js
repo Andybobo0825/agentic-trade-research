@@ -7,9 +7,10 @@ test('CLI exposes Phase 3 dataset, screen, and post-research DOM confidence comm
   assert.match(help, /phase3-dataset/);
   assert.match(help, /phase3-screen/);
   assert.match(help, /phase3-dom-confidence/);
+  assert.match(help, /gooaye-topic-research/);
   assert.doesNotMatch(help, /phase3-demo-promotion/);
 
-  for (const command of ['phase3-dataset', 'phase3-screen', 'phase3-dom-confidence']) {
+  for (const command of ['phase3-dataset', 'phase3-screen', 'phase3-dom-confidence', 'gooaye-topic-research']) {
     await assert.rejects(
       () => main([command, '--live', 'true']),
       /forbids --live/,

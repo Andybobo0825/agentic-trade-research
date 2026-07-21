@@ -148,6 +148,15 @@ function toolSchema(name, tool) {
       reportMarkdown: { type: 'string' },
     };
     base.inputSchema.required = ['ticker'];
+  } else if (name === 'gooaye-topic-research') {
+    base.inputSchema.additionalProperties = false;
+    base.inputSchema.properties = {
+      date: { type: 'string', description: 'Asia/Taipei as-of date in YYYY-MM-DD format.' },
+      tickers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      ticker: { type: 'string' },
+      timeoutMs: { type: 'number', minimum: 1, maximum: 60000 },
+    };
+    base.inputSchema.required = [];
   } else if (name === 'sector-flow') {
     base.inputSchema.properties = {
       mode: { type: 'string', enum: ['realtime', 'close'] },

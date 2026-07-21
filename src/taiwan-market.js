@@ -235,7 +235,10 @@ export async function getTaiwanAnnouncements({ ticker, provider = 'auto', limit 
 }
 
 export async function getTaiwanNews({ ticker, startDate, endDate, limit }) {
-  return limitRows(await finmindData(FINMIND_DATASETS.news, withDateRange({ data_id: ticker }, startDate, endDate)), limit);
+  // FinMind restricts TaiwanStockNews to one day per request and rejects
+  // end_date. Prefer the requested window's latest point-in-time day.
+  const newsDate = endDate || startDate;
+  return limitRows(await finmindData(FINMIND_DATASETS.news, withDateRange({ data_id: ticker }, newsDate)), limit);
 }
 
 export async function getTaiwanRaw({ provider, endpoint, dataset, ticker, startDate, endDate, limit }) {

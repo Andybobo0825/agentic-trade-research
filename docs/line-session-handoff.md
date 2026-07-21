@@ -45,7 +45,7 @@ Standard Workflow 1.4 的正式入口是 `taiwan-agent-team`，由七個 logical
 固定完整順序：
 
 ```text
-phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
+phase3-dataset → phase3-screen → company/industry/ETF research → gooaye-topic-research → phase3-dom-confidence → manual decision
 ```
 
 DOM 是外部研究之後的獨立信心層，不進入 Phase 3 資料、soft score 或候選資格，也不得覆蓋 `phase3-screen`。只要三次取樣中至少一筆有效，回覆必須包含 `activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`；即使判斷為等待或不追價，仍需交付全部四個價格。全部取樣失敗時才回傳 `null` 並說明資料錯誤，禁止自行估價。

@@ -77,6 +77,70 @@ class Phase5DatasetLineageTests(unittest.TestCase):
         self.assertEqual(len(batch.quotes), 1)
         self.assertEqual(batch.ticks[0].underlying_price, 22_950.0)
 
+    def test_already_stored_empty_book_and_out_of_session_rows_do_not_sink_a_build(
+        self,
+    ) -> None:
+        """Two artifacts the collector wrote before it knew to filter them.
+
+        Every session opened with one all-zero book snapshot, and pre-open
+        capture is stored deliberately with an empty trading date. Neither is
+        usable evidence, but the store is immutable, so the build has to drop
+        them: the empty book without poisoning the build's rejection reasons,
+        and the out-of-session row without raising out of the decoder.
+        """
+
+        from tmf_research.collection.live_calendar import synthetic_near_term_calendar
+        from tmf_research.processing.session_resolver import SessionResolver
+        from tmf_research.validation.dataset_lineage import _live_batches
+
+        taipei = timezone(timedelta(hours=8))
+        when = datetime(2026, 1, 1, 9, 0, tzinfo=taipei)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = AppendOnlyRawStore(root / "raw", writer_version="collect-v1")
+            common = {
+                "received_at": when, "exchange_datetime": when, "alias_code": "TMFR1",
+                "target_code": "TMF202607", "delivery_month": "202607",
+                "code": "TMF202607", "simtrade": False, "raw_payload": {},
+                "underlying_price": 22_950.0,
+            }
+            tick = store.append_segment("live-tick", (TickEvent(
+                event_id="tick-1", close=23_000.0, volume=3, tick_type=1,
+                trading_date="2026-01-01", session="DAY", **common,
+            ),), segment_id="live-tick-TMFR1-2026-01-01-DAY-000000", created_at=when)
+            quotes = store.append_segment("live-bidask", (
+                BidAskEvent(
+                    event_id="open-snapshot",
+                    bid_prices=(0.0,) * 5, bid_volumes=(0,) * 5,
+                    ask_prices=(0.0,) * 5, ask_volumes=(0,) * 5,
+                    trading_date="2026-01-01", session="DAY", **common,
+                ),
+                BidAskEvent(
+                    event_id="real-quote",
+                    bid_prices=(22_999.0,), bid_volumes=(4,),
+                    ask_prices=(23_001.0,), ask_volumes=(4,),
+                    trading_date="2026-01-01", session="DAY", **common,
+                ),
+            ), segment_id="live-bidask-TMFR1-2026-01-01-DAY-000000", created_at=when)
+            preopen = store.append_segment("live-bidask", (BidAskEvent(
+                event_id="pre-open",
+                bid_prices=(22_999.0,), bid_volumes=(4,),
+                ask_prices=(23_001.0,), ask_volumes=(4,),
+                trading_date="", session="CLOSED", **common,
+            ),), segment_id="live-bidask-TMFR1-unresolved-CLOSED-000000", created_at=when)
+
+            reasons: set[str] = set()
+            batches = _live_batches(
+                store, (tick, quotes, preopen),
+                SessionResolver(synthetic_near_term_calendar(when.date())), reasons,
+            )
+
+        self.assertEqual(reasons, set(), "usable rows were rejected over dropped ones")
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(
+            [quote.event_id for quote in batches[0].quotes], ["real-quote"],
+        )
+
     def test_quote_only_verified_input_fails_closed_without_indexing_ticks(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec
         from tmf_research.validation.dataset_lineage import Phase5DatasetIssuer

@@ -424,7 +424,14 @@ def _ingest_events(
 ) -> None:
     events: tuple[TickEvent | BidAskEvent, ...] = (*ticks, *quotes)
     for event in events:
-        reasons.update(validate_research_event(event))
+        validation = validate_research_event(event)
+        # A book with no prices and no volumes on either side is the exchange's
+        # session-open snapshot, not a malformed quote: drop the row instead of
+        # rejecting the build over it. Any other defect still fails closed, and
+        # so does an empty book that carries a second reason.
+        if validation == ("INVALID_DEPTH",) and _is_empty_book(event):
+            continue
+        reasons.update(validation)
         resolution = resolver.resolve(event.exchange_datetime)
         if not _event_matches_resolution(event, resolution):
             reasons.add("RAW_SESSION_OR_EFFECTIVE_DATE_MISMATCH")
@@ -464,6 +471,19 @@ def _drain_buckets(
     return sorted(
         (_batch_from_bucket(key, buckets.pop(key), reasons) for key in keys),
         key=lambda batch: batch.order_key,
+    )
+
+
+def _in_a_session(record: Mapping[str, object]) -> bool:
+    session = record.get("session")
+    return bool(record.get("trading_date")) and session in ("DAY", "NIGHT")
+
+
+def _is_empty_book(event: TickEvent | BidAskEvent) -> bool:
+    if isinstance(event, TickEvent):
+        return False
+    return not any(
+        (*event.bid_prices, *event.ask_prices, *event.bid_volumes, *event.ask_volumes)
     )
 
 
@@ -511,10 +531,14 @@ def _live_batches(
         # unprefixed names stay accepted so stores written before that keep
         # decoding. Anything unrecognized is left to fail the emptiness check
         # downstream rather than being dropped without a trace.
+        # Pre-open capture is stored deliberately, tagged CLOSED with no
+        # trading date. It belongs to no session, and the decoders require a
+        # trading date, so it is dropped before decoding rather than raising.
+        usable = tuple(record for record in records if _in_a_session(record))
         if manifest.event_type in ("tick", "live-tick"):
-            ticks.extend(decode_tick(record) for record in records)
+            ticks.extend(decode_tick(record) for record in usable)
         elif manifest.event_type in ("bidask", "live-bidask"):
-            quotes.extend(decode_bidask(record) for record in records)
+            quotes.extend(decode_bidask(record) for record in usable)
     buckets: dict[tuple[str, str], _Bucket] = {}
     _ingest_events(ticks, quotes, resolver, reasons, buckets)
     return _drain_buckets(buckets, tuple(buckets), reasons)

@@ -157,6 +157,38 @@ class LiveCollectorTests(unittest.TestCase):
         self.assertIsInstance(event, BidAskEvent)
         self.assertIsNone(queue.pop())
 
+    def test_session_open_empty_book_snapshot_is_not_a_quote(self) -> None:
+        """TAIFEX opens every session with an all-zero book before it fills.
+
+        Storing that as a BidAskEvent puts a quote with no prices and no
+        volumes into the raw store, which the research validator rightly
+        rejects as INVALID_DEPTH — one such row per session was enough to
+        reject an entire build.
+        """
+
+        gateway = FakeGateway()
+        queue = BoundedEventQueue[MarketEvent](capacity=4)
+        collector = LiveCollector(
+            gateway, ContractTracker(gateway), queue, clock=lambda: NOW,
+        )
+        collector.start()
+        quote_callback = gateway.quote_callback
+        assert quote_callback is not None
+        quote_callback(
+            {
+                "datetime": NOW,
+                "code": "TMF202607",
+                "close": 23000,
+                "volume": 0,
+                "bid_price": [0, 0, 0, 0, 0],
+                "bid_volume": [0, 0, 0, 0, 0],
+                "ask_price": [0, 0, 0, 0, 0],
+                "ask_volume": [0, 0, 0, 0, 0],
+            }
+        )
+
+        self.assertIsNone(queue.pop())
+
     def test_full_queue_returns_from_callback_with_drop_evidence(self) -> None:
         gateway = FakeGateway()
         queue = BoundedEventQueue[MarketEvent](capacity=1, clock=lambda: NOW)
@@ -167,11 +199,17 @@ class LiveCollectorTests(unittest.TestCase):
             clock=lambda: NOW,
         )
         collector.start()
+        # Carries a book, so each call offers both a tick and a quote — a
+        # bookless payload now yields the tick alone and would drop only one.
         payload: Mapping[str, object] = {
             "datetime": NOW,
             "code": "TMF202607",
             "close": 23000,
             "volume": 1,
+            "bid_price": [22999],
+            "bid_volume": [3],
+            "ask_price": [23001],
+            "ask_volume": [4],
         }
 
         quote_callback = gateway.quote_callback

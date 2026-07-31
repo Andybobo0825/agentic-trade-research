@@ -101,7 +101,11 @@ class LiveCollector:
             simtrade=simtrade,
             raw_payload=payload,
         )
-        self._queue.offer(bidask)
+        # TAIFEX opens every session with an all-zero book before it fills.
+        # That snapshot carries no quote, and storing it would put a row the
+        # research validator rejects as INVALID_DEPTH into the immutable store.
+        if any((*bidask.bid_prices, *bidask.ask_prices, *bidask.bid_volumes, *bidask.ask_volumes)):
+            self._queue.offer(bidask)
 
     def _required_contract(self) -> ContractInfo:
         if self._contract is None:

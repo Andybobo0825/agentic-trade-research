@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import TypeVar
 
 from tmf_research.domain.events import BidAskEvent, TickEvent
 from tmf_research.domain.sessions import SessionResolution
@@ -25,6 +26,23 @@ class ProcessingResult:
     states: tuple[OneSecondState, ...]
     bar_sets: tuple[BarSet, ...]
     quality_report: QualityReport
+
+
+_EventT = TypeVar("_EventT", TickEvent, BidAskEvent)
+
+
+def _bucket_by_second(
+    events: tuple[_EventT, ...],
+    start_second: datetime,
+) -> dict[int, list[_EventT]]:
+    """Group events by whole seconds elapsed since start_second, preserving
+    the input order inside each bucket."""
+
+    buckets: dict[int, list[EventT]] = {}
+    for event in events:
+        delta = event.exchange_datetime - start_second
+        buckets.setdefault(delta.days * 86400 + delta.seconds, []).append(event)
+    return buckets
 
 
 class ProcessingPipeline:
@@ -71,39 +89,33 @@ class ProcessingPipeline:
             for event in bidasks
             if start_second <= event.exchange_datetime < window_end
         )
-        quote_joins = tuple(
-            self._quote_joiner.join(tick, window_bidasks)
-            for tick in sorted(
+        quote_joins = self._quote_joiner.join_sorted(
+            sorted(
                 window_ticks,
                 key=lambda event: (event.exchange_datetime, event.event_id),
-            )
+            ),
+            window_bidasks,
         )
         aggregator = OneSecondAggregator(
             max_bidask_age=self._quote_joiner.max_quote_age,
         )
+        ticks_by_offset = _bucket_by_second(window_ticks, start_second)
+        bidasks_by_offset = _bucket_by_second(window_bidasks, start_second)
         states: list[OneSecondState] = []
         previous: OneSecondState | None = None
         second = start_second
+        offset = 0
         while second < window_end:
             next_second = second + timedelta(seconds=1)
-            second_ticks = tuple(
-                event
-                for event in window_ticks
-                if second <= event.exchange_datetime < next_second
-            )
-            second_quotes = tuple(
-                event
-                for event in window_bidasks
-                if second <= event.exchange_datetime < next_second
-            )
             previous = aggregator.aggregate(
                 second,
-                second_ticks,
-                second_quotes,
+                tuple(ticks_by_offset.get(offset, ())),
+                tuple(bidasks_by_offset.get(offset, ())),
                 previous=previous,
             )
             states.append(previous)
             second = next_second
+            offset += 1
         frozen_states = tuple(states)
         bar_sets = tuple(
             BarSet(

@@ -54,6 +54,44 @@ class WalkForwardContractTests(unittest.TestCase):
             self.assertFalse(hasattr(fold.selector, "outer_test"))
             self.assertEqual(fold.capabilities.inner_train.rows, tuple(row.source for row in fold.selector.inner_train))
 
+    def test_ambiguous_and_incomplete_rows_leave_only_inner_validation(self) -> None:
+        values = list(samples())
+        ambiguous = values[14]
+        incomplete = values[15]
+        values[14] = TemporalSample(
+            Phase4SourceRow(
+                ambiguous.source.row_id, ambiguous.source.available_at,
+                dict(ambiguous.source.features), "AMBIGUOUS", 0.0,
+            ),
+            ambiguous.decision_time, ambiguous.outcome_time, ambiguous.trading_date,
+        )
+        values[15] = TemporalSample(
+            Phase4SourceRow(
+                incomplete.source.row_id, incomplete.source.available_at,
+                dict(incomplete.source.features), "LONG", 1.0, is_complete=False,
+            ),
+            incomplete.decision_time, incomplete.outcome_time, incomplete.trading_date,
+        )
+
+        planned = Phase5FoldPlanner().plan(
+            tuple(values), outer_test_size=3, inner_validation_size=3,
+            minimum_outer_train_size=12, step_size=3,
+        )
+
+        self.assertGreaterEqual(len(planned), 3)
+        planned_ids = {
+            row.source.row_id
+            for fold in planned
+            for role in (fold.selector.inner_train, fold.evaluation.outer_test)
+            for row in role
+        }
+        self.assertIn("row-014", planned_ids)
+        self.assertIn("row-015", planned_ids)
+        for fold in planned:
+            for row in fold.selector.inner_validation:
+                self.assertNotEqual(row.source.label, "AMBIGUOUS")
+                self.assertTrue(row.source.is_complete)
+
     def test_input_must_already_be_chronological(self) -> None:
         values = samples()
         with self.assertRaisesRegex(ValueError, "chronological"):

@@ -29,28 +29,21 @@ class FakeGateway:
             resolved_at=NOW,
             resolver_version="test-v1",
         )
-        self.tick_callback: MarketCallback | None = None
-        self.bidask_callback: MarketCallback | None = None
+        self.quote_callback: MarketCallback | None = None
         self.subscriptions: list[tuple[str, str]] = []
 
     def resolve_near_contract(self) -> ContractInfo:
         return self.contract
 
-    def register_tick_callback(self, callback: MarketCallback) -> None:
-        self.tick_callback = callback
+    def register_quote_callback(self, callback: MarketCallback) -> None:
+        self.quote_callback = callback
 
-    def register_bidask_callback(self, callback: MarketCallback) -> None:
-        self.bidask_callback = callback
-
-    def subscribe_tick(self, contract: ContractInfo) -> None:
-        self.subscriptions.append(("tick", contract.target_code))
-
-    def subscribe_bidask(self, contract: ContractInfo) -> None:
-        self.subscriptions.append(("bidask", contract.target_code))
+    def subscribe_quote(self, contract: ContractInfo) -> None:
+        self.subscriptions.append(("quote", contract.target_code))
 
 
 class LiveCollectorTests(unittest.TestCase):
-    def test_market_callbacks_have_executable_minimality_tripwires(self) -> None:
+    def test_market_callback_has_executable_minimality_tripwires(self) -> None:
         forbidden_names = {
             "acquire",
             "aggregate",
@@ -67,25 +60,31 @@ class LiveCollectorTests(unittest.TestCase):
             "wait",
             "write",
         }
-        for callback in (LiveCollector._on_tick, LiveCollector._on_bidask):
-            tree = ast.parse(textwrap.dedent(inspect.getsource(callback)))
-            self.assertFalse(
-                any(isinstance(node, (ast.Await, ast.For, ast.Try, ast.While, ast.With)) for node in ast.walk(tree))
-            )
-            called_names = {
-                node.func.id.lower()
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            }
-            called_attributes = {
-                node.func.attr.lower()
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            }
-            self.assertFalse(forbidden_names & (called_names | called_attributes))
-            self.assertEqual(sum(name == "offer" for name in called_attributes), 1)
+        tree = ast.parse(textwrap.dedent(inspect.getsource(LiveCollector._on_quote)))
+        self.assertFalse(
+            any(isinstance(node, (ast.Await, ast.For, ast.Try, ast.While, ast.With)) for node in ast.walk(tree))
+        )
+        called_names = {
+            node.func.id.lower()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        called_attributes = {
+            node.func.attr.lower()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        self.assertFalse(forbidden_names & (called_names | called_attributes))
+        offer_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "offer"
+        ]
+        self.assertEqual(len(offer_calls), 2)
 
-    def test_subscribes_callbacks_and_enqueues_tick_and_bidask_events(self) -> None:
+    def test_subscribes_callback_and_enqueues_tick_and_bidask_events(self) -> None:
         gateway = FakeGateway()
         queue = BoundedEventQueue[MarketEvent](capacity=4)
         tracker = ContractTracker(gateway)
@@ -99,19 +98,16 @@ class LiveCollectorTests(unittest.TestCase):
         )
 
         resolution = collector.start()
-        tick_callback = gateway.tick_callback
-        bidask_callback = gateway.bidask_callback
-        self.assertIsNotNone(tick_callback)
-        self.assertIsNotNone(bidask_callback)
-        assert tick_callback is not None
-        assert bidask_callback is not None
-        tick_callback(
-            {"datetime": NOW, "code": "TMF202607", "close": 23000, "volume": 2}
-        )
-        bidask_callback(
+        quote_callback = gateway.quote_callback
+        self.assertIsNotNone(quote_callback)
+        assert quote_callback is not None
+        quote_callback(
             {
                 "datetime": NOW,
                 "code": "TMF202607",
+                "close": 23000,
+                "volume": 2,
+                "underlying_price": 23050.5,
                 "bid_price": [22999, 22998],
                 "bid_volume": [3, 2],
                 "ask_price": [23001, 23002],
@@ -120,10 +116,7 @@ class LiveCollectorTests(unittest.TestCase):
         )
 
         self.assertEqual(resolution.contract.target_code, "TMF202607")
-        self.assertEqual(
-            gateway.subscriptions,
-            [("tick", "TMF202607"), ("bidask", "TMF202607")],
-        )
+        self.assertEqual(gateway.subscriptions, [("quote", "TMF202607")])
         tick = queue.pop()
         bidask = queue.pop()
         self.assertIsInstance(tick, TickEvent)
@@ -131,7 +124,38 @@ class LiveCollectorTests(unittest.TestCase):
         assert isinstance(tick, TickEvent)
         assert isinstance(bidask, BidAskEvent)
         self.assertEqual(tick.target_code, "TMF202607")
+        self.assertEqual(tick.underlying_price, 23050.5)
         self.assertEqual(bidask.bid_prices, (22999.0, 22998.0))
+        self.assertEqual(bidask.underlying_price, 23050.5)
+
+    def test_zero_volume_quote_only_enqueues_bidask(self) -> None:
+        gateway = FakeGateway()
+        queue = BoundedEventQueue[MarketEvent](capacity=4)
+        collector = LiveCollector(
+            gateway,
+            ContractTracker(gateway),
+            queue,
+            clock=lambda: NOW,
+        )
+        collector.start()
+        quote_callback = gateway.quote_callback
+        assert quote_callback is not None
+        quote_callback(
+            {
+                "datetime": NOW,
+                "code": "TMF202607",
+                "close": 23000,
+                "volume": 0,
+                "bid_price": [22999],
+                "bid_volume": [3],
+                "ask_price": [23001],
+                "ask_volume": [4],
+            }
+        )
+
+        event = queue.pop()
+        self.assertIsInstance(event, BidAskEvent)
+        self.assertIsNone(queue.pop())
 
     def test_full_queue_returns_from_callback_with_drop_evidence(self) -> None:
         gateway = FakeGateway()
@@ -150,13 +174,13 @@ class LiveCollectorTests(unittest.TestCase):
             "volume": 1,
         }
 
-        tick_callback = gateway.tick_callback
-        self.assertIsNotNone(tick_callback)
-        assert tick_callback is not None
-        tick_callback(payload)
-        tick_callback(payload)
+        quote_callback = gateway.quote_callback
+        self.assertIsNotNone(quote_callback)
+        assert quote_callback is not None
+        quote_callback(payload)
+        quote_callback(payload)
 
-        self.assertEqual(queue.dropped_event_count, 1)
+        self.assertEqual(queue.dropped_event_count, 3)
         self.assertFalse(queue.quality_valid)
 
 

@@ -42,7 +42,7 @@ def _payload_mapping(payload: object) -> Mapping[object, object]:
         return payload
     if is_dataclass(payload) and not isinstance(payload, type):
         return {field.name: getattr(payload, field.name) for field in fields(payload)}
-    for method_name in ("model_dump", "dict", "_asdict"):
+    for method_name in ("model_dump", "dict", "_asdict", "to_dict"):
         method = getattr(payload, method_name, None)
         if callable(method):
             candidate = method()
@@ -92,8 +92,7 @@ class ShioajiMarketDataGateway:
         self,
         api: object,
         *,
-        tick_quote_type: object,
-        bidask_quote_type: object,
+        quote_type: object,
         quote_version: object | None = None,
         alias_code: str = "TMFR1",
         clock: Clock | None = None,
@@ -101,8 +100,7 @@ class ShioajiMarketDataGateway:
         if not alias_code.strip():
             raise ValueError("alias_code is required")
         self._api = api
-        self._tick_quote_type = tick_quote_type
-        self._bidask_quote_type = bidask_quote_type
+        self._quote_type = quote_type
         self._quote_version = quote_version
         self._alias_code = alias_code.strip()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
@@ -129,35 +127,19 @@ class ShioajiMarketDataGateway:
         self._raw_contracts[target_code] = raw_contract
         return contract
 
-    def register_tick_callback(self, callback: MarketCallback) -> None:
+    def register_quote_callback(self, callback: MarketCallback) -> None:
         def adapt(*args: object) -> None:
             if not args:
-                raise TypeError("tick callback payload is required")
+                raise TypeError("quote callback payload is required")
             callback(_payload_snapshot(args[-1]))
 
-        quote_manager = getattr(self._api, "quote")
-        getattr(quote_manager, "set_on_tick_fop_v1_callback")(adapt)
+        getattr(self._api, "set_on_quote_fop_v1_callback")(adapt)
 
-    def register_bidask_callback(self, callback: MarketCallback) -> None:
-        def adapt(*args: object) -> None:
-            if not args:
-                raise TypeError("bidask callback payload is required")
-            callback(_payload_snapshot(args[-1]))
+    def subscribe_quote(self, contract: ContractInfo) -> None:
+        self._change_subscription("subscribe", contract, self._quote_type)
 
-        quote_manager = getattr(self._api, "quote")
-        getattr(quote_manager, "set_on_bidask_fop_v1_callback")(adapt)
-
-    def subscribe_tick(self, contract: ContractInfo) -> None:
-        self._change_subscription("subscribe", contract, self._tick_quote_type)
-
-    def subscribe_bidask(self, contract: ContractInfo) -> None:
-        self._change_subscription("subscribe", contract, self._bidask_quote_type)
-
-    def unsubscribe_tick(self, contract: ContractInfo) -> None:
-        self._change_subscription("unsubscribe", contract, self._tick_quote_type)
-
-    def unsubscribe_bidask(self, contract: ContractInfo) -> None:
-        self._change_subscription("unsubscribe", contract, self._bidask_quote_type)
+    def unsubscribe_quote(self, contract: ContractInfo) -> None:
+        self._change_subscription("unsubscribe", contract, self._quote_type)
 
     def fetch_ticks(self, contract: ContractInfo, date: str) -> TickBatch:
         if not date.strip():
@@ -232,15 +214,15 @@ class ShioajiMarketDataGateway:
             direct_method = getattr(self._api, "unsubscribe", None)
         else:
             raise AssertionError(f"unsupported subscription action: {action}")
+        kwargs: dict[str, object] = {"quote_type": quote_type}
+        if self._quote_version is not None:
+            kwargs["version"] = self._quote_version
         if callable(direct_method):
-            direct_method(raw_contract, quote_type=quote_type)
+            direct_method(raw_contract, **kwargs)
             return
 
         quote_manager = getattr(self._api, "quote")
         method = getattr(quote_manager, action)
-        kwargs: dict[str, object] = {"quote_type": quote_type}
-        if self._quote_version is not None:
-            kwargs["version"] = self._quote_version
         method(raw_contract, **kwargs)
 
 
@@ -270,8 +252,7 @@ def create_market_data_session(
     )
     return ShioajiMarketDataGateway(
         api,
-        tick_quote_type=shioaji.constant.QuoteType.Tick,
-        bidask_quote_type=shioaji.constant.QuoteType.BidAsk,
+        quote_type=shioaji.constant.QuoteType.Quote,
         quote_version=shioaji.constant.QuoteVersion.v1,
         alias_code=alias_code,
         clock=clock,

@@ -28,14 +28,12 @@ def consecutive_up(bars: tuple[Bar, ...]) -> float:
     return float(count)
 
 
-def candle_ratios(bar: Bar) -> tuple[float | None, float | None]:
+def candle_ratios(bar: Bar) -> float | None:
     if None in (bar.open, bar.high, bar.low, bar.close):
-        return None, None
+        return None
     assert bar.open is not None and bar.high is not None and bar.low is not None and bar.close is not None
     width = bar.high - bar.low
     if width <= 0:
-        return 0.0, 0.0
-    body = abs(bar.close - bar.open) / width
-    upper = (bar.high - max(bar.open, bar.close)) / width
-    return body, upper
+        return 0.0
+    return abs(bar.close - bar.open) / width
 

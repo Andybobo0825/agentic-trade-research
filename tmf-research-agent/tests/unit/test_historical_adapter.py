@@ -11,6 +11,7 @@ from tmf_research.processing.historical_adapter import (
     decode_historical_day,
 )
 from tmf_research.processing.raw_decoder import validate_research_event
+from tmf_research.domain.sessions import TradingCalendar
 
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -167,11 +168,18 @@ class FailClosedTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoricalAdapterError, "close"):
             decode_historical_day(DAY, [incomplete])
 
-    def test_rejects_non_monotonic_times_and_mixed_targets(self) -> None:
+    def test_out_of_order_vendor_ticks_are_processed_in_time_order(self) -> None:
         backwards = [record(0, DAY_TIME), record(1, NIGHT_TIME)]
-        with self.assertRaisesRegex(HistoricalAdapterError, "order"):
-            decode_historical_day(DAY, backwards)
 
+        ticks, _quotes = decode_historical_day(DAY, backwards)
+
+        self.assertEqual(
+            [tick.exchange_datetime.isoformat() for tick in ticks],
+            sorted(tick.exchange_datetime.isoformat() for tick in ticks),
+        )
+        self.assertEqual(ticks[0].event_id, f"hist-tick-TMFR1-{DAY}-000001")
+
+    def test_rejects_mixed_targets(self) -> None:
         mixed = [record(0, NIGHT_TIME), record(1, DAY_TIME)]
         mixed[1]["derived_target_code"] = "TMF202609"
         with self.assertRaisesRegex(HistoricalAdapterError, "target"):
@@ -189,3 +197,44 @@ def _mapping_keys(value: Mapping[str, object]) -> tuple[str, ...]:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CalendarAwareDecodingTests(unittest.TestCase):
+    def _calendar(self) -> TradingCalendar:
+        from datetime import date, time
+
+        from tmf_research.domain.sessions import TradingDay
+
+        return TradingCalendar(
+            version="cal-test-v1",
+            timezone="Asia/Taipei",
+            days=(
+                TradingDay(
+                    trading_date=date(2026, 7, 16),
+                    day_close=time(13, 45),
+                    night_open=datetime(2026, 7, 14, 15, 0, tzinfo=TAIPEI),
+                    night_close=datetime(2026, 7, 15, 5, 0, tzinfo=TAIPEI),
+                ),
+            ),
+        )
+
+    def test_holiday_night_resolves_to_the_next_trading_date(self) -> None:
+        holiday_night = "2026-07-14T15:30:00+08:00"
+        row = record(0, holiday_night)
+        row["event_id"] = "hist-tick-TMFR1-2026-07-15-000000"
+
+        ticks, quotes = decode_historical_day(
+            "2026-07-15", [row], calendar=self._calendar(),
+        )
+
+        self.assertEqual(ticks[0].trading_date, "2026-07-16")
+        self.assertEqual(ticks[0].session, "NIGHT")
+        self.assertEqual(quotes[0].trading_date, "2026-07-16")
+
+    def test_time_outside_every_calendar_session_fails_closed(self) -> None:
+        closed_time = "2026-07-15T15:00:00+08:00"
+        row = record(0, closed_time)
+        row["event_id"] = "hist-tick-TMFR1-2026-07-15-000000"
+
+        with self.assertRaisesRegex(HistoricalAdapterError, "calendar"):
+            decode_historical_day("2026-07-15", [row], calendar=self._calendar())

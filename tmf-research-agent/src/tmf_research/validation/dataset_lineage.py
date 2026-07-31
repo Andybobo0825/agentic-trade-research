@@ -1,19 +1,30 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
+import heapq
 import json
 import math
 import os
-from collections.abc import Mapping, Sequence
+from bisect import bisect_left, bisect_right
+from collections import Counter
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from tmf_research.domain.events import BidAskEvent, TickEvent
+from tmf_research.domain.sessions import SessionResolution, TradingCalendar
 from tmf_research.features.context_builder import ResearchBuildSpec, build_feature_context
-from tmf_research.features.definitions import default_feature_manifest
+from tmf_research.features.definitions import (
+    FeatureManifest,
+    default_feature_manifest,
+    historical_l1_feature_manifest,
+    historical_l1_reduced_feature_manifest,
+)
 from tmf_research.features.pipeline import FeaturePipeline
+from tmf_research.processing.historical_adapter import decode_historical_day
 from tmf_research.infrastructure.raw_store import AppendOnlyRawStore, SegmentManifest
 from tmf_research.infrastructure.trusted_witness import TrustedWitness
 from tmf_research.labeling.executable_prices import ExecutablePricePolicy
@@ -184,7 +195,8 @@ class DatasetLineageEvidence:
             raise ValueError("executable outcome lineage must cover every exact sample")
         for value in outcome_committed.values():
             _sha256(value)
-        if any(row_id not in self.development_row_ids for manifest in self.fold_manifests for role in (
+        development_ids = set(self.development_row_ids)
+        if any(row_id not in development_ids for manifest in self.fold_manifests for role in (
             manifest.inner_train, manifest.inner_validation, manifest.outer_test,
         ) for row_id, _row_hash in role.row_hashes):
             raise ValueError("fold manifests may only commit development-prefix rows")
@@ -313,20 +325,24 @@ class Phase5DatasetIssuer:
         spec: ResearchBuildSpec,
         holdout_root: Path,
         witness: TrustedWitness,
+        sample_cache: Path | None = None,
     ) -> DatasetBuildResult:
         provenance = raw_store.phase5_provenance(manifests)
-        ticks: list[TickEvent] = []
-        quotes: list[BidAskEvent] = []
-        for manifest in manifests:
-            records = raw_store.read_verified(manifest)
-            if manifest.event_type == "tick":
-                ticks.extend(decode_tick(record) for record in records)
-            elif manifest.event_type == "bidask":
-                quotes.extend(decode_bidask(record) for record in records)
+        cache_path = (
+            _sample_cache_path(sample_cache, provenance, spec)
+            if sample_cache is not None else None
+        )
         try:
-            samples, outcomes = _derive_samples(
-                tuple(ticks), tuple(quotes), tuple(manifests), spec,
+            cached = (
+                _load_cached_samples(cache_path, provenance, spec)
+                if cache_path is not None else None
             )
+            if cached is None:
+                samples, outcomes = _derive_samples(raw_store, tuple(manifests), spec)
+                if cache_path is not None:
+                    _write_cached_samples(cache_path, provenance, spec, samples, outcomes)
+            else:
+                samples, outcomes = cached
         except DatasetValidationError as error:
             lineage = _issue_evidence(
                 provenance, spec, (), (), (), None, holdout_root, witness,
@@ -384,15 +400,152 @@ class Phase5DatasetIssuer:
         return _build_result(lineage, development, development_outcomes, capabilities, ())
 
 
+@dataclass(frozen=True, slots=True)
+class _SessionBatch:
+    """One complete resolved trading session's events, emitted in start order."""
+
+    order_key: datetime
+    resolution: SessionResolution
+    trading_date: str
+    session: str
+    ticks: tuple[TickEvent, ...]
+    quotes: tuple[BidAskEvent, ...]
+
+
+_Bucket = tuple[list[TickEvent], list[BidAskEvent], SessionResolution]
+
+
+def _ingest_events(
+    ticks: Sequence[TickEvent],
+    quotes: Sequence[BidAskEvent],
+    resolver: SessionResolver,
+    reasons: set[str],
+    buckets: dict[tuple[str, str], _Bucket],
+) -> None:
+    events: tuple[TickEvent | BidAskEvent, ...] = (*ticks, *quotes)
+    for event in events:
+        reasons.update(validate_research_event(event))
+        resolution = resolver.resolve(event.exchange_datetime)
+        if not _event_matches_resolution(event, resolution):
+            reasons.add("RAW_SESSION_OR_EFFECTIVE_DATE_MISMATCH")
+            continue
+        key = (event.trading_date, event.session)
+        bucket = buckets.get(key)
+        if bucket is None:
+            bucket = buckets[key] = ([], [], resolution)
+        if isinstance(event, TickEvent):
+            bucket[0].append(event)
+        else:
+            bucket[1].append(event)
+
+
+def _batch_from_bucket(
+    key: tuple[str, str],
+    bucket: _Bucket,
+    reasons: set[str],
+) -> _SessionBatch:
+    ticks, quotes, resolution = bucket
+    if resolution.session_start is None:
+        reasons.add("RESOLVED_SESSION_BOUNDARY_MISSING")
+        events: tuple[TickEvent | BidAskEvent, ...] = (*ticks, *quotes)
+        order_key = min(event.exchange_datetime for event in events)
+    else:
+        order_key = resolution.session_start
+    return _SessionBatch(
+        order_key, resolution, key[0], key[1], tuple(ticks), tuple(quotes),
+    )
+
+
+def _drain_buckets(
+    buckets: dict[tuple[str, str], _Bucket],
+    keys: Sequence[tuple[str, str]],
+    reasons: set[str],
+) -> list[_SessionBatch]:
+    return sorted(
+        (_batch_from_bucket(key, buckets.pop(key), reasons) for key in keys),
+        key=lambda batch: batch.order_key,
+    )
+
+
+def _historical_batches(
+    raw_store: AppendOnlyRawStore,
+    manifests: Sequence[SegmentManifest],
+    calendar: TradingCalendar,
+    resolver: SessionResolver,
+    reasons: set[str],
+) -> Iterator[_SessionBatch]:
+    """Decode one stored day at a time; a session flushes once a later day arrives.
+
+    A backfill day file covers [previous trading day 15:00, day 13:46), so every
+    (trading date, session) is complete within one file; the watermark only has
+    to hold the current day's buckets, keeping memory at a single day of events.
+    """
+
+    buckets: dict[tuple[str, str], _Bucket] = {}
+    ordered = sorted(
+        manifests, key=lambda manifest: manifest.segment_id.rpartition("TMFR1-")[2],
+    )
+    for manifest in ordered:
+        day = manifest.segment_id.rpartition("TMFR1-")[2]
+        records = raw_store.read_verified(manifest)
+        day_ticks, day_quotes = decode_historical_day(day, records, calendar=calendar)
+        del records
+        _ingest_events(day_ticks, day_quotes, resolver, reasons, buckets)
+        del day_ticks, day_quotes
+        ready = tuple(key for key in buckets if key[0] < day)
+        yield from _drain_buckets(buckets, ready, reasons)
+    yield from _drain_buckets(buckets, tuple(buckets), reasons)
+
+
+def _live_batches(
+    raw_store: AppendOnlyRawStore,
+    manifests: Sequence[SegmentManifest],
+    resolver: SessionResolver,
+    reasons: set[str],
+) -> list[_SessionBatch]:
+    ticks: list[TickEvent] = []
+    quotes: list[BidAskEvent] = []
+    for manifest in manifests:
+        records = raw_store.read_verified(manifest)
+        if manifest.event_type == "tick":
+            ticks.extend(decode_tick(record) for record in records)
+        elif manifest.event_type == "bidask":
+            quotes.extend(decode_bidask(record) for record in records)
+    buckets: dict[tuple[str, str], _Bucket] = {}
+    _ingest_events(ticks, quotes, resolver, reasons, buckets)
+    return _drain_buckets(buckets, tuple(buckets), reasons)
+
+
+def _session_batches(
+    raw_store: AppendOnlyRawStore,
+    manifests: Sequence[SegmentManifest],
+    calendar: TradingCalendar,
+    resolver: SessionResolver,
+    reasons: set[str],
+) -> Iterator[_SessionBatch]:
+    live = tuple(
+        manifest for manifest in manifests
+        if manifest.event_type != "historical-tick"
+    )
+    historical = tuple(
+        manifest for manifest in manifests
+        if manifest.event_type == "historical-tick"
+    )
+    yield from heapq.merge(
+        _live_batches(raw_store, live, resolver, reasons),
+        _historical_batches(raw_store, historical, calendar, resolver, reasons),
+        key=lambda batch: batch.order_key,
+    )
+
+
 def _derive_samples(
-    ticks: tuple[TickEvent, ...],
-    quotes: tuple[BidAskEvent, ...],
+    raw_store: AppendOnlyRawStore,
     manifests: tuple[SegmentManifest, ...],
     spec: ResearchBuildSpec,
 ) -> tuple[tuple[TemporalSample, ...], tuple[ExecutableOutcome, ...]]:
     result: list[TemporalSample] = []
     outcomes: list[ExecutableOutcome] = []
-    feature_manifest = replace(default_feature_manifest(), version=spec.feature_version)
+    feature_manifest = _feature_manifest_for(spec)
     feature_pipeline = FeaturePipeline(feature_manifest)
     label_pipeline = LabelPipeline()
     price_policy = ExecutablePricePolicy(entry_slippage=0.0, exit_slippage=spec.cost_points)
@@ -407,57 +560,17 @@ def _derive_samples(
         0.0 if value is None else value for _name, value in cost_components
     )
     labeler = TripleBarrierLabeler(price_policy=price_policy)
-    resolver = SessionResolver(spec.trading_calendar())
-    events: tuple[TickEvent | BidAskEvent, ...] = (*ticks, *quotes)
-    semantic_reasons = tuple(
-        reason
-        for event in events
-        for reason in validate_research_event(event)
-    )
-    mismatch = any(
-        not _event_matches_resolution(event, resolver.resolve(event.exchange_datetime))
-        for event in events
-    )
-    if semantic_reasons or mismatch:
-        raise DatasetValidationError((
-            *semantic_reasons,
-            *(("RAW_SESSION_OR_EFFECTIVE_DATE_MISMATCH",) if mismatch else ()),
-        ))
-    resolved_ticks = tuple(
-        (value, resolution)
-        for value in ticks
-        if _event_matches_resolution(value, resolution := resolver.resolve(value.exchange_datetime))
-    )
-    resolved_quotes = tuple(
-        (value, resolution)
-        for value in quotes
-        if _event_matches_resolution(value, resolution := resolver.resolve(value.exchange_datetime))
-    )
-    resolutions = {
-        (resolution.trading_date.isoformat(), resolution.session): resolution
-        for _value, resolution in (*resolved_ticks, *resolved_quotes)
-        if resolution.trading_date is not None
-    }
+    calendar = spec.trading_calendar()
+    resolver = SessionResolver(calendar)
+    reasons: set[str] = set()
     prior_bars: list[Bar] = []
-    prior_states: list[OneSecondState] = []
-    ordered_keys = tuple(sorted(
-        resolutions,
-        key=lambda key: _required_session_start(resolutions[key]),
-    ))
-    for trading_date, session in ordered_keys:
-        resolution = resolutions[(trading_date, session)]
-        day_ticks = tuple(
-            value for value, resolved in resolved_ticks
-            if resolved.trading_date is not None
-            and resolved.trading_date.isoformat() == trading_date
-            and resolved.session == session
-        )
-        day_quotes = tuple(
-            value for value, resolved in resolved_quotes
-            if resolved.trading_date is not None
-            and resolved.trading_date.isoformat() == trading_date
-            and resolved.session == session
-        )
+    prior_volume_counts: Counter[int] = Counter()
+    for batch in _session_batches(raw_store, manifests, calendar, resolver, reasons):
+        if reasons:
+            continue  # keep draining so validation still covers every stored day
+        trading_date, session = batch.trading_date, batch.session
+        resolution = batch.resolution
+        day_ticks, day_quotes = batch.ticks, batch.quotes
         if not day_ticks or not day_quotes:
             continue
         if (
@@ -465,7 +578,8 @@ def _derive_samples(
             or {value.target_code for value in day_ticks}
             != {value.target_code for value in day_quotes}
         ):
-            raise DatasetValidationError(("TARGET_MISMATCH",))
+            reasons.add("TARGET_MISMATCH")
+            continue
         start = min(value.exchange_datetime for value in day_ticks).replace(second=0, microsecond=0)
         if resolution.session == "CLOSED" or resolution.session_start is None or resolution.session_end is None:
             continue
@@ -476,11 +590,17 @@ def _derive_samples(
             source_manifests=manifests, intervals=(1,),
         )
         bars = processed.bar_sets[0].bars
+        states = processed.states
+        # The pipeline emits states second-by-second and bars in start order,
+        # so time-prefix and time-suffix slices can use binary search.
+        state_seconds = [state.second for state in states]
+        bar_starts = [bar.bar_start for bar in bars]
+        bar_ends = [bar.bar_end for bar in bars]
         candidates = tuple(value for value in label_pipeline.candidates(bars, horizons=(15,)))
         context = build_feature_context(
             resolution,
             prior_bars=tuple(prior_bars),
-            prior_states=tuple(prior_states),
+            prior_volume_counts=prior_volume_counts,
         )
         parameters = LabelParameters(
             version=spec.label_version, fit_start=start - timedelta(days=2),
@@ -489,18 +609,17 @@ def _derive_samples(
             minimum_stop_points=1.0, horizon_minutes=15,
         )
         for candidate in candidates:
-            future = tuple(bar for bar in bars if candidate.decision_time <= bar.bar_start)
+            future = bars[bisect_left(bar_starts, candidate.decision_time):]
             if len(future) < 15:
                 continue
             try:
                 feature = feature_pipeline.compute(
-                    bars=tuple(bar for bar in bars if bar.bar_end <= candidate.decision_time),
-                    states=tuple(state for state in processed.states if state.second < candidate.decision_time),
+                    bars=bars[:bisect_right(bar_ends, candidate.decision_time)],
+                    states=states[:bisect_left(state_seconds, candidate.decision_time)],
                     decision_time=candidate.decision_time, context=context,
                 )
-                entry = max(
-                    (state for state in processed.states if state.second < candidate.decision_time),
-                    key=lambda state: state.second,
+                entry = _last_state_before(
+                    states, state_seconds, candidate.decision_time,
                 )
                 atr_value = feature.values.get("atr_5m")
                 atr = float(atr_value) if isinstance(atr_value, (int, float)) and atr_value > 0 else 1.0
@@ -508,13 +627,20 @@ def _derive_samples(
                     candidate_id=candidate.candidate_id, decision_time=candidate.decision_time,
                     entry_state=entry, future_bars=future, atr=atr, parameters=parameters,
                 )
+                outcome_state = _last_state_before(
+                    states, state_seconds, label.outcome_time,
+                )
+                exit_quote = price_policy.snapshot(outcome_state)
+                atr_sensitivity = _atr_sensitivity_outcomes(
+                    labeler=labeler, candidate_id=candidate.candidate_id,
+                    decision_time=candidate.decision_time, entry_state=entry,
+                    future_bars=future, atr=atr, parameters=parameters,
+                    states=states, state_seconds=state_seconds,
+                    price_policy=price_policy,
+                    total_cost_points=total_cost_points,
+                )
             except ValueError:
                 continue
-            outcome_state = max(
-                (state for state in processed.states if state.second < label.outcome_time),
-                key=lambda state: state.second,
-            )
-            exit_quote = price_policy.snapshot(outcome_state)
             long_gross = exit_quote.bid - label.entry_ask
             short_gross = label.entry_bid - exit_quote.ask
             long_net = long_gross - total_cost_points
@@ -547,21 +673,38 @@ def _derive_samples(
                 event_id=candidate.candidate_id,
                 regime_tags=_regime_tags(feature.values, str(session)),
                 target_code=candidate.target_code,
-                atr_sensitivity=_atr_sensitivity_outcomes(
-                    labeler=labeler, candidate_id=candidate.candidate_id,
-                    decision_time=candidate.decision_time, entry_state=entry,
-                    future_bars=future, atr=atr, parameters=parameters,
-                    states=processed.states, price_policy=price_policy,
-                    total_cost_points=total_cost_points,
-                ),
+                atr_sensitivity=atr_sensitivity,
             ))
         prior_bars[:] = bars
-        prior_states.extend(processed.states)
+        prior_volume_counts.update(
+            state.volume for state in processed.states if state.volume > 0
+        )
+    if reasons:
+        raise DatasetValidationError(tuple(reasons))
     paired = tuple(sorted(
         zip(result, outcomes, strict=True),
         key=lambda value: (value[0].decision_time, value[0].source.row_id),
     ))
     return tuple(value[0] for value in paired), tuple(value[1] for value in paired)
+
+
+def _last_state_before(
+    states: tuple[OneSecondState, ...],
+    state_seconds: Sequence[datetime],
+    moment: datetime,
+) -> OneSecondState:
+    index = bisect_left(state_seconds, moment)
+    if index == 0:
+        raise ValueError("no state precedes the requested moment")
+    return states[index - 1]
+
+
+def _feature_manifest_for(spec: ResearchBuildSpec) -> FeatureManifest:
+    if spec.feature_version == "phase3-features-hist-l1-v1":
+        return historical_l1_feature_manifest()
+    if spec.feature_version == "phase3-features-hist-l1-v2":
+        return historical_l1_reduced_feature_manifest()
+    return replace(default_feature_manifest(), version=spec.feature_version)
 
 
 def _event_matches_resolution(
@@ -577,14 +720,6 @@ def _event_matches_resolution(
         and value.session == resolution.session
         and value.trading_date == resolution.trading_date.isoformat()
     )
-
-
-def _required_session_start(resolution: object) -> datetime:
-    from tmf_research.domain.sessions import SessionResolution
-
-    if not isinstance(resolution, SessionResolution) or resolution.session_start is None:
-        raise DatasetValidationError(("RESOLVED_SESSION_BOUNDARY_MISSING",))
-    return resolution.session_start
 
 
 def _plan_development_folds(
@@ -617,6 +752,8 @@ def _issue_evidence(
     ready = selection is not None
     development = selection.development if selection is not None else ()
     holdout = selection.holdout if selection is not None else ()
+    development_ids = {row.row_id for row in development}
+    holdout_ids = {row.row_id for row in holdout}
     data_hash = None
     if ready:
         data_path = holdout_root / "holdout.data.json"
@@ -632,10 +769,10 @@ def _issue_evidence(
         "build_spec_hash": spec.content_hash,
         "all_rows_hash": canonical_hash([_sample_payload(value) for value in samples]),
         "development_rows_hash": canonical_hash([
-            _sample_payload(value) for value in samples if value.source.row_id in {row.row_id for row in development}
+            _sample_payload(value) for value in samples if value.source.row_id in development_ids
         ]),
         "holdout_rows_hash": canonical_hash([
-            _sample_payload(value) for value in samples if value.source.row_id in {row.row_id for row in holdout}
+            _sample_payload(value) for value in samples if value.source.row_id in holdout_ids
         ]),
         "temporal_sample_hashes": tuple(
             (value.source.row_id, canonical_hash(_sample_payload(value))) for value in samples
@@ -661,6 +798,148 @@ def _issue_evidence(
         object.__setattr__(instance, name, value)
     instance.__post_init__()
     return instance
+
+
+def _sample_cache_path(
+    cache_root: Path,
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+) -> Path:
+    key = canonical_hash({
+        "raw_dataset_hash": provenance.dataset_hash,
+        "build_spec_hash": spec.content_hash,
+    })
+    return cache_root / f"samples-{key[:16]}.ndjson.gz"
+
+
+def _cache_header(
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+) -> dict[str, object]:
+    return {
+        "raw_dataset_hash": provenance.dataset_hash,
+        "build_spec_hash": spec.content_hash,
+    }
+
+
+def _write_cached_samples(
+    path: Path,
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+    samples: tuple[TemporalSample, ...],
+    outcomes: tuple[ExecutableOutcome, ...],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(path.name + ".tmp")
+    with gzip.open(staging, "wt", encoding="utf-8") as stream:
+        stream.write(json.dumps(
+            _cache_header(provenance, spec),
+            sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ) + "\n")
+        for sample, outcome in zip(samples, outcomes, strict=True):
+            stream.write(json.dumps(
+                {"sample": _sample_payload(sample), "outcome": _outcome_payload(outcome)},
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ) + "\n")
+    os.replace(staging, path)
+
+
+def _load_cached_samples(
+    path: Path,
+    provenance: DataProvenanceEvidence,
+    spec: ResearchBuildSpec,
+) -> tuple[tuple[TemporalSample, ...], tuple[ExecutableOutcome, ...]] | None:
+    """Rebuild sealed samples from the cache, re-verifying every commitment.
+
+    Every row passes back through the sealed constructors, so semantic and
+    content-hash validation runs exactly as in a fresh derivation; a stale
+    header (different raw data or build spec) just misses the cache, while a
+    corrupted row fails the build closed.
+    """
+
+    if path is None or not path.is_file():
+        return None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            header = json.loads(stream.readline())
+            if header != _cache_header(provenance, spec):
+                return None
+            formal_order = _feature_manifest_for(spec).formal_features
+            samples: list[TemporalSample] = []
+            outcomes: list[ExecutableOutcome] = []
+            for line in stream:
+                record = json.loads(line)
+                sample = _sample_from_payload(record["sample"], formal_order)
+                outcome = _outcome_from_payload(record["outcome"], sample.source)
+                samples.append(sample)
+                outcomes.append(outcome)
+    except (OSError, EOFError, KeyError, TypeError, ValueError) as error:
+        raise DatasetValidationError((f"SAMPLE_CACHE_INVALID:{type(error).__name__}",)) from error
+    return tuple(samples), tuple(outcomes)
+
+
+def _sample_from_payload(
+    payload: Mapping[str, object],
+    formal_order: tuple[str, ...],
+) -> TemporalSample:
+    source_payload = payload["source"]
+    if not isinstance(source_payload, Mapping):
+        raise ValueError("cached sample source must be an object")
+    features = source_payload["features"]
+    if not isinstance(features, Mapping):
+        raise ValueError("cached sample features must be an object")
+    if set(features) != set(formal_order):
+        raise ValueError("cached sample features do not match the build's formal feature set")
+    # payload()'s features are alphabetically sorted for canonical hashing; the
+    # sealed row must carry them in the manifest's declared formal order, since
+    # training checks tuple(row.features) against that exact order.
+    source = Phase4SourceRow(
+        str(source_payload["row_id"]),
+        datetime.fromisoformat(str(source_payload["available_at"])),
+        {name: features[name] for name in formal_order},
+        source_payload["label"],
+        float(source_payload["net_return"]),
+        bool(source_payload["is_complete"]),
+    )
+    if source.content_hash != source_payload.get("content_hash", source.content_hash):
+        raise ValueError("cached source row hash mismatch")
+    return TemporalSample(
+        source,
+        datetime.fromisoformat(str(payload["decision_time"])),
+        datetime.fromisoformat(str(payload["outcome_time"])),
+        str(payload["trading_date"]),
+    )
+
+
+def _outcome_from_payload(
+    payload: Mapping[str, object],
+    source: Phase4SourceRow,
+) -> ExecutableOutcome:
+    outcome = _issue_outcome(
+        source=source,
+        long_gross_points=float(payload["long_gross_points"]),
+        short_gross_points=float(payload["short_gross_points"]),
+        long_net_points=float(payload["long_net_points"]),
+        short_net_points=float(payload["short_net_points"]),
+        round_trip_cost_points=float(payload["round_trip_cost_points"]),
+        cost_components=tuple(
+            (str(name), None if value is None else float(value))
+            for name, value in payload["cost_components"]
+        ),
+        cost_complete=bool(payload["cost_complete"]),
+        decision_time=datetime.fromisoformat(str(payload["decision_time"])),
+        outcome_time=datetime.fromisoformat(str(payload["outcome_time"])),
+        event_id=str(payload["event_id"]),
+        regime_tags=tuple(str(tag) for tag in payload["regime_tags"]),
+        target_code=str(payload["target_code"]),
+        atr_sensitivity=tuple(
+            (float(multiplier), str(label), float(long_net), float(short_net))
+            for multiplier, label, long_net, short_net in payload["atr_sensitivity"]
+        ),
+    )
+    if outcome.content_hash != payload["content_hash"]:
+        raise ValueError("cached executable outcome hash mismatch")
+    return outcome
 
 
 def _sample_payload(value: TemporalSample) -> dict[str, object]:
@@ -882,6 +1161,7 @@ def _atr_sensitivity_outcomes(
     atr: float,
     parameters: LabelParameters,
     states: tuple[OneSecondState, ...],
+    state_seconds: Sequence[datetime],
     price_policy: ExecutablePricePolicy,
     total_cost_points: float,
 ) -> tuple[tuple[float, str, float, float], ...]:
@@ -899,10 +1179,7 @@ def _atr_sensitivity_outcomes(
                 stop_atr_multiplier=multiplier,
             ),
         )
-        outcome_state = max(
-            (state for state in states if state.second < label.outcome_time),
-            key=lambda state: state.second,
-        )
+        outcome_state = _last_state_before(states, state_seconds, label.outcome_time)
         exit_quote = price_policy.snapshot(outcome_state)
         values.append((
             multiplier,

@@ -160,13 +160,13 @@ class FeatureRow:
 
 
 _FEATURE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("price", ("return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars", "body_to_range_ratio", "upper_wick_ratio")),
+    ("price", ("return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars", "body_to_range_ratio")),
     ("vwap", ("session_vwap", "rolling_vwap_5m", "price_to_session_vwap_atr", "vwap_slope_5m")),
-    ("flow", ("aggressive_buy_volume_10s", "aggressive_sell_volume_10s", "trade_imbalance_10s", "unknown_trade_ratio", "large_trade_ratio")),
-    ("orderbook", ("spread_points", "midpoint", "microprice", "microprice_minus_midpoint", "level1_book_imbalance", "quote_update_rate")),
-    ("basis", ("basis_points", "basis_change_10s", "basis_change_1m")),
+    ("flow", ("aggressive_buy_volume_10s", "aggressive_sell_volume_10s", "trade_imbalance_10s", "large_trade_ratio")),
+    ("orderbook", ("spread_points", "midpoint", "microprice", "microprice_minus_midpoint", "level1_book_imbalance", "level3_book_imbalance", "level5_book_imbalance")),
+    ("basis", ("basis_points", "basis_change_10s", "basis_change_1m", "basis_pct", "basis_zscore_5m")),
     ("volatility", ("true_range_1m", "atr_5m", "realized_vol_5m", "range_expansion_ratio")),
-    ("structure", ("distance_previous_day_high_atr", "distance_previous_day_low_atr", "distance_previous_close_atr", "distance_night_high_atr", "break_previous_high", "false_breakout_high")),
+    ("structure", ("distance_previous_day_high_atr", "distance_previous_day_low_atr", "distance_previous_close_atr", "distance_night_high_atr", "break_previous_high")),
     ("time", ("session_day", "session_night", "minutes_from_session_open", "minutes_to_session_close", "days_to_expiry", "is_rollover_day")),
 )
 _MISSING_INDICATORS: tuple[MissingIndicatorDefinition, ...] = (
@@ -177,13 +177,14 @@ _MISSING_INDICATORS: tuple[MissingIndicatorDefinition, ...] = (
     MissingIndicatorDefinition("night_range_missing", "distance_night_high_atr"),
 )
 _FORMAL_FEATURES: tuple[str, ...] = (
-    "return_1m", "return_5m", "ema_distance_5", "consecutive_up_bars",
+    "return_1m", "return_5m", "ema_distance_5",
     "body_to_range_ratio", "session_vwap", "rolling_vwap_5m",
     "price_to_session_vwap_atr", "vwap_slope_5m",
     "aggressive_buy_volume_10s", "aggressive_sell_volume_10s",
     "trade_imbalance_10s", "large_trade_ratio", "spread_points",
     "midpoint", "microprice", "microprice_minus_midpoint",
     "basis_points", "basis_change_10s", "basis_change_1m",
+    "basis_pct",
     "true_range_1m", "atr_5m", "realized_vol_5m",
     "range_expansion_ratio", "distance_previous_day_high_atr",
     "distance_previous_day_low_atr", "session_day",
@@ -218,7 +219,7 @@ def _manifest_from(
 
 def default_feature_manifest() -> FeatureManifest:
     return _manifest_from(
-        "phase3-features-v1",
+        "phase3-features-v2",
         _FEATURE_GROUPS,
         _MISSING_INDICATORS,
         _FORMAL_FEATURES,
@@ -249,6 +250,43 @@ def historical_l1_feature_manifest() -> FeatureManifest:
     formal = tuple(name for name in _FORMAL_FEATURES if name not in basis_features)
     return _manifest_from(
         "phase3-features-hist-l1-v1", groups, missing, formal, _INTERACTIONS,
+    )
+
+
+def historical_l1_reduced_feature_manifest() -> FeatureManifest:
+    """Historical L1 manifest with real-data-observed missing indicators.
+
+    Real TMFR1 tick data (2024-07 to 2026-07) shows 12 formal features are
+    occasionally null at session-start candidates lacking enough prior
+    history, not just the two the base hist-l1 manifest anticipated
+    (spread/ATR, which turn out to never be null in practice here — so they
+    stay required, matching reality, freeing the manifest's 10-indicator
+    budget for the ten that really are). The training contract also caps
+    declared-optional features at 10, so the two highest null-rate features
+    (large_trade_ratio, trade_imbalance_10s, each ~7% null) are dropped from
+    the formal set entirely rather than declared optional; the other ten
+    (each under 1% null) keep their signal via a missing indicator instead.
+    """
+
+    base = historical_l1_feature_manifest()
+    dropped = frozenset({"large_trade_ratio", "trade_imbalance_10s"})
+    formal = tuple(name for name in base.formal_features if name not in dropped)
+    missing = (
+        MissingIndicatorDefinition("return_1m_missing", "return_1m"),
+        MissingIndicatorDefinition("return_5m_missing", "return_5m"),
+        MissingIndicatorDefinition("ema_distance_5_missing", "ema_distance_5"),
+        MissingIndicatorDefinition("body_to_range_ratio_missing", "body_to_range_ratio"),
+        MissingIndicatorDefinition("vwap_slope_5m_missing", "vwap_slope_5m"),
+        MissingIndicatorDefinition("price_to_session_vwap_atr_missing", "price_to_session_vwap_atr"),
+        MissingIndicatorDefinition("realized_vol_5m_missing", "realized_vol_5m"),
+        MissingIndicatorDefinition("range_expansion_ratio_missing", "range_expansion_ratio"),
+        MissingIndicatorDefinition("previous_day_high_missing", "distance_previous_day_high_atr"),
+        MissingIndicatorDefinition("previous_day_low_missing", "distance_previous_day_low_atr"),
+    )
+    return _manifest_from(
+        "phase3-features-hist-l1-v2",
+        tuple((group, names) for group, names in _FEATURE_GROUPS if group != "basis"),
+        missing, formal, _INTERACTIONS,
     )
 
 

@@ -75,8 +75,90 @@ class Phase5DatasetLineageTests(unittest.TestCase):
 
             self.assertEqual(main(argv, stdout=first), 0)
             self.assertEqual(main(argv, stdout=second), 0)
-            self.assertEqual(first.getvalue(), '{"status":"READY"}\n')
+
+        payload = json.loads(first.getvalue())
+        self.assertEqual(payload["status"], "READY")
+        self.assertEqual(payload["outer_folds"], 5)
+        self.assertEqual(second.getvalue(), first.getvalue())
+
+    def test_phase4_train_reports_per_fold_and_summary_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_calendar(calendar, days=55, minutes=25)
+            _raw_market(root / "raw", days=55, minutes=25)
+            stdout = StringIO()
+
+            self.assertEqual(main([
+                "phase4-train", "--raw-root", str(root / "raw"),
+                "--calendar", str(calendar),
+                "--witness-db", str(root / "witness" / "heads.sqlite3"),
+                "--sample-cache", str(root / "sample-cache"),
+                "--max-iterations", "2",
+            ], stdout=stdout), 0)
+
+            lines = stdout.getvalue().splitlines()
+            summary = json.loads(lines[-1])
+            self.assertEqual(summary["status"], "TRAINED")
+            self.assertGreaterEqual(summary["outer_folds"], 1)
+            self.assertEqual(
+                summary["outer_folds"] + len(summary["skipped_folds"]), 5,
+            )
+            self.assertEqual(
+                [
+                    json.loads(line)["fold"]
+                    for line in lines[:-1]
+                    if json.loads(line)["event"] == "fold"
+                ],
+                [row["fold"] for row in summary["folds"]],
+            )
+            for row in summary["folds"]:
+                for name in ("test_ev", "baseline_net_ev", "net_pnl", "test_brier"):
+                    self.assertIsInstance(row[name], float)
+
+    def test_sample_cache_round_trips_and_rejects_corruption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calendar = root / "calendar.json"
+            _write_calendar(calendar, days=55, minutes=25)
+            _raw_market(root / "raw", days=55, minutes=25)
+            argv = [
+                "phase5-status", "--raw-root", str(root / "raw"),
+                "--calendar", str(calendar),
+                "--witness-db", str(root / "witness" / "heads.sqlite3"),
+                "--sample-cache", str(root / "sample-cache"),
+            ]
+            first = StringIO()
+            second = StringIO()
+
+            self.assertEqual(main(argv, stdout=first), 0)
+            cache_files = sorted((root / "sample-cache").glob("samples-*.ndjson.gz"))
+            self.assertEqual(len(cache_files), 1)
+            self.assertEqual(main(argv, stdout=second), 0)
+
+            payload = json.loads(first.getvalue())
+            self.assertEqual(payload["status"], "READY")
             self.assertEqual(second.getvalue(), first.getvalue())
+
+            import gzip
+
+            lines = gzip.decompress(cache_files[0].read_bytes()).splitlines()
+            tampered = json.loads(lines[1])
+            tampered["outcome"]["long_gross_points"] += 1.0
+            lines[1] = json.dumps(
+                tampered, sort_keys=True, separators=(",", ":"),
+            ).encode()
+            cache_files[0].write_bytes(gzip.compress(b"\n".join(lines) + b"\n"))
+            corrupted = StringIO()
+
+            self.assertEqual(main(argv, stdout=corrupted), 0)
+
+            rejected = json.loads(corrupted.getvalue())
+            self.assertEqual(rejected["status"], "REJECTED_INSUFFICIENT_DATA")
+            self.assertTrue(
+                any("SAMPLE_CACHE_INVALID" in reason for reason in rejected["reasons"]),
+                rejected["reasons"],
+            )
 
     def test_existing_lineage_version_mismatch_fails_closed_without_overwrite(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec

@@ -25,10 +25,11 @@ class CliTests(unittest.TestCase):
             ], stdout=output)
 
         self.assertEqual(status, 0)
-        self.assertEqual(
-            output.getvalue(),
-            '{"status":"REJECTED_INSUFFICIENT_DATA"}\n',
-        )
+        import json as json_module
+
+        payload = json_module.loads(output.getvalue())
+        self.assertEqual(payload["status"], "REJECTED_INSUFFICIENT_DATA")
+        self.assertIsInstance(payload["reasons"], list)
 
     def test_verify_readonly_succeeds_for_the_sidecar(self) -> None:
         output = StringIO()
@@ -184,3 +185,15 @@ class BackfillCliTests(unittest.TestCase):
             self.assertTrue(segment.is_file())
         self.assertIn("2026-07-15 STORED records=1", output.getvalue())
         self.assertIn("BACKFILL COMPLETE", output.getvalue())
+
+
+class ManifestRangeFilterTests(unittest.TestCase):
+    def test_dated_segments_filter_by_range_and_others_pass(self) -> None:
+        from tmf_research.cli import _manifest_in_range
+
+        segment = "backfill-tick-TMFR1-2025-06-30"
+        self.assertTrue(_manifest_in_range(segment, "", ""))
+        self.assertTrue(_manifest_in_range(segment, "2024-07-29", "2025-06-30"))
+        self.assertFalse(_manifest_in_range(segment, "", "2025-06-29"))
+        self.assertFalse(_manifest_in_range(segment, "2025-07-01", ""))
+        self.assertTrue(_manifest_in_range("live-tick-0001", "2099-01-01", ""))

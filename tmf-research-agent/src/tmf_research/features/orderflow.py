@@ -15,7 +15,6 @@ def flow(states: tuple[OneSecondState, ...], threshold: int) -> dict[str, float 
         "aggressive_buy_volume_10s": float(buy),
         "aggressive_sell_volume_10s": float(sell),
         "trade_imbalance_10s": (buy - sell) / total if total > 0 else None,
-        "unknown_trade_ratio": unknown / all_volume if all_volume > 0 else None,
         "large_trade_ratio": large / all_volume if all_volume > 0 else None,
     }
 

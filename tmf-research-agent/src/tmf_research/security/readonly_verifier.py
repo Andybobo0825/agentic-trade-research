@@ -47,6 +47,7 @@ _ALLOWED_RAW_API_CAPABILITIES = frozenset(
         "kbars",
         "login",
         "quote",
+        "set_on_quote_fop_v1_callback",
         "subscribe",
         "ticks",
         "unsubscribe",

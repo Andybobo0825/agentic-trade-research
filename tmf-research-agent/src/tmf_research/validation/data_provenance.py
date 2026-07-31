@@ -82,7 +82,7 @@ def _issue_real_data_provenance(
     manifest_hashes = tuple(_hash(dict(value)) for value in frozen)
     source_contract = {
         "boundary": "MarketDataGateway",
-        "capabilities": ["resolve_near_contract", "register_tick_callback", "register_bidask_callback", "subscribe_tick", "subscribe_bidask", "unsubscribe_tick", "unsubscribe_bidask", "fetch_ticks", "fetch_kbars"],
+        "capabilities": ["resolve_near_contract", "register_quote_callback", "subscribe_quote", "unsubscribe_quote", "fetch_ticks", "fetch_kbars"],
         "writers": sorted({str(value["writer_version"]) for value in frozen}),
         "event_types": sorted({str(value["event_type"]) for value in frozen}),
         "schema_versions": sorted({str(value["schema_version"]) for value in frozen}),

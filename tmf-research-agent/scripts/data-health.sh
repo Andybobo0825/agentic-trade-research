@@ -108,6 +108,33 @@ if covered:
 if absent:
     problems.append(f"  {len(absent)} 筆目錄項目找不到對應檔案（同步未完成,重跑一次即可）")
 
+# The Phase 5 build needs a trading date in the calendar before it will accept
+# that day's live data, and the calendar is derived from the weekly historical
+# backfill — so it lags live collection and silently drops the newest days.
+calendar_path = next(
+    (p for p in (root / "calendar-v2.json", root / "calendar.json") if p.is_file()),
+    None,
+)
+if calendar_path is not None and covered:
+    calendar = json.loads(calendar_path.read_text(encoding="utf-8"))
+    entries = calendar.get("days", calendar) if isinstance(calendar, dict) else calendar
+    calendar_days = {
+        entry["trading_date"] if isinstance(entry, dict) else entry for entry in entries
+    }
+    uncovered = sorted(
+        day for day in covered
+        if day >= AUDIT_FROM and day <= today.isoformat() and day not in calendar_days
+    )
+    if uncovered:
+        problems.append(
+            f"  行事曆未涵蓋 {len(uncovered)} 個已收集交易日 "
+            f"({uncovered[0]}..{uncovered[-1]})，Phase 5 會靜默拒絕這些天"
+        )
+        problems.append(
+            "    修法: 在收集機執行 backfill 後重建行事曆 "
+            "(tmf build-calendar --data-root data --out data/calendar-v2.json)"
+        )
+
 if problems:
     print("\n⚠️  需要注意:")
     for line in problems:

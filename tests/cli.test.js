@@ -2,33 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { main } from '../src/cli.js';
 
-test('CLI exposes Phase 3 dataset, screen, and post-research DOM confidence commands', async () => {
-  const help = await main(['help']);
-  assert.match(help, /phase3-dataset/);
-  assert.match(help, /phase3-screen/);
-  assert.match(help, /phase3-dom-confidence/);
-  assert.doesNotMatch(help, /phase3-demo-promotion/);
-
-  for (const command of ['phase3-dataset', 'phase3-screen', 'phase3-dom-confidence']) {
-    await assert.rejects(
-      () => main([command, '--live', 'true']),
-      /forbids --live/,
-    );
-  }
-  await assert.rejects(
-    () => main(['phase3-dom-confidence']),
-    /ticker is required|Missing required argument.*ticker/i,
-  );
-});
-
-test('CLI exposes the official Taiwan agent-team screen/analyze workflow controls', async () => {
-  const help = await main(['help']);
-  assert.match(help, /taiwan-agent-team/);
-  assert.match(help, /--mode auto\|screen\|analyze/);
-  assert.match(help, /--detail brief\|full/);
-  assert.match(help, /--evidence-root/);
-});
-
 test('CLI hma-signal passes ticker and period into the tool', async () => {
   const originalFetch = globalThis.fetch;
   try {

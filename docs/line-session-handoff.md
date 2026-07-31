@@ -13,11 +13,10 @@ Purpose: every new LINE/trad Codex session must inherit this operating flow befo
 
 ## Source priority
 
-1. Primary Taiwan price/volume/replay data: Shioaji local server / repo Shioaji commands.
-2. Realtime / intraday fallback quote: Fugle commands when Shioaji does not provide the needed dataset or is externally unavailable after repair attempt.
-3. Official Taiwan market snapshots: TWSE / TPEx commands.
-4. Historical Taiwan data and studies: FinMind / `tw-price` based tools when Shioaji lacks coverage.
-5. Web search: only for missing context, source discovery, product facts, news, or official announcements not already covered by repo tools.
+1. Realtime / intraday Taiwan quote: Fugle commands.
+2. Official Taiwan market snapshots: TWSE / TPEx commands.
+3. Historical Taiwan data and studies: FinMind / `tw-price` based tools.
+4. Web search: only for missing context, source discovery, product facts, news, or official announcements not already covered by repo tools.
 
 Useful commands:
 
@@ -29,41 +28,20 @@ node src/cli.js tw-price --ticker <TICKER> --provider auto --format markdown
 
 Notes:
 
-- Use Shioaji first for price/volume/replay evidence; use `fugle-quote` as realtime fallback or supplementary same-day evidence.
+- Use `fugle-quote` for same-day / intraday evidence.
 - `tw-price --provider twse` may lag to the latest official snapshot and is not the primary realtime source.
 - If a ticker is typed without a suffix but the Taiwan listing uses a suffix, normalize only when evidence supports it. Example: `00981` is usually the user's shorthand for `00981A`; state the normalization clearly.
 
 ## Required stock / ETF analysis flow
 
-Standard Workflow 1.4 的正式入口是 `taiwan-agent-team`，由七個 logical agent lane 調用 repo CLI/MCP tools。`phase3_stability` 是唯一主策略，`phase3-screen` 是唯一技術篩選入口。
-
-- 使用者要求選股、篩選股票或候選名單：使用 `screen`；先更新 point-in-time evidence，再執行 Phase 3，只有 eligible 技術候選才查新聞、法說、財報、股癌、ETF 籌碼與 DOM。零 eligible 候選時停止外部研究與 DOM。
-- 使用者指定 ticker 要求分析：使用 `analyze`，不執行 Phase 3，標示 `phase3Eligibility: not_evaluated`，直接完成市場 context、外部信心、DOM 與四個價格。
-
-外部資訊只作信心加權，不得把不合格技術訊號硬推成買進。
-
-固定完整順序：
-
-```text
-phase3-dataset → phase3-screen → news/earnings/financial confidence → phase3-dom-confidence → manual decision
-```
-
-DOM 是外部研究之後的獨立信心層，不進入 Phase 3 資料、soft score 或候選資格，也不得覆蓋 `phase3-screen`。只要三次取樣中至少一筆有效，回覆必須包含 `activeEntryLimit`、`patientEntryPrice`、`takeProfitPrice`、`stopLossPrice`；即使判斷為等待或不追價，仍需交付全部四個價格。全部取樣失敗時才回傳 `null` 並說明資料錯誤，禁止自行估價。
+For every Taiwan ticker or ETF the user asks about, run both studies before giving entry advice:
 
 ```sh
-node src/cli.js taiwan-agent-team --query "篩選股票" --mode screen --format markdown
-node src/cli.js taiwan-agent-team --query "分析 2330" --mode analyze --tickers 2330 --format markdown
-node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
-node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
-node src/cli.js phase3-dom-confidence --ticker <TICKER> --format markdown
-node src/cli.js fugle-quote --ticker <TICKER> --format markdown
+node src/cli.js daily-decision-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
+node src/cli.js signal-study --ticker <TICKER> --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
 ```
 
-`phase3-screen` 是 read-only deterministic technical filter，不訓練模型、不使用未來 outcome，也不得觸發真實下單 API。若 evidence 不存在或沒有候選 artifact，先修復 `phase3-dataset`；不得把空結果解讀為市場沒有標的。
-
-`daily-decision-study`、`signal-study`、`chip-study` 只屬歷史診斷 / 回測工具，可用來研究失敗案例，但不得成為當下 Phase 3 合格條件、覆蓋篩選結果或產生第二套交易策略。
-
-ETF / 籌碼輔助只在 screen 模式的 Phase 3 候選成立後，或 analyze 模式已由使用者指定 ticker 時使用：
+Add the ETF holding lens when the question involves ETF, 投信/主動式 ETF, or whether institutions/ETFs are adding a stock:
 
 ```sh
 node src/cli.js xiaoyu-etf --mode stock --ticker <TICKER> --format markdown
@@ -72,19 +50,30 @@ node src/cli.js xiaoyu-etf --mode etf --etf <ETF_CODE> --format markdown
 
 Treat `xiaoyu-etf` as auxiliary ETF-holding / inferred ETF-flow evidence only. It does not replace Shioaji price/volume and is not official 投信買賣超.
 
-若使用者要求從多檔中篩選，只需對相同 evidence 執行一次 `phase3-screen`，再逐檔查 eligible candidates 的即時 quote 與外部信心因子。若 Phase 3 資料不足，必須明示缺口並停止 screen 流程，不能改用歷史 study 代替主策略。
+Also fetch the latest quote when today's price/action matters:
+
+```sh
+node src/cli.js fugle-quote --ticker <TICKER> --format markdown
+```
+
+If multiple tickers are mentioned, repeat the quote and both studies for each ticker unless the question is only a broad market question.
+
+If a study cannot run because the product is too new, data rows are insufficient, the market is closed, or the provider lacks that symbol:
+
+1. Say exactly which command/data source failed or was insufficient.
+2. Still use whatever quote / official snapshot / available history is available.
+3. Lower confidence and avoid heavy-position recommendations.
 
 ## Synthesis template
 
 Use this answer structure for LINE:
 
 1. **今日資料摘要** — latest quote/date, change %, intraday high/low when available.
-2. **Phase 3 技術結論** — screen 模式只引用 `phase3-screen` 的 eligible / rejection reasons 與 decision date；analyze 模式寫 `not_evaluated`，不得暗示通過篩選。
-3. **外部信心加權 / ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
-4. **DOM 獨立信心與價格** — 列出信心分數、可靠度、買賣壓力與四個必交價格。
-5. **進場判斷** — can enter / wait / avoid chasing; include conditions，但不得因判斷等待而隱藏價格。
-6. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
-7. **限制** — market-data timing, insufficient rows, ETF-newness caveats, or auxiliary-source caveats.
+2. **兩個 study 結論** — `daily-decision-study` and `signal-study`; separate direct tool output from inference.
+3. **ETF / 籌碼輔助** — Xiaoyu ETF holder / active ETF flow lens when relevant; label as inferred auxiliary data.
+4. **進場判斷** — can enter / wait / avoid chasing; include conditions.
+5. **部位與風控** — suggest staged sizing, stop or invalidation condition, and what would change the view.
+6. **限制** — market-data timing, insufficient rows, ETF-newness caveats, or auxiliary-source caveats.
 
 Preferred wording:
 
@@ -94,17 +83,22 @@ Preferred wording:
 
 ## Quick examples
 
-先更新資料並執行唯一篩選：
-
-```sh
-node src/cli.js phase3-dataset --evidence-root .omx/evidence/phase3 --format markdown
-node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format markdown
-```
-
-再對合格候選逐檔補即時價與外部信心資料：
+Single ticker:
 
 ```sh
 node src/cli.js fugle-quote --ticker 2330 --format markdown
-node src/cli.js xiaoyu-etf --mode stock --ticker 2330 --format markdown
-node src/cli.js phase3-dom-confidence --ticker 2330 --format markdown
+node src/cli.js daily-decision-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
+node src/cli.js signal-study --ticker 2330 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
+```
+
+ETF pair such as 0050 and 00981A:
+
+```sh
+node src/cli.js fugle-quote --ticker 0050 --format markdown
+node src/cli.js daily-decision-study --ticker 0050 --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
+node src/cli.js signal-study --ticker 0050 --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
+
+node src/cli.js fugle-quote --ticker 00981A --format markdown
+node src/cli.js daily-decision-study --ticker 00981A --market tw --period 20 --start-date 2026-01-01 --decision-days 20 --lookback-bars 60 --format markdown
+node src/cli.js signal-study --ticker 00981A --market tw --period 20 --start-date 2026-01-01 --volume-window 20 --institutional-days 5 --forward-days 3,5,10 --format markdown
 ```

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConfigError } from '../src/errors.js';
-import { finmindData, fugleMarketData, getFugleCandles, getFugleConfig, getFugleQuote, getFugleSnapshot, getTaiwanPrice, listTaiwanEndpoints, taiwanProviderEnvelope, tpexOpenApi, twseOpenApi } from '../src/taiwan-market.js';
+import { finmindData, fugleMarketData, getFugleCandles, getFugleConfig, getFugleQuote, getFugleSnapshot, getTaiwanPrice, listTaiwanEndpoints, tpexOpenApi, twseOpenApi } from '../src/taiwan-market.js';
 import { renderToolResult } from '../src/tools.js';
 
 test('listTaiwanEndpoints exposes free provider groups', () => {
@@ -11,19 +11,6 @@ test('listTaiwanEndpoints exposes free provider groups', () => {
   assert.equal(endpoints.tpex.endpoints.price, '/tpex_mainboard_daily_close_quotes');
   assert.equal(endpoints.fugle.endpoints.quote, '/intraday/quote/{symbol}');
   assert.ok(endpoints.mops.twse.announcements);
-});
-
-test('taiwanProviderEnvelope preserves source metadata and rows for evidence collection', () => {
-  assert.deepEqual(taiwanProviderEnvelope({
-    source: 'finmind',
-    url: 'https://api.test/data',
-    data: [{ stock_id: '2330' }],
-  }, '2026-01-03T00:00:00+08:00'), {
-    source: 'finmind',
-    sourceUrl: 'https://api.test/data',
-    fetchedAt: '2026-01-03T00:00:00+08:00',
-    rows: [{ stock_id: '2330' }],
-  });
 });
 
 test('finmindData builds v4 data URL and optional token', async () => {

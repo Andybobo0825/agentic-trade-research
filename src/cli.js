@@ -5,9 +5,6 @@ import { parseArgs, requireArg, optionalInt } from './args.js';
 import { ConfigError, UsageError } from './errors.js';
 import { renderToolResult, runTool, tools } from './tools.js';
 import { parseTaiwanAgentTeamCliArgs } from './taiwan-agent-team.js';
-import { assertPhase3DatasetArgs } from './phase3-dataset.js';
-import { assertPhase3ScreenArgs } from './phase3-screen.js';
-import { assertPhase3DomArgs } from './phase3-dom-confidence.js';
 
 const HELP = `trade-finance: Codex-friendly finance data CLI
 
@@ -28,11 +25,8 @@ US / global commands:
   signal-study  --ticker 2330 [--market tw] [--period 20] [--volume-window 20] [--institutional-days 5] [--forward-days 3,5,10] [--format markdown]
   daily-decision-study --ticker 2330 [--market tw] [--period 20] [--decision-days 20] [--lookback-bars 60] [--min-average-turnover 20000000] [--format markdown]
   chip-study    --ticker 2330 [--market tw] [--foreign-days 3] [--holder-weeks 3] [--min-holder-lots 1000] [--format markdown]
-  phase3-dataset [--universe-file .omx/evidence/phase3/universe.json] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--format markdown]
-  phase3-screen [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--top 20] [--include-rejected] [--format markdown]
-  phase3-dom-confidence --ticker 2330 [--exchange TSE|OTC] [--samples 3] [--interval-ms 5000] [--timeout-ms 3000] [--format markdown]
   xiaoyu-etf    [--mode stock|etf|rank|overview] [--ticker 2330] [--etf 00981A] [--scope active|market] [--window d1|d5|d10|d20|d60] [--direction buy|sell] [--limit 10] [--format markdown]
-  taiwan-agent-team [--query "選股或分析指定股票"] [--mode auto|screen|analyze] [--detail brief|full] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--evidence-root .omx/evidence/phase3] [--capital 500000] [--offline] [--format markdown]
+  taiwan-agent-team [--query "盤前+回測+推測"] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--capital 500000] [--offline] [--format markdown]
   memory-sync   [--memory-dir .omx/memory] [--entry-file entries.json] [--entry "text" --date YYYY-MM-DD --category decision|verified-fix|failure-case|milestone] [--now YYYY-MM-DD] [--format markdown]
 
 Taiwan free-data commands:
@@ -241,69 +235,6 @@ export async function main(argv = process.argv.slice(2)) {
       maxPositionPctOfAvgVolume: args['max-position-pct-of-avg-volume'] ? Number(args['max-position-pct-of-avg-volume']) : undefined,
       forwardDays: args['forward-days'] ? String(args['forward-days']) : undefined,
     };
-  } else if (command === 'phase3-dataset') {
-    const rawKeys = Object.keys(args).filter((key) => !['_', 'format'].includes(key));
-    const keyMap = {
-      'universe-file': 'universeFile',
-      'start-date': 'startDate',
-      'end-date': 'endDate',
-      'evidence-root': 'evidenceRoot',
-      'report-json': 'reportJson',
-      'report-markdown': 'reportMarkdown',
-      'refresh-universe': 'refreshUniverse',
-    };
-    for (const key of rawKeys) {
-      if (!keyMap[key]) throw new UsageError(`phase3-dataset forbids --${key}`);
-    }
-    toolArgs = assertPhase3DatasetArgs(Object.fromEntries(rawKeys.map((key) => [
-      keyMap[key],
-      key === 'refresh-universe'
-        ? args[key] === true || args[key] === 'true'
-        : String(args[key]),
-    ])));
-  } else if (command === 'phase3-screen') {
-    const rawKeys = Object.keys(args).filter((key) => !['_', 'format'].includes(key));
-    const keyMap = {
-      'start-date': 'startDate',
-      'end-date': 'endDate',
-      'evidence-root': 'evidenceRoot',
-      'candidate-artifact': 'candidateArtifact',
-      top: 'top',
-      'include-rejected': 'includeRejected',
-      rebuild: 'rebuild',
-      'report-json': 'reportJson',
-      'report-markdown': 'reportMarkdown',
-    };
-    for (const key of rawKeys) {
-      if (!keyMap[key]) throw new UsageError(`phase3-screen forbids --${key}`);
-    }
-    toolArgs = assertPhase3ScreenArgs(Object.fromEntries(rawKeys.map((key) => {
-      if (key === 'top') return [keyMap[key], optionalInt(args, key, 20)];
-      if (['include-rejected', 'rebuild'].includes(key)) {
-        return [keyMap[key], args[key] === true || args[key] === 'true'];
-      }
-      return [keyMap[key], String(args[key])];
-    })));
-  } else if (command === 'phase3-dom-confidence') {
-    const rawKeys = Object.keys(args).filter((key) => !['_', 'format'].includes(key));
-    const keyMap = {
-      ticker: 'ticker',
-      exchange: 'exchange',
-      samples: 'samples',
-      'interval-ms': 'intervalMs',
-      'timeout-ms': 'timeoutMs',
-      'report-json': 'reportJson',
-      'report-markdown': 'reportMarkdown',
-    };
-    for (const key of rawKeys) {
-      if (!keyMap[key]) throw new UsageError(`phase3-dom-confidence forbids --${key}`);
-    }
-    toolArgs = assertPhase3DomArgs(Object.fromEntries(rawKeys.map((key) => {
-      if (['samples', 'interval-ms', 'timeout-ms'].includes(key)) {
-        return [keyMap[key], optionalInt(args, key, undefined)];
-      }
-      return [keyMap[key], String(args[key])];
-    })));
   } else if (command === 'chip-study') {
     toolArgs = {
       ticker: requireArg(args, 'ticker').toUpperCase(),

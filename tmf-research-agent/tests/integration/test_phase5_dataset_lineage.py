@@ -7,7 +7,7 @@ import math
 import tempfile
 import unittest
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 
@@ -31,6 +31,51 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             required.issubset(ProductionEvaluation.__annotations__),
             required - set(ProductionEvaluation.__annotations__),
         )
+
+    def test_live_collected_segments_reach_the_pipeline_with_their_underlying(self) -> None:
+        """`tmf collect` writes live-tick/live-bidask, not the tick/bidask of backfill.
+
+        Decoding only the unprefixed names silently dropped every live segment,
+        so the basis group — the whole reason live collection exists, since
+        historical ticks carry no spot index — was null on every derived row.
+        """
+
+        from tmf_research.collection.live_calendar import synthetic_near_term_calendar
+        from tmf_research.processing.session_resolver import SessionResolver
+        from tmf_research.validation.dataset_lineage import _live_batches
+
+        # The synthetic calendar runs on Taipei wall-clock, so a UTC 09:00 here
+        # would resolve to the night session and be rejected as a mismatch.
+        when = datetime(2026, 1, 1, 9, 0, tzinfo=timezone(timedelta(hours=8)))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = AppendOnlyRawStore(root / "raw", writer_version="collect-v1")
+            tick = store.append_segment("live-tick", (TickEvent(
+                event_id="live-tick-1", received_at=when, exchange_datetime=when,
+                alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+                code="TMF202607", close=23_000.0, volume=3, simtrade=False,
+                trading_date="2026-01-01", session="DAY", raw_payload={},
+                tick_type=1, underlying_price=22_950.0,
+            ),), segment_id="live-tick-TMFR1-2026-01-01-DAY-000000", created_at=when)
+            quote = store.append_segment("live-bidask", (BidAskEvent(
+                event_id="live-quote-1", received_at=when, exchange_datetime=when,
+                alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
+                code="TMF202607", bid_prices=(22_999.0,), bid_volumes=(4,),
+                ask_prices=(23_001.0,), ask_volumes=(4,), simtrade=False,
+                trading_date="2026-01-01", session="DAY", raw_payload={},
+                underlying_price=22_950.0,
+            ),), segment_id="live-bidask-TMFR1-2026-01-01-DAY-000000", created_at=when)
+
+            calendar = synthetic_near_term_calendar(when.date())
+            batches = _live_batches(
+                store, (tick, quote), SessionResolver(calendar), set(),
+            )
+
+        self.assertEqual(len(batches), 1, "live segments produced no session batch")
+        batch = batches[0]
+        self.assertEqual(len(batch.ticks), 1)
+        self.assertEqual(len(batch.quotes), 1)
+        self.assertEqual(batch.ticks[0].underlying_price, 22_950.0)
 
     def test_quote_only_verified_input_fails_closed_without_indexing_ticks(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec

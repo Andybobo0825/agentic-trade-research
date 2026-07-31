@@ -29,9 +29,6 @@ import { buildPreopenBrief, renderPreopenBriefMarkdown } from './preopen-brief.j
 import { loadMemoryEntryFile, renderMemorySyncMarkdown, syncDynamicMemory } from './dynamic-memory.js';
 import { buildXiaoyuEtfLens, renderXiaoyuEtfMarkdown } from './xiaoyu-etf.js';
 import { buildTaiwanAgentTeam, renderTaiwanAgentTeamMarkdown } from './taiwan-agent-team.js';
-import { renderPhase3DatasetMarkdown, runPhase3Dataset } from './phase3-dataset.js';
-import { renderPhase3ScreenMarkdown, runPhase3Screen } from './phase3-screen.js';
-import { renderPhase3DomConfidenceMarkdown, runPhase3DomConfidence } from './phase3-dom-confidence.js';
 import { compactJson, compactNumber, shapeForTokenBudget, toMarkdownTable } from './format.js';
 import { detectHmaSignals, evaluateHmaTrendSignal, normalizeCandleRows } from './indicators.js';
 
@@ -568,33 +565,6 @@ export const tools = {
       return renderChipStudyMarkdown(result);
     },
   },
-  'phase3-dataset': {
-    description: 'Build and audit immutable Phase 3 point-in-time market and institutional evidence. Read-only; no order mode.',
-    async run(args) {
-      return runPhase3Dataset(args || {});
-    },
-    toMarkdown(result) {
-      return renderPhase3DatasetMarkdown(result);
-    },
-  },
-  'phase3-screen': {
-    description: 'Run the deterministic Phase 3 technical screen over read-only point-in-time evidence; this tool has no live order mode.',
-    async run(args) {
-      return runPhase3Screen(args || {});
-    },
-    toMarkdown(result) {
-      return renderPhase3ScreenMarkdown(result);
-    },
-  },
-  'phase3-dom-confidence': {
-    description: 'Read-only post-research Shioaji DOM confidence overlay with mandatory visible-book entry, take-profit, and stop-loss references.',
-    async run(args) {
-      return runPhase3DomConfidence(args || {});
-    },
-    toMarkdown(result) {
-      return renderPhase3DomConfidenceMarkdown(result);
-    },
-  },
   'research-pack': {
     description: 'Fetch a complete investment-research bundle in one call while preserving source coverage; use format=markdown or compact-json to minimize Codex tokens.',
     async run(args) {
@@ -614,7 +584,7 @@ export const tools = {
     },
   },
   'taiwan-agent-team': {
-    description: 'Run the official Standard Workflow 1.4 Taiwan agent team: conditional Phase 3 screening, external confidence research, read-only DOM, four reference prices, and verification across seven auditable lanes.',
+    description: 'Run a Dexter-inspired Taiwan investment research agent team: planner, data integration, scratchpad audit, backtest evidence, Shioaji/ETF/sector tools, scenario synthesis, and verification. Adds a harness without replacing existing Taiwan workflows.',
     async run(args) {
       return buildTaiwanAgentTeam(args || {}, { runTool });
     },

@@ -507,9 +507,13 @@ def _live_batches(
     quotes: list[BidAskEvent] = []
     for manifest in manifests:
         records = raw_store.read_verified(manifest)
-        if manifest.event_type == "tick":
+        # `tmf collect` names its segments live-tick/live-bidask; the older
+        # unprefixed names stay accepted so stores written before that keep
+        # decoding. Anything unrecognized is left to fail the emptiness check
+        # downstream rather than being dropped without a trace.
+        if manifest.event_type in ("tick", "live-tick"):
             ticks.extend(decode_tick(record) for record in records)
-        elif manifest.event_type == "bidask":
+        elif manifest.event_type in ("bidask", "live-bidask"):
             quotes.extend(decode_bidask(record) for record in records)
     buckets: dict[tuple[str, str], _Bucket] = {}
     _ingest_events(ticks, quotes, resolver, reasons, buckets)

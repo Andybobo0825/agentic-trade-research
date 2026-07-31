@@ -141,6 +141,71 @@ class Phase5DatasetLineageTests(unittest.TestCase):
             [quote.event_id for quote in batches[0].quotes], ["real-quote"],
         )
 
+    def test_a_session_collected_live_is_not_also_taken_from_the_backfill(self) -> None:
+        """The weekly backfill always overlaps the days live collection covers.
+
+        Both streams then yield a batch for the same session, so every
+        candidate is derived twice — once from live evidence carrying the spot
+        index, once from historical evidence that structurally cannot. Live is
+        the copy worth keeping: basis exists only there.
+        """
+
+        from tmf_research.collection.backfill import HistoricalTickRecord
+        from tmf_research.collection.live_calendar import synthetic_near_term_calendar
+        from tmf_research.processing.session_resolver import SessionResolver
+        from tmf_research.validation.dataset_lineage import _session_batches
+
+        taipei = timezone(timedelta(hours=8))
+        when = datetime(2026, 1, 1, 9, 0, tzinfo=taipei)
+        day = when.date().isoformat()
+        with tempfile.TemporaryDirectory() as directory:
+            store = AppendOnlyRawStore(Path(directory) / "raw", writer_version="mixed-v1")
+            common = {
+                "received_at": when, "exchange_datetime": when, "alias_code": "TMFR1",
+                "target_code": "TMF202607", "delivery_month": "202607",
+                "code": "TMF202607", "simtrade": False, "raw_payload": {},
+                "trading_date": day, "session": "DAY",
+            }
+            live_tick = store.append_segment("live-tick", (TickEvent(
+                event_id="live-tick-1", close=23_000.0, volume=3, tick_type=1,
+                underlying_price=22_950.0, **common,
+            ),), segment_id=f"live-tick-TMFR1-{day}-DAY-000000", created_at=when)
+            live_quote = store.append_segment("live-bidask", (BidAskEvent(
+                event_id="live-quote-1",
+                bid_prices=(22_999.0,), bid_volumes=(4,),
+                ask_prices=(23_001.0,), ask_volumes=(4,),
+                underlying_price=22_950.0, **common,
+            ),), segment_id=f"live-bidask-TMFR1-{day}-DAY-000000", created_at=when)
+            backfill = store.append_segment("historical-tick", (HistoricalTickRecord(
+                schema_version="1.1.0",
+                event_id=f"hist-tick-TMFR1-{day}-000000",
+                exchange_datetime=when,
+                received_at=when,
+                source="SHIOAJI_HISTORICAL_TICKS_CONTINUOUS_NEAR",
+                alias_code="TMFR1",
+                derived_target_code="TMF202607",
+                derived_delivery_date="2026-01-21",
+                target_derivation="taifex-third-wednesday-v1",
+                fields={
+                    "close": 23_000.0, "volume": 3, "bid_price": 22_999.0,
+                    "bid_volume": 4, "ask_price": 23_001.0, "ask_volume": 4,
+                    "tick_type": 1,
+                },
+            ),), segment_id=f"backfill-tick-TMFR1-{day}", created_at=when)
+
+            calendar = synthetic_near_term_calendar(when.date())
+            batches = list(_session_batches(
+                store, (live_tick, live_quote, backfill),
+                calendar, SessionResolver(calendar), set(),
+            ))
+
+        sessions = [(batch.trading_date, batch.session) for batch in batches]
+        self.assertEqual(
+            sessions, sorted(set(sessions)), f"session derived twice: {sessions}",
+        )
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0].ticks[0].underlying_price, 22_950.0)
+
     def test_quote_only_verified_input_fails_closed_without_indexing_ticks(self) -> None:
         from tmf_research.features.context_builder import ResearchBuildSpec
         from tmf_research.validation.dataset_lineage import Phase5DatasetIssuer

@@ -559,10 +559,23 @@ def _session_batches(
         manifest for manifest in manifests
         if manifest.event_type == "historical-tick"
     )
+    # The weekly backfill harvests a window that always overlaps live
+    # collection, so both streams describe the same sessions. Keeping both
+    # would derive every candidate of those sessions twice, and the historical
+    # copy cannot carry basis: Shioaji serves no historical spot index. Live
+    # evidence wins wherever it exists; backfill still supplies the days
+    # collection did not cover.
+    live_batches = _live_batches(raw_store, live, resolver, reasons)
+    collected = {(batch.trading_date, batch.session) for batch in live_batches}
+    backfilled = (
+        batch
+        for batch in _historical_batches(
+            raw_store, historical, calendar, resolver, reasons,
+        )
+        if (batch.trading_date, batch.session) not in collected
+    )
     yield from heapq.merge(
-        _live_batches(raw_store, live, resolver, reasons),
-        _historical_batches(raw_store, historical, calendar, resolver, reasons),
-        key=lambda batch: batch.order_key,
+        live_batches, backfilled, key=lambda batch: batch.order_key,
     )
 
 

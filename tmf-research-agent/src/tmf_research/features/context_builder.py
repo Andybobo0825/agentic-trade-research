@@ -27,6 +27,11 @@ class ResearchBuildSpec:
     exit_fee_points: float | None = None
     tax_points: float | None = None
     requested_outer_folds: int = 5
+    # Both triple barriers sit this many 5-minute ATRs from the entry quote.
+    # A two-year sweep put the 1.0 default at 1% untouched and a long/short
+    # split within 2% every quarter, so it is a coin flip; widening asks a
+    # different question and therefore has to change the spec hash.
+    barrier_atr_multiplier: float = 1.0
 
     def __post_init__(self) -> None:
         calendar = self.calendar.resolve()
@@ -47,6 +52,13 @@ class ResearchBuildSpec:
             raise ValueError("cost components must be finite and non-negative")
         if isinstance(self.requested_outer_folds, bool) or self.requested_outer_folds < 5:
             raise ValueError("at least five outer folds are required")
+        if (
+            isinstance(self.barrier_atr_multiplier, bool)
+            or not isinstance(self.barrier_atr_multiplier, (int, float))
+            or not math.isfinite(self.barrier_atr_multiplier)
+            or self.barrier_atr_multiplier <= 0.0
+        ):
+            raise ValueError("barrier width must be a positive finite multiple of ATR")
         object.__setattr__(self, "calendar", calendar)
 
     @property
@@ -65,6 +77,7 @@ class ResearchBuildSpec:
             "exit_fee_points": self.exit_fee_points,
             "tax_points": self.tax_points,
             "requested_outer_folds": self.requested_outer_folds,
+            "barrier_atr_multiplier": self.barrier_atr_multiplier,
         }
         return hashlib.sha256(json.dumps(
             payload, sort_keys=True, separators=(",", ":"), allow_nan=False,

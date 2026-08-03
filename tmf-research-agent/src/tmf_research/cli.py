@@ -50,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     phase5.add_argument("--calendar", type=Path, required=True)
     phase5.add_argument("--witness-db", type=Path, required=True)
     phase5.add_argument("--feature-version", default="features-v1")
+    phase5.add_argument("--barrier-atr-multiplier", type=float, default=1.0)
     phase5.add_argument("--start-date", default="")
     phase5.add_argument("--end-date", default="")
     phase5.add_argument(
@@ -72,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     phase4.add_argument("--calendar", type=Path, required=True)
     phase4.add_argument("--witness-db", type=Path, required=True)
     phase4.add_argument("--feature-version", default="features-v1")
+    phase4.add_argument("--barrier-atr-multiplier", type=float, default=1.0)
     phase4.add_argument("--start-date", default="")
     phase4.add_argument("--end-date", default="")
     phase4.add_argument(
@@ -144,6 +146,7 @@ def main(
         return _phase5_status(
             args.raw_root, args.calendar, args.witness_db, output,
             feature_version=str(args.feature_version),
+            barrier_atr_multiplier=float(args.barrier_atr_multiplier),
             start_date=str(args.start_date),
             end_date=str(args.end_date),
             sample_cache=args.sample_cache,
@@ -153,6 +156,7 @@ def main(
         return _phase4_train(
             args.raw_root, args.calendar, args.witness_db, output,
             feature_version=str(args.feature_version),
+            barrier_atr_multiplier=float(args.barrier_atr_multiplier),
             start_date=str(args.start_date),
             end_date=str(args.end_date),
             sample_cache=args.sample_cache,
@@ -388,6 +392,7 @@ def _phase5_status(
     output: TextIO,
     *,
     feature_version: str = "features-v1",
+    barrier_atr_multiplier: float = 1.0,
     start_date: str = "",
     end_date: str = "",
     sample_cache: Path | None = None,
@@ -400,6 +405,7 @@ def _phase5_status(
         evidence = _issue_dataset(
             raw_root, calendar, witness_db,
             feature_version=feature_version,
+            barrier_atr_multiplier=barrier_atr_multiplier,
             start_date=start_date,
             end_date=end_date,
             sample_cache=sample_cache,
@@ -432,6 +438,7 @@ def _issue_dataset(
     witness_db: Path,
     *,
     feature_version: str,
+    barrier_atr_multiplier: float = 1.0,
     start_date: str,
     end_date: str,
     sample_cache: Path | None,
@@ -463,6 +470,7 @@ def _issue_dataset(
         manifests=manifests,
         spec=ResearchBuildSpec(
             calendar=calendar, feature_version=feature_version,
+            barrier_atr_multiplier=barrier_atr_multiplier,
         ),
         holdout_root=(
             holdout_root if holdout_root is not None
@@ -480,6 +488,7 @@ def _phase4_train(
     output: TextIO,
     *,
     feature_version: str,
+    barrier_atr_multiplier: float = 1.0,
     start_date: str,
     end_date: str,
     sample_cache: Path | None,
@@ -503,6 +512,7 @@ def _phase4_train(
         build = _issue_dataset(
             raw_root, calendar, witness_db,
             feature_version=feature_version,
+            barrier_atr_multiplier=barrier_atr_multiplier,
             start_date=start_date,
             end_date=end_date,
             sample_cache=sample_cache,

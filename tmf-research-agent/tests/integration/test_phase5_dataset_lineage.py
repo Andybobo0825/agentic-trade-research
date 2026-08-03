@@ -814,7 +814,7 @@ def _raw_market(
                 alias_code="TMFR1", target_code="TMF202607", delivery_month="202607",
                 code="TMF202607", close=price, volume=minute + 1, simtrade=False,
                 trading_date=when.date().isoformat(), session="DAY", raw_payload={},
-                tick_type=1 if minute % 2 == 0 else 2, underlying_price=price - 10.0,
+                tick_type=1 if minute % 2 == 0 else 2, underlying_price=price - 10.0 - (minute % 3),
             ))
             quotes.append(BidAskEvent(
                 event_id=f"quote-{day}-{minute}", received_at=when, exchange_datetime=when,
@@ -822,7 +822,7 @@ def _raw_market(
                 code="TMF202607", bid_prices=(price - 0.5,), bid_volumes=(5,),
                 ask_prices=(price + 0.5,), ask_volumes=(5,), simtrade=False,
                 trading_date=when.date().isoformat(), session="DAY", raw_payload={},
-                underlying_price=price - 10.0,
+                underlying_price=price - 10.0 - (minute % 3),
             ))
     created = start + timedelta(days=days)
     tick_manifest = store.append_segment("tick", ticks, segment_id="ticks", created_at=created)

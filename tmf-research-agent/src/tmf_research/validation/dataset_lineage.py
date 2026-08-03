@@ -645,8 +645,10 @@ def _derive_samples(
         )
         parameters = LabelParameters(
             version=spec.label_version, fit_start=start - timedelta(days=2),
-            fit_end=start - timedelta(seconds=1), target_atr_multiplier=1.0,
-            stop_atr_multiplier=1.0, minimum_target_points=1.0,
+            fit_end=start - timedelta(seconds=1),
+            target_atr_multiplier=spec.barrier_atr_multiplier,
+            stop_atr_multiplier=spec.barrier_atr_multiplier,
+            minimum_target_points=1.0,
             minimum_stop_points=1.0, horizon_minutes=15,
         )
         for candidate in candidates:

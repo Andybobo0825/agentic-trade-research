@@ -70,4 +70,38 @@ with open(source_path, encoding="utf-8") as f, local_path.open("a", encoding="ut
 print(f"新增 {added} 筆目錄項目")
 PY
 
+# The calendar is derived from historical-tick evidence, so it lags live
+# collection and Phase 5 silently rejects any trading date it cannot resolve.
+# Rebuild whenever the backfill has reached further than the calendar covers.
+CALENDAR="$LOCAL_ROOT/calendar-v2.json"
+if python3 - "$LOCAL_ROOT" "$CALENDAR" <<'PY'; then
+import json
+import sys
+from pathlib import Path
+
+root, calendar_path = Path(sys.argv[1]), Path(sys.argv[2])
+harvested = sorted(
+    json.loads(line)["segment_id"].rpartition("TMFR1-")[2]
+    for line in (root / "manifest.ndjson").read_text(encoding="utf-8").splitlines()
+    if line.strip() and json.loads(line)["event_type"] == "historical-tick"
+)
+if not harvested:
+    print("行事曆: 沒有歷史證據可推導,略過")
+    raise SystemExit(1)
+covered = ""
+if calendar_path.is_file():
+    days = json.loads(calendar_path.read_text(encoding="utf-8"))["days"]
+    covered = max((entry["trading_date"] for entry in days), default="")
+if harvested[-1] <= covered:
+    print(f"行事曆: 已涵蓋到 {covered},無需重建")
+    raise SystemExit(1)
+print(f"行事曆: 回補已到 {harvested[-1]},目前只涵蓋到 {covered or '(無)'} — 重建中")
+PY
+    # Rebuilding changes the build-spec hash, so a locked holdout bound to the
+    # old calendar will refuse to reopen. Keep the previous file to fall back to.
+    [ -f "$CALENDAR" ] && cp "$CALENDAR" "$CALENDAR.bak"
+    PYTHONPATH=src .venv/bin/python -m tmf_research.cli build-calendar \
+        --data-root "$LOCAL_ROOT" --out "$CALENDAR" --calendar-version calendar-v2
+fi
+
 exec ./scripts/data-health.sh

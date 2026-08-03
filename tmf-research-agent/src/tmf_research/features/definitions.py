@@ -171,6 +171,7 @@ _FEATURE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 _MISSING_INDICATORS: tuple[MissingIndicatorDefinition, ...] = (
     MissingIndicatorDefinition("underlying_missing", "basis_points"),
+    MissingIndicatorDefinition("basis_dispersion_missing", "basis_zscore_5m"),
     MissingIndicatorDefinition("quote_missing", "spread_points"),
     MissingIndicatorDefinition("atr_missing", "atr_5m"),
     MissingIndicatorDefinition("previous_day_missing", "distance_previous_close_atr"),
@@ -182,9 +183,9 @@ _FORMAL_FEATURES: tuple[str, ...] = (
     "price_to_session_vwap_atr", "vwap_slope_5m",
     "aggressive_buy_volume_10s", "aggressive_sell_volume_10s",
     "trade_imbalance_10s", "large_trade_ratio", "spread_points",
-    "midpoint", "microprice", "microprice_minus_midpoint",
-    "basis_points", "basis_change_10s", "basis_change_1m",
-    "basis_pct",
+    "microprice", "microprice_minus_midpoint",
+    "basis_points", "basis_change_1m",
+    "basis_pct", "basis_zscore_5m",
     "true_range_1m", "atr_5m", "realized_vol_5m",
     "range_expansion_ratio", "distance_previous_day_high_atr",
     "distance_previous_day_low_atr", "session_day",

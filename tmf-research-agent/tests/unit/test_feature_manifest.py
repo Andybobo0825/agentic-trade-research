@@ -29,6 +29,30 @@ class FeatureManifestTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             first.version = "mutated"  # type: ignore[misc]
 
+    def test_basis_dispersion_is_trained_on_rather_than_only_declared(self) -> None:
+        """basis_zscore_5m is what the basis group was added to test.
+
+        The raw spread carries the price level with it; how far the spread has
+        strayed from its own recent range is the part with a mechanism behind
+        it. Declaring it as a candidate but leaving it out of the formal set
+        meant it was never computed into a sample, so every basis reading so
+        far measured the level alone.
+        """
+
+        manifest = default_feature_manifest()
+
+        self.assertIn("basis_zscore_5m", manifest.formal_features)
+        self.assertLessEqual(len(manifest.formal_features), 30)
+        # midpoint makes room: microprice is the same quote weighted by the
+        # size resting on each side, and the two scored identically on real data.
+        self.assertNotIn("midpoint", manifest.formal_features)
+        self.assertIn("microprice", manifest.formal_features)
+        self.assertIn(
+            "basis_zscore_5m",
+            {item.source_feature for item in manifest.missing_indicators},
+            "a window-based feature is null early in a session and needs its indicator",
+        )
+
     def test_rejects_candidate_budget_overflow(self) -> None:
         definitions = tuple(
             FeatureDefinition(name=f"feature_{index}", group="price", mechanism="fixture")

@@ -37,7 +37,7 @@ class HistoricalManifestTests(unittest.TestCase):
         self.assertIn("quote_missing", indicators)
 
         self.assertNotIn("basis_points", self.reduced.formal_features)
-        self.assertEqual(len(self.reduced.formal_features), 26)
+        self.assertEqual(len(self.reduced.formal_features), 25)
 
     def test_interactions_are_preserved_and_basis_independent(self) -> None:
         self.assertEqual(

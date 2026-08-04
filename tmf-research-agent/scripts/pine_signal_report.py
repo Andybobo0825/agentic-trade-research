@@ -7,6 +7,7 @@ Spec: docs/superpowers/specs/2026-08-04-pine-signal-report-design.md
 """
 from __future__ import annotations
 
+import json
 import sys
 from bisect import bisect_left, bisect_right
 from collections import defaultdict, deque
@@ -15,7 +16,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 
+from tmf_research.features.context_builder import ResearchBuildSpec
+from tmf_research.infrastructure.raw_store import AppendOnlyRawStore, SegmentManifest
 from tmf_research.processing.bars import Bar
+from tmf_research.processing.pipeline import ProcessingPipeline
+from tmf_research.processing.quote_joiner import QuoteJoiner
+from tmf_research.processing.session_resolver import SessionResolver
+from tmf_research.validation.dataset_lineage import _session_batches
 
 TAIPEI = timezone(timedelta(hours=8))
 COST_POINTS = 3.0
@@ -513,9 +520,247 @@ def self_test() -> int:
     return 0
 
 
+def _period(trading_date: str) -> str:
+    if trading_date >= "2026-01-01":
+        return "2026+"
+    return "2024H2" if trading_date < "2025-01-01" else "2025H1"
+
+
+TIMEFRAMES = (5, 15, 60)
+SIGNALS = ("breakout", "breakdown", "bounce", "rejection")
+VARIANTS = ("orig", "v1", "v2", "v3")
+VARIANT_SIGNALS = {
+    "orig": SIGNALS, "v1": SIGNALS,
+    "v2": ("breakout", "breakdown"), "v3": ("bounce", "rejection"),
+}
+
+
+def run(raw_root: Path, calendar_path: Path, start_day: str, end_day: str) -> int:
+    spec = ResearchBuildSpec(calendar=calendar_path)
+    calendar = spec.trading_calendar()
+    resolver = SessionResolver(calendar)
+    records = [
+        json.loads(line)
+        for line in (raw_root / "manifest.ndjson").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    def in_range(segment_id: str) -> bool:
+        _prefix, separator, suffix = segment_id.rpartition("TMFR1-")
+        if not separator:
+            return True
+        return start_day <= suffix[:10] <= end_day
+
+    manifests = tuple(
+        SegmentManifest(**record)
+        for record in records
+        if record["event_type"] == "historical-tick"
+        and in_range(str(record["segment_id"]))
+    )
+    if not manifests:
+        print(f"{start_day}..{end_day} 沒有任何 segment", file=sys.stderr)
+        return 1
+    store = AppendOnlyRawStore(
+        raw_root,
+        writer_version=manifests[0].writer_version,
+        dataset_version=manifests[0].dataset_version,
+    )
+
+    engines: dict[tuple[int, str], PineState] = {}
+    for tf in TIMEFRAMES:
+        engines[(tf, "orig")] = PineState(PRESETS[tf])
+        engines[(tf, "v1")] = PineState(PRESETS[tf], right_bars=2)
+
+    cells: dict[tuple[int, str, str, str, str], list[float]] = defaultdict(list)
+    events_store: dict[tuple[int, str, str], list[SignalEvent]] = defaultdict(list)
+    sessions = 0
+    fallback_anchor = 0
+    unpriced = 0
+
+    for batch in _session_batches(store, manifests, calendar, resolver, set()):
+        resolution = batch.resolution
+        if not batch.ticks or not batch.quotes:
+            continue
+        if resolution.session_start is None or resolution.session_end is None:
+            continue
+        ordered = sorted(
+            (t for t in batch.ticks if not t.simtrade),
+            key=lambda t: t.exchange_datetime,
+        )
+        if not ordered:
+            continue
+        pipeline = ProcessingPipeline(
+            quote_joiner=QuoteJoiner(max_quote_age=timedelta(minutes=2)),
+        )
+        kwargs = dict(
+            ticks=batch.ticks, bidasks=batch.quotes, resolution=resolution,
+            end_second=resolution.session_end - timedelta(seconds=1),
+            source_manifests=manifests, intervals=TIMEFRAMES,
+        )
+        try:
+            processed = pipeline.process(
+                start_second=resolution.session_start, **kwargs,
+            )
+        except ValueError:
+            fallback_anchor += 1
+            fallback = min(t.exchange_datetime for t in batch.ticks).replace(
+                second=0, microsecond=0,
+            )
+            processed = pipeline.process(start_second=fallback, **kwargs)
+        tick_times = [t.exchange_datetime for t in ordered]
+        tick_prices = [t.close for t in ordered]
+        tick_vols = [t.volume for t in ordered]
+        tape = SessionTape(tick_times, tick_prices)
+        period = _period(batch.trading_date)
+        session_events: list[SignalEvent] = []
+        bars_by_interval = {
+            bar_set.interval_minutes: bar_set.bars for bar_set in processed.bar_sets
+        }
+        for tf in TIMEFRAMES:
+            params = PRESETS[tf]
+            orig_engine = engines[(tf, "orig")]
+            v1_engine = engines[(tf, "v1")]
+            fired_levels: set[tuple[str, float]] = set()
+            for bar in bars_by_interval[tf]:
+                ctx = orig_engine.forming_context()
+                lo = bisect_left(tick_times, bar.bar_start)
+                hi = bisect_left(tick_times, bar.bar_end)
+                bar_ticks = [
+                    (tick_times[i], tick_prices[i], tick_vols[i])
+                    for i in range(lo, hi)
+                ]
+                for name, direction, level, when in v2_scan(
+                        ctx, bar_ticks, bar.bar_start, tf, params):
+                    session_events.append(SignalEvent(
+                        tf, name, "v2", direction, when, level,
+                        batch.trading_date, batch.session))
+                for name, direction, level, when in v3_scan(
+                        ctx, bar_ticks, params, fired_levels):
+                    session_events.append(SignalEvent(
+                        tf, name, "v3", direction, when, level,
+                        batch.trading_date, batch.session))
+                for name, direction, level in orig_engine.update(bar):
+                    session_events.append(SignalEvent(
+                        tf, name, "orig", direction, bar.bar_end, level,
+                        batch.trading_date, batch.session))
+                for name, direction, level in v1_engine.update(bar):
+                    session_events.append(SignalEvent(
+                        tf, name, "v1", direction, bar.bar_end, level,
+                        batch.trading_date, batch.session))
+        for event in session_events:
+            priced = price_event(event, tape, resolution.session_end)
+            if priced is None:
+                unpriced += 1
+            else:
+                for horizon, net in priced.items():
+                    cells[(event.timeframe, event.signal, event.variant,
+                           horizon, period)].append(net)
+            events_store[(event.timeframe, event.signal, event.variant)].append(event)
+        sessions += 1
+        total_events = sum(len(value) for value in events_store.values())
+        print(f"  [{sessions}] {batch.trading_date} {batch.session}"
+              f"  事件累計 {total_events:,}", file=sys.stderr, flush=True)
+
+    # Pair per session so the quadratic matcher never sees more than one
+    # session's events at a time.
+    lead_tables: dict[tuple[int, str, str], tuple[list[float], int, int]] = {}
+    for (tf, signal, variant), early in events_store.items():
+        if variant == "orig":
+            continue
+        originals = events_store.get((tf, signal, "orig"), [])
+        originals_by_session: dict[tuple[str, str], list[SignalEvent]] = defaultdict(list)
+        for event in originals:
+            originals_by_session[(event.trading_date, event.session)].append(event)
+        early_by_session: dict[tuple[str, str], list[SignalEvent]] = defaultdict(list)
+        for event in early:
+            early_by_session[(event.trading_date, event.session)].append(event)
+        leads: list[float] = []
+        unmatched = 0
+        for key, group in early_by_session.items():
+            group_leads, group_unmatched = pair_lead_times(
+                group, originals_by_session.get(key, []))
+            leads.extend(group_leads)
+            unmatched += group_unmatched
+        lead_tables[(tf, signal, variant)] = (leads, unmatched, len(early))
+    print_report(cells, lead_tables, sessions, fallback_anchor, unpriced,
+                 start_day, end_day)
+    return 0
+
+
+SIGNAL_NAMES = {"breakout": "帶量突破", "breakdown": "帶量跌破",
+                "bounce": "支撐止跌", "rejection": "壓力遇阻"}
+VARIANT_NAMES = {"orig": "原版", "v1": "V1縮短確認",
+                 "v2": "V2盤中觸發", "v3": "V3接近預警"}
+
+
+def print_report(
+    cells: dict[tuple[int, str, str, str, str], list[float]],
+    lead_tables: dict[tuple[int, str, str], tuple[list[float], int, int]],
+    sessions: int, fallback_anchor: int, unpriced: int,
+    start_day: str, end_day: str,
+) -> None:
+    periods = sorted({key[4] for key in cells})
+    horizons = [str(h) for h in HORIZONS] + ["sclose"]
+    print(f"# Pine 訊號可信度報告 {start_day}..{end_day}")
+    print(f"\n掃描 {sessions} 個時段；anchor fallback {fallback_anchor}；"
+          f"無法定價事件 {unpriced}")
+    print(f"成本假設：來回 {COST_POINTS:.0f} 點。淨點數在 ±1 點內視同雜訊。"
+          "60 分K樣本少，僅供方向參考。訊號出場一律不跨時段（夜盤訊號以該夜盤收盤為界）。\n")
+    for tf in TIMEFRAMES:
+        print(f"\n## {tf} 分K\n")
+        header = "| 訊號 | 變體 | horizon |"
+        rule = "|---|---|---|"
+        for period in periods:
+            header += f" {period} N | 勝率 | 平均淨點 | 中位淨點 |"
+            rule += "---|---|---|---|"
+        print(header)
+        print(rule)
+        for signal in SIGNALS:
+            for variant in VARIANTS:
+                if signal not in VARIANT_SIGNALS[variant]:
+                    continue
+                for horizon in horizons:
+                    row_cells = []
+                    any_data = False
+                    for period in periods:
+                        nets = cells.get((tf, signal, variant, horizon, period))
+                        if not nets:
+                            row_cells.append(" — | — | — | — |")
+                            continue
+                        any_data = True
+                        n = len(nets)
+                        wins = sum(1 for value in nets if value > 0) / n
+                        flag = "⚠" if n < 30 else ""
+                        row_cells.append(
+                            f" {n}{flag} | {wins:.0%} | {sum(nets) / n:+.2f}"
+                            f" | {median(nets):+.2f} |")
+                    if any_data:
+                        print(f"| {SIGNAL_NAMES[signal]} | {VARIANT_NAMES[variant]}"
+                              f" | {horizon} |" + "".join(row_cells))
+        printed_header = False
+        for (tf2, signal, variant), (leads, unmatched, total) in sorted(
+                lead_tables.items()):
+            if tf2 != tf or not total:
+                continue
+            if not printed_header:
+                print(f"\n### 提早效果（{tf} 分K）\n")
+                print("| 訊號 | 變體 | 事件數 | 配對數 | 平均提早(分) |"
+                      " 假警報數 | 假警報率 |")
+                print("|---|---|---|---|---|---|---|")
+                printed_header = True
+            mean_lead = f"{sum(leads) / len(leads):.1f}" if leads else "—"
+            print(f"| {SIGNAL_NAMES[signal]} | {VARIANT_NAMES[variant]} | {total}"
+                  f" | {len(leads)} | {mean_lead} | {unmatched}"
+                  f" | {unmatched / total:.0%} |")
+    print("\n⚠ = 樣本數 < 30。假警報 = 早期訊號之後，同時段內原版訊號從未在同一價位確認。")
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "--self-test":
         raise SystemExit(self_test())
+    if len(sys.argv) == 5:
+        raise SystemExit(run(Path(sys.argv[1]), Path(sys.argv[2]),
+                             sys.argv[3], sys.argv[4]))
     print("用法: pine_signal_report.py --self-test | <raw-root> <calendar.json> <起始日> <結束日>",
           file=sys.stderr)
     raise SystemExit(2)

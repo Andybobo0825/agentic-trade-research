@@ -249,6 +249,115 @@ def _test_rejection_at_resistance() -> None:
     assert out[-1] == [("rejection", -1, 105.0)], f"got {out[-1]}"
 
 
+SIGNAL_DIRECTION = {"breakout": 1, "bounce": 1, "breakdown": -1, "rejection": -1}
+
+
+def v2_scan(ctx: dict, ticks: list[tuple[datetime, float, int]],
+            bar_start: datetime, interval_minutes: int, params: TFParams,
+            ) -> list[tuple[str, int, float, datetime]]:
+    """Intrabar 帶量突破/跌破: fire at the crossing tick when the projected
+    full-bar volume already clears the strong-volume ratio. Reads only the
+    previous completed bar's BB/volume state, so nothing peeks ahead."""
+    bb, vol_sma, prev_close = ctx["bb"], ctx["vol_sma"], ctx["prev_close"]
+    if bb is None or vol_sma is None or vol_sma <= 0 or prev_close is None:
+        return []
+    mid = bb[0]
+    interval_seconds = interval_minutes * 60
+    events: list[tuple[str, int, float, datetime]] = []
+    fired_up = fired_down = False
+    cumulative = 0
+    last_price = prev_close
+    for when, price, volume in ticks:
+        cumulative += volume
+        elapsed = max((when - bar_start).total_seconds(), 1.0)
+        pace = cumulative / (elapsed / interval_seconds)
+        strong = pace >= params.vol_ratio * vol_sma
+        res, sup = ctx["res"], ctx["sup"]
+        if not fired_up and res is not None and prev_close <= res \
+                and last_price <= res < price and strong and price > mid:
+            events.append(("breakout", 1, res, when))
+            fired_up = True
+        if not fired_down and sup is not None and prev_close >= sup \
+                and last_price >= sup > price and strong and price < mid:
+            events.append(("breakdown", -1, sup, when))
+            fired_down = True
+        last_price = price
+    return events
+
+
+def v3_scan(ctx: dict, ticks: list[tuple[datetime, float, int]],
+            params: TFParams, fired_levels: set[tuple[str, float]],
+            ) -> list[tuple[str, int, float, datetime]]:
+    """接近預警: first entry into the S/R tolerance zone, toward the level.
+    Long side at support, short side at resistance; once per level per
+    session (fired_levels is owned by the caller)."""
+    zone = params.zone_pct / 100.0
+    prev_close = ctx["prev_close"]
+    if prev_close is None:
+        return []
+    events: list[tuple[str, int, float, datetime]] = []
+    last_price = prev_close
+    for when, price, volume in ticks:
+        sup, res = ctx["sup"], ctx["res"]
+        if sup is not None and ("bounce", sup) not in fired_levels \
+                and last_price > sup * (1 + zone) >= price:
+            events.append(("bounce", 1, sup, when))
+            fired_levels.add(("bounce", sup))
+        if res is not None and ("rejection", res) not in fired_levels \
+                and last_price < res * (1 - zone) <= price:
+            events.append(("rejection", -1, res, when))
+            fired_levels.add(("rejection", res))
+        last_price = price
+    return events
+
+
+def _ticks(start: datetime, rows: list[tuple[int, float, int]],
+           ) -> list[tuple[datetime, float, int]]:
+    """rows = (seconds offset, price, volume)."""
+    return [(start + timedelta(seconds=s), p, v) for s, p, v in rows]
+
+
+def _test_v2_fires_on_cross_with_paced_volume() -> None:
+    ctx = {"res": 105.0, "sup": 95.0, "bb": (100.0, 101.0, 99.0),
+           "vol_sma": 100.0, "prev_close": 100.0}
+    start = datetime(2024, 8, 1, 10, 0, tzinfo=TAIPEI)
+    # 60s into a 5m bar: cumulative 90 lots → pace 90/(60/300) = 450 ≥ 180.
+    ticks = _ticks(start, [(10, 104.0, 30), (30, 104.8, 30), (60, 105.5, 30)])
+    out = v2_scan(ctx, ticks, start, 5, TEST_PARAMS)
+    assert out == [("breakout", 1, 105.0, start + timedelta(seconds=60))], f"got {out}"
+
+
+def _test_v2_slow_volume_stays_quiet() -> None:
+    ctx = {"res": 105.0, "sup": 95.0, "bb": (100.0, 101.0, 99.0),
+           "vol_sma": 100.0, "prev_close": 100.0}
+    start = datetime(2024, 8, 1, 10, 0, tzinfo=TAIPEI)
+    # Cross at 240s with 90 lots → pace 90/(240/300) = 112.5 < 180.
+    ticks = _ticks(start, [(120, 104.0, 30), (200, 104.8, 30), (240, 105.5, 30)])
+    assert v2_scan(ctx, ticks, start, 5, TEST_PARAMS) == []
+
+
+def _test_v2_fires_once_per_bar() -> None:
+    ctx = {"res": 105.0, "sup": 95.0, "bb": (100.0, 101.0, 99.0),
+           "vol_sma": 100.0, "prev_close": 100.0}
+    start = datetime(2024, 8, 1, 10, 0, tzinfo=TAIPEI)
+    ticks = _ticks(start, [(10, 105.5, 200), (20, 104.5, 10), (30, 105.5, 10)])
+    out = v2_scan(ctx, ticks, start, 5, TEST_PARAMS)
+    assert len(out) == 1 and out[0][3] == start + timedelta(seconds=10)
+
+
+def _test_v3_first_zone_entry_only() -> None:
+    ctx = {"res": 105.0, "sup": 95.0, "bb": None, "vol_sma": None,
+           "prev_close": 100.0}
+    start = datetime(2024, 8, 1, 10, 0, tzinfo=TAIPEI)
+    # zone_pct 0.10 → support zone upper edge 95.095
+    ticks = _ticks(start, [(5, 96.0, 1), (10, 95.05, 1), (20, 96.0, 1),
+                           (30, 95.05, 1)])
+    fired: set[tuple[str, float]] = set()
+    out = v3_scan(ctx, ticks, TEST_PARAMS, fired)
+    assert out == [("bounce", 1, 95.0, start + timedelta(seconds=10))], f"got {out}"
+    assert v3_scan(ctx, ticks, TEST_PARAMS, fired) == [], "level already fired"
+
+
 TESTS = [
     _test_pivot_confirms_right_bars_late,
     _test_pivot_tie_is_not_a_pivot,
@@ -257,6 +366,10 @@ TESTS = [
     _test_breakdown_mirror,
     _test_bounce_at_support,
     _test_rejection_at_resistance,
+    _test_v2_fires_on_cross_with_paced_volume,
+    _test_v2_slow_volume_stays_quiet,
+    _test_v2_fires_once_per_bar,
+    _test_v3_first_zone_entry_only,
 ]
 
 

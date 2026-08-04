@@ -265,18 +265,9 @@ showSignals = input.bool(
     group = "6. 顯示設定"
 )
 
-labelSize = input.string(
-    "大",
-    "標記大小",
-    options = ["小", "中", "大", "特大"],
-    group = "6. 顯示設定"
-)
+// plotshape 的 size 只接受常數，不能接 input。
+// 要改大小就直接改這裡：size.small／size.normal／size.large／size.huge
 
-string activeLabelSize = (
-    labelSize == "小" ? size.small :
-    labelSize == "中" ? size.normal :
-    labelSize == "大" ? size.large : size.huge
-)
 
 //====================================================
 // 7. 判斷目前圖表週期
@@ -577,7 +568,7 @@ plotshape(
     color = color.new(#00C853, 0),
     textcolor = color.white,
     text = "LONG",
-    size = activeLabelSize
+    size = size.large
 )
 
 plotshape(
@@ -588,7 +579,7 @@ plotshape(
     color = color.new(#FF1744, 0),
     textcolor = color.white,
     text = "SHORT",
-    size = activeLabelSize
+    size = size.large
 )
 
 // 進場方向也上 K 棒顏色，掃圖時一眼看得到。

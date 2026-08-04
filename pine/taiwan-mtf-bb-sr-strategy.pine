@@ -84,11 +84,6 @@ bbMultiplier = input.float(
     group = "1. 布林通道"
 )
 
-showBollinger = input.bool(
-    true,
-    "顯示布林通道",
-    group = "1. 布林通道"
-)
 
 //====================================================
 // 2. 多週期自動參數
@@ -264,16 +259,23 @@ endDate = input.time(
 // 6. 顯示設定
 //====================================================
 
-showSupportResistance = input.bool(
+showSignals = input.bool(
     true,
-    "顯示支撐壓力水平線",
+    "顯示 LONG／SHORT 標記",
     group = "6. 顯示設定"
 )
 
-showSignals = input.bool(
-    true,
-    "顯示訊號標記",
+labelSize = input.string(
+    "大",
+    "標記大小",
+    options = ["小", "中", "大", "特大"],
     group = "6. 顯示設定"
+)
+
+string activeLabelSize = (
+    labelSize == "小" ? size.small :
+    labelSize == "中" ? size.normal :
+    labelSize == "大" ? size.large : size.huge
 )
 
 //====================================================
@@ -347,26 +349,8 @@ float bbLower = (
     bbDeviation
 )
 
-plot(
-    showBollinger ? bbUpper : na,
-    title = "布林上軌",
-    color = color.blue,
-    linewidth = 1
-)
-
-plot(
-    showBollinger ? bbMiddle : na,
-    title = "布林中軌",
-    color = color.orange,
-    linewidth = 2
-)
-
-plot(
-    showBollinger ? bbLower : na,
-    title = "布林下軌",
-    color = color.blue,
-    linewidth = 1
-)
+// 布林通道只參與訊號判斷，不畫在圖上——指標版已經畫過，
+// 這支疊在同一張圖時只負責出 LONG／SHORT。
 
 //====================================================
 // 10. 波段高低點與支撐壓力
@@ -393,21 +377,7 @@ if not na(pivotHigh)
 if not na(pivotLow)
     support1 := pivotLow
 
-plot(
-    showSupportResistance ? resistance1 : na,
-    title = "壓力",
-    color = color.red,
-    linewidth = 2,
-    style = plot.style_stepline
-)
-
-plot(
-    showSupportResistance ? support1 : na,
-    title = "支撐",
-    color = color.green,
-    linewidth = 2,
-    style = plot.style_stepline
-)
+// 支撐壓力同樣不畫，交給指標版負責。
 
 //====================================================
 // 11. 成交量分析
@@ -504,15 +474,25 @@ bool shortSignal = (
     (useBreakdownShort and breakdown)
 )
 
-if inDateRange and longSignal and strategy.position_size == 0
+// 實際成交的那一根才是進場點：訊號在 K 棒收盤成立，
+// 委託在下一根開盤撮合，所以標記畫在成交那根，不是訊號那根。
+bool tookLong = (
+    inDateRange and longSignal and strategy.position_size == 0
+)
+
+bool tookShort = (
+    inDateRange and shortSignal and strategy.position_size == 0
+)
+
+if tookLong
     strategy.entry(
-        "多",
+        "LONG",
         strategy.long
     )
 
-if inDateRange and shortSignal and strategy.position_size == 0
+if tookShort
     strategy.entry(
-        "空",
+        "SHORT",
         strategy.short
     )
 
@@ -580,7 +560,7 @@ if strategy.position_size != 0 and (useStopLoss or useTakeProfit)
 
     strategy.exit(
         "出場",
-        from_entry = isLong ? "多" : "空",
+        from_entry = isLong ? "LONG" : "SHORT",
         stop = stopPrice,
         limit = limitPrice
     )
@@ -590,45 +570,42 @@ if strategy.position_size != 0 and (useStopLoss or useTakeProfit)
 //====================================================
 
 plotshape(
-    showSignals and useResistanceRejectionShort and resistanceRejection,
-    title = "壓力遇阻",
-    style = shape.labeldown,
-    location = location.abovebar,
-    color = color.orange,
-    textcolor = color.white,
-    text = "壓力遇阻",
-    size = size.tiny
-)
-
-plotshape(
-    showSignals and useBreakdownShort and breakdown,
-    title = "帶量跌破",
-    style = shape.labeldown,
-    location = location.abovebar,
-    color = color.red,
-    textcolor = color.white,
-    text = "帶量跌破",
-    size = size.tiny
-)
-
-plotshape(
-    showSignals and useBreakoutLong and breakout,
-    title = "帶量突破",
+    showSignals and tookLong,
+    title = "LONG",
     style = shape.labelup,
     location = location.belowbar,
-    color = color.lime,
-    textcolor = color.black,
-    text = "帶量突破",
-    size = size.tiny
+    color = color.new(#00C853, 0),
+    textcolor = color.white,
+    text = "LONG",
+    size = activeLabelSize
 )
 
 plotshape(
-    showSignals and useSupportBounceLong and supportBounce,
-    title = "支撐止跌",
-    style = shape.labelup,
-    location = location.belowbar,
-    color = color.green,
+    showSignals and tookShort,
+    title = "SHORT",
+    style = shape.labeldown,
+    location = location.abovebar,
+    color = color.new(#FF1744, 0),
     textcolor = color.white,
-    text = "支撐止跌",
-    size = size.tiny
+    text = "SHORT",
+    size = activeLabelSize
+)
+
+// 進場方向也上 K 棒顏色，掃圖時一眼看得到。
+barcolor(
+    showSignals and tookLong ? color.new(#00C853, 0) :
+    showSignals and tookShort ? color.new(#FF1744, 0) : na,
+    title = "訊號 K 棒"
+)
+
+alertcondition(
+    tookLong,
+    title = "LONG",
+    message = "LONG｜{{ticker}}｜{{interval}}｜收盤 {{close}}"
+)
+
+alertcondition(
+    tookShort,
+    title = "SHORT",
+    message = "SHORT｜{{ticker}}｜{{interval}}｜收盤 {{close}}"
 )

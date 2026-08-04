@@ -405,6 +405,50 @@ def _test_v3_first_zone_entry_only() -> None:
     assert v3_scan(ctx, ticks, TEST_PARAMS, fired) == [], "level already fired"
 
 
+def pair_lead_times(early: list[SignalEvent], originals: list[SignalEvent],
+                    ) -> tuple[list[float], int]:
+    """Match each early event to the first same-type same-level original at
+    or after it, within the same session. Unmatched events are the false
+    alarms — the price paid for earliness."""
+    used: set[int] = set()
+    leads: list[float] = []
+    unmatched = 0
+    for event in sorted(early, key=lambda e: e.time):
+        match = None
+        for index, original in enumerate(originals):
+            if index in used or original.time < event.time:
+                continue
+            if (original.timeframe, original.signal, original.trading_date,
+                    original.session) != (event.timeframe, event.signal,
+                                          event.trading_date, event.session):
+                continue
+            if abs(original.level - event.level) >= 1e-6:
+                continue
+            if match is None or original.time < originals[match].time:
+                match = index
+        if match is None:
+            unmatched += 1
+        else:
+            used.add(match)
+            leads.append((originals[match].time - event.time).total_seconds() / 60.0)
+    return leads, unmatched
+
+
+def _test_lead_time_pairing() -> None:
+    day = datetime(2024, 8, 1, 9, 0, tzinfo=TAIPEI)
+
+    def ev(variant: str, minutes: int, level: float = 105.0,
+           signal: str = "breakout") -> SignalEvent:
+        return SignalEvent(5, signal, variant, 1, day + timedelta(minutes=minutes),
+                           level, "2024-08-01", "DAY")
+
+    originals = [ev("orig", 30), ev("orig", 90)]
+    early = [ev("v2", 22), ev("v2", 85), ev("v2", 200), ev("v2", 40, level=99.0)]
+    leads, unmatched = pair_lead_times(early, originals)
+    assert leads == [8.0, 5.0], f"got {leads}"
+    assert unmatched == 2  # the 200-minute event and the wrong-level event
+
+
 def _test_pricing_arithmetic_and_session_clip() -> None:
     start = datetime(2024, 8, 1, 13, 0, tzinfo=TAIPEI)
     session_end = datetime(2024, 8, 1, 13, 45, tzinfo=TAIPEI)
@@ -457,6 +501,7 @@ TESTS = [
     _test_pricing_arithmetic_and_session_clip,
     _test_pricing_short_direction,
     _test_pricing_no_entry_tick,
+    _test_lead_time_pairing,
 ]
 
 

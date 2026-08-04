@@ -125,7 +125,26 @@ class PineState:
     def _signals(self, bar: Bar, res: float | None, sup: float | None,
                  bb: tuple[float, float, float] | None, strong: bool,
                  ) -> list[tuple[str, int, float]]:
-        return []  # Task 2
+        if bb is None or self.prev_close is None:
+            return []
+        mid, upper, lower = bb
+        zone = self.p.zone_pct / 100.0
+        events: list[tuple[str, int, float]] = []
+        if res is not None and bar.close > res and self.prev_close <= res \
+                and strong and bar.close > mid:
+            events.append(("breakout", 1, res))
+        if sup is not None and bar.close < sup and self.prev_close >= sup \
+                and strong and bar.close < mid:
+            events.append(("breakdown", -1, sup))
+        if sup is not None and bar.low <= sup * (1 + zone) \
+                and bar.high >= sup * (1 - zone) and bar.low <= lower \
+                and bar.close >= sup and bar.close > bar.open:
+            events.append(("bounce", 1, sup))
+        if res is not None and bar.high >= res * (1 - zone) \
+                and bar.low <= res * (1 + zone) and bar.high >= upper \
+                and bar.close <= res and bar.close < bar.open:
+            events.append(("rejection", -1, res))
+        return events
 
     def _confirm_pivots(self) -> None:
         if len(self._highs) == self._highs.maxlen:
@@ -172,9 +191,72 @@ def _test_pivot_tie_is_not_a_pivot() -> None:
     assert state.resistance is None, "tied highs must not confirm a pivot"
 
 
+def _warmup(pivot_high: float = 105.0, pivot_low: float = 95.0) -> list[Bar]:
+    """22 flat bars with a pivot high/low pair confirmed mid-warmup.
+
+    Layout (5m bars, left=right=2 via the test params): two flat bars, the
+    pivot-high spike at index 2 (confirmed at bar 4), the pivot-low spike at
+    index 5 (confirmed at bar 7), then flat to 22 bars. Flat highs/lows tie,
+    so no further pivots ever confirm.
+    """
+    start = datetime(2024, 8, 1, 8, 45, tzinfo=TAIPEI)
+    flat = (100.0, 100.5, 99.5, 100.0, 100)
+    rows = [flat, flat, (100.0, pivot_high, 99.5, 100.0, 100), flat, flat,
+            (100.0, 100.5, pivot_low, 100.0, 100)] + [flat] * 16
+    return _seq(start, rows)
+
+
+TEST_PARAMS = TFParams(5, 2, 0.10, 20, 1.8)
+
+
+def _run(rows_after_warmup: list[tuple[float, float, float, float, int]],
+         ) -> list[list[tuple[str, int, float]]]:
+    bars = _warmup()
+    extra = _seq(bars[-1].bar_end, rows_after_warmup)
+    state = PineState(TEST_PARAMS)
+    return [state.update(bar) for bar in bars + extra]
+
+
+def _test_breakout_needs_volume_and_bb() -> None:
+    quiet = _run([(100.0, 106.0, 100.0, 106.0, 150)])   # crosses 105, weak volume
+    loud = _run([(100.0, 106.0, 100.0, 106.0, 500)])    # 500 >= 1.8 * 120
+    assert quiet[-1] == [], "weak volume must not fire"
+    assert loud[-1] == [("breakout", 1, 105.0)], f"got {loud[-1]}"
+
+
+def _test_breakout_requires_cross_not_position() -> None:
+    # First bar crosses and fires; staying above must not re-fire.
+    out = _run([(100.0, 106.0, 100.0, 106.0, 500),
+                (106.0, 107.0, 105.5, 106.5, 500)])
+    assert out[-2] == [("breakout", 1, 105.0)]
+    assert out[-1] == [], "no cross on the second bar"
+
+
+def _test_breakdown_mirror() -> None:
+    out = _run([(100.0, 100.0, 94.0, 94.0, 500)])
+    assert out[-1] == [("breakdown", -1, 95.0)], f"got {out[-1]}"
+
+
+def _test_bounce_at_support() -> None:
+    # Touch the support zone (95 ±0.1%), pierce the BB lower band, close
+    # back at/above support with a green body.
+    out = _run([(95.0, 95.6, 94.9, 95.5, 100)])
+    assert out[-1] == [("bounce", 1, 95.0)], f"got {out[-1]}"
+
+
+def _test_rejection_at_resistance() -> None:
+    out = _run([(104.5, 105.1, 104.0, 104.2, 100)])
+    assert out[-1] == [("rejection", -1, 105.0)], f"got {out[-1]}"
+
+
 TESTS = [
     _test_pivot_confirms_right_bars_late,
     _test_pivot_tie_is_not_a_pivot,
+    _test_breakout_needs_volume_and_bb,
+    _test_breakout_requires_cross_not_position,
+    _test_breakdown_mirror,
+    _test_bounce_at_support,
+    _test_rejection_at_resistance,
 ]
 
 

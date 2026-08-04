@@ -252,6 +252,53 @@ def _test_rejection_at_resistance() -> None:
 SIGNAL_DIRECTION = {"breakout": 1, "bounce": 1, "breakdown": -1, "rejection": -1}
 
 
+@dataclass(frozen=True)
+class SignalEvent:
+    timeframe: int
+    signal: str
+    variant: str
+    direction: int
+    time: datetime
+    level: float
+    trading_date: str
+    session: str
+
+
+class SessionTape:
+    def __init__(self, times: list[datetime], prices: list[float]) -> None:
+        self.times = times
+        self.prices = prices
+
+    def entry_after(self, when: datetime) -> tuple[datetime, float] | None:
+        index = bisect_right(self.times, when)
+        if index >= len(self.times):
+            return None
+        return self.times[index], self.prices[index]
+
+    def exit_at(self, when: datetime) -> float | None:
+        index = bisect_right(self.times, when)
+        return self.prices[index - 1] if index else None
+
+
+def price_event(event: SignalEvent, tape: SessionTape,
+                session_end: datetime) -> dict[str, float] | None:
+    entry = tape.entry_after(event.time)
+    if entry is None:
+        return None
+    entry_time, entry_price = entry
+    results: dict[str, float] = {}
+    targets = [(str(h), min(event.time + timedelta(minutes=h), session_end))
+               for h in HORIZONS] + [("sclose", session_end)]
+    for key, exit_time in targets:
+        if exit_time <= entry_time:
+            continue
+        exit_price = tape.exit_at(exit_time)
+        if exit_price is None:
+            continue
+        results[key] = event.direction * (exit_price - entry_price) - COST_POINTS
+    return results if results else None
+
+
 def v2_scan(ctx: dict, ticks: list[tuple[datetime, float, int]],
             bar_start: datetime, interval_minutes: int, params: TFParams,
             ) -> list[tuple[str, int, float, datetime]]:
@@ -358,6 +405,43 @@ def _test_v3_first_zone_entry_only() -> None:
     assert v3_scan(ctx, ticks, TEST_PARAMS, fired) == [], "level already fired"
 
 
+def _test_pricing_arithmetic_and_session_clip() -> None:
+    start = datetime(2024, 8, 1, 13, 0, tzinfo=TAIPEI)
+    session_end = datetime(2024, 8, 1, 13, 45, tzinfo=TAIPEI)
+    times = [start + timedelta(minutes=m) for m in (1, 5, 20, 40)]
+    tape = SessionTape(times, [100.0, 101.0, 104.0, 108.0])
+    event = SignalEvent(5, "breakout", "orig", 1, start, 99.0,
+                        "2024-08-01", "DAY")
+    priced = price_event(event, tape, session_end)
+    assert priced is not None
+    # entry = first tick after 13:00 → 100 @ 13:01
+    # +15 → last ≤ 13:15 = 101; net = 1*(101-100) - 3 = -2
+    assert priced["15"] == -2.0
+    # +60 clips to session end 13:45 → exit 108; net = 5
+    assert priced["60"] == 5.0 and priced["240"] == 5.0
+    assert priced["sclose"] == 5.0
+
+
+def _test_pricing_short_direction() -> None:
+    start = datetime(2024, 8, 1, 13, 0, tzinfo=TAIPEI)
+    session_end = datetime(2024, 8, 1, 13, 45, tzinfo=TAIPEI)
+    tape = SessionTape([start + timedelta(minutes=1),
+                        start + timedelta(minutes=14)], [100.0, 96.0])
+    event = SignalEvent(5, "breakdown", "orig", -1, start, 101.0,
+                        "2024-08-01", "DAY")
+    priced = price_event(event, tape, session_end)
+    assert priced is not None and priced["15"] == 1.0  # -1*(96-100) - 3
+
+
+def _test_pricing_no_entry_tick() -> None:
+    start = datetime(2024, 8, 1, 13, 44, tzinfo=TAIPEI)
+    session_end = datetime(2024, 8, 1, 13, 45, tzinfo=TAIPEI)
+    tape = SessionTape([start - timedelta(minutes=1)], [100.0])
+    event = SignalEvent(5, "breakout", "orig", 1, start, 99.0,
+                        "2024-08-01", "DAY")
+    assert price_event(event, tape, session_end) is None
+
+
 TESTS = [
     _test_pivot_confirms_right_bars_late,
     _test_pivot_tie_is_not_a_pivot,
@@ -370,6 +454,9 @@ TESTS = [
     _test_v2_slow_volume_stays_quiet,
     _test_v2_fires_once_per_bar,
     _test_v3_first_zone_entry_only,
+    _test_pricing_arithmetic_and_session_clip,
+    _test_pricing_short_direction,
+    _test_pricing_no_entry_tick,
 ]
 
 

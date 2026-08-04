@@ -1,0 +1,1242 @@
+//@version=6
+indicator(
+    "台指多週期技術分析｜BB＋支撐壓力＋量能",
+    shorttitle = "台指 MTF BB-SR",
+    overlay = true,
+    max_labels_count = 500,
+    max_lines_count = 20
+)
+
+//====================================================
+// 1. 布林通道參數
+//====================================================
+
+bbLength = input.int(
+    20,
+    "布林期數",
+    minval = 2,
+    group = "1. 布林通道"
+)
+
+bbMultiplier = input.float(
+    2.0,
+    "布林標準差倍數",
+    minval = 0.1,
+    step = 0.1,
+    group = "1. 布林通道"
+)
+
+showBollinger = input.bool(
+    true,
+    "顯示布林通道",
+    group = "1. 布林通道"
+)
+
+//====================================================
+// 2. 多週期自動參數
+//====================================================
+
+autoTimeframeParams = input.bool(
+    true,
+    "依 60／15／5 分鐘自動切換參數",
+    group = "2. 多週期參數"
+)
+
+// 非 60／15／5 分鐘或關閉自動模式時使用。
+manualPivotBars = input.int(
+    3,
+    "手動轉折確認根數",
+    minval = 1,
+    maxval = 20,
+    group = "2. 多週期參數"
+)
+
+manualZonePercentage = input.float(
+    0.30,
+    "手動支撐壓力容許區（%）",
+    minval = 0.0,
+    step = 0.05,
+    group = "2. 多週期參數"
+)
+
+manualVolumeLength = input.int(
+    10,
+    "手動成交量平均期數",
+    minval = 1,
+    group = "2. 多週期參數"
+)
+
+manualStrongVolumeRatio = input.float(
+    1.5,
+    "手動放量判定倍數",
+    minval = 0.1,
+    step = 0.1,
+    group = "2. 多週期參數"
+)
+
+//====================================================
+// 3. 支撐壓力顯示設定
+//====================================================
+
+showSupportResistance = input.bool(
+    true,
+    "顯示最近支撐壓力水平線",
+    group = "3. 支撐壓力"
+)
+
+showPriceLabels = input.bool(
+    true,
+    "顯示支撐壓力價格標籤",
+    group = "3. 支撐壓力"
+)
+
+supportResistanceLineWidth = input.int(
+    2,
+    "水平線寬度",
+    minval = 1,
+    maxval = 5,
+    group = "3. 支撐壓力"
+)
+
+//====================================================
+// 4. 顯示設定
+//====================================================
+
+showSignals = input.bool(
+    true,
+    "顯示技術訊號",
+    group = "4. 顯示設定"
+)
+
+showDashboard = input.bool(
+    true,
+    "顯示右上角分析面板",
+    group = "4. 顯示設定"
+)
+
+showBarColor = input.bool(
+    false,
+    "依多空分數改變 K 棒顏色",
+    group = "4. 顯示設定"
+)
+
+//====================================================
+// 5. 判斷目前圖表週期
+//====================================================
+
+bool is5Minute = (
+    timeframe.isminutes and
+    timeframe.multiplier == 5
+)
+
+bool is15Minute = (
+    timeframe.isminutes and
+    timeframe.multiplier == 15
+)
+
+bool is60Minute = (
+    timeframe.isminutes and
+    timeframe.multiplier == 60
+)
+
+//====================================================
+// 6. 設定目前使用的有效參數
+//====================================================
+
+int activePivotBars = manualPivotBars
+float activeZonePercentage = manualZonePercentage
+int activeVolumeLength = manualVolumeLength
+float activeStrongVolumeRatio = manualStrongVolumeRatio
+
+string timeframeRole = "其他週期／手動分析"
+string presetName = "手動參數"
+
+if autoTimeframeParams
+    if is60Minute
+        activePivotBars := 3
+        activeZonePercentage := 0.30
+        activeVolumeLength := 10
+        activeStrongVolumeRatio := 1.5
+        timeframeRole := "主要結構／大級別支撐壓力"
+        presetName := "60 分鐘預設"
+
+    else if is15Minute
+        activePivotBars := 4
+        activeZonePercentage := 0.20
+        activeVolumeLength := 20
+        activeStrongVolumeRatio := 1.6
+        timeframeRole := "波段方向確認"
+        presetName := "15 分鐘預設"
+
+    else if is5Minute
+        activePivotBars := 5
+        activeZonePercentage := 0.10
+        activeVolumeLength := 20
+        activeStrongVolumeRatio := 1.8
+        timeframeRole := "突破／跌破／止跌觸發"
+        presetName := "5 分鐘預設"
+
+    else
+        timeframeRole := "其他週期／使用手動參數"
+        presetName := "非自動支援週期"
+
+//====================================================
+// 7. 布林通道
+//====================================================
+
+float bbMiddle = ta.sma(
+    close,
+    bbLength
+)
+
+float bbDeviation = (
+    ta.stdev(close, bbLength) *
+    bbMultiplier
+)
+
+float bbUpper = (
+    bbMiddle +
+    bbDeviation
+)
+
+float bbLower = (
+    bbMiddle -
+    bbDeviation
+)
+
+float bbUpperDisplay = na
+float bbMiddleDisplay = na
+float bbLowerDisplay = na
+color bbFillColor = na
+
+if showBollinger
+    bbUpperDisplay := bbUpper
+    bbMiddleDisplay := bbMiddle
+    bbLowerDisplay := bbLower
+    bbFillColor := color.new(color.blue, 92)
+
+upperPlot = plot(
+    bbUpperDisplay,
+    title = "布林上軌",
+    color = color.blue,
+    linewidth = 1
+)
+
+middlePlot = plot(
+    bbMiddleDisplay,
+    title = "布林中軌",
+    color = color.orange,
+    linewidth = 2
+)
+
+lowerPlot = plot(
+    bbLowerDisplay,
+    title = "布林下軌",
+    color = color.blue,
+    linewidth = 1
+)
+
+fill(
+    upperPlot,
+    lowerPlot,
+    color = bbFillColor,
+    title = "布林通道區域"
+)
+
+//====================================================
+// 8. 波段高低點
+//====================================================
+
+// 轉折點需等待右側 activePivotBars 根 K 棒完成後確認。
+
+float pivotHigh = ta.pivothigh(
+    high,
+    activePivotBars,
+    activePivotBars
+)
+
+float pivotLow = ta.pivotlow(
+    low,
+    activePivotBars,
+    activePivotBars
+)
+
+bool newPivotHigh = not na(pivotHigh)
+bool newPivotLow = not na(pivotLow)
+
+var float resistance1 = na
+var float resistance2 = na
+
+var float support1 = na
+var float support2 = na
+
+var int resistancePivotIndex = na
+var int supportPivotIndex = na
+
+if newPivotHigh
+    resistance2 := resistance1
+    resistance1 := pivotHigh
+    resistancePivotIndex := bar_index - activePivotBars
+
+if newPivotLow
+    support2 := support1
+    support1 := pivotLow
+    supportPivotIndex := bar_index - activePivotBars
+
+//====================================================
+// 9. 支撐壓力水平線與標籤
+//====================================================
+
+var line resistanceLine = na
+var line supportLine = na
+
+var label resistanceLabel = na
+var label supportLabel = na
+
+// 關閉顯示時刪除現有線段與標籤。
+if not showSupportResistance
+    if not na(resistanceLine)
+        line.delete(resistanceLine)
+        resistanceLine := na
+
+    if not na(supportLine)
+        line.delete(supportLine)
+        supportLine := na
+
+    if not na(resistanceLabel)
+        label.delete(resistanceLabel)
+        resistanceLabel := na
+
+    if not na(supportLabel)
+        label.delete(supportLabel)
+        supportLabel := na
+
+// 建立或更新壓力線。
+if showSupportResistance
+    if newPivotHigh
+        if not na(resistanceLine)
+            line.delete(resistanceLine)
+
+        if not na(resistanceLabel)
+            label.delete(resistanceLabel)
+
+        resistanceLine := line.new(
+            x1 = resistancePivotIndex,
+            y1 = resistance1,
+            x2 = bar_index,
+            y2 = resistance1,
+            xloc = xloc.bar_index,
+            extend = extend.right,
+            color = color.red,
+            style = line.style_solid,
+            width = supportResistanceLineWidth
+        )
+
+        resistanceLabel := na
+
+        if showPriceLabels
+            resistanceLabel := label.new(
+                x = bar_index + 1,
+                y = resistance1,
+                text = "壓力 " + str.tostring(
+                    resistance1,
+                    format.mintick
+                ),
+                xloc = xloc.bar_index,
+                style = label.style_label_left,
+                color = color.red,
+                textcolor = color.white,
+                size = size.small
+            )
+
+    // 開啟顯示後，若已有壓力資料但尚未建立線段。
+    if na(resistanceLine)
+        if not na(resistance1)
+            if not na(resistancePivotIndex)
+                resistanceLine := line.new(
+                    x1 = resistancePivotIndex,
+                    y1 = resistance1,
+                    x2 = bar_index,
+                    y2 = resistance1,
+                    xloc = xloc.bar_index,
+                    extend = extend.right,
+                    color = color.red,
+                    style = line.style_solid,
+                    width = supportResistanceLineWidth
+                )
+
+// 建立或更新支撐線。
+if showSupportResistance
+    if newPivotLow
+        if not na(supportLine)
+            line.delete(supportLine)
+
+        if not na(supportLabel)
+            label.delete(supportLabel)
+
+        supportLine := line.new(
+            x1 = supportPivotIndex,
+            y1 = support1,
+            x2 = bar_index,
+            y2 = support1,
+            xloc = xloc.bar_index,
+            extend = extend.right,
+            color = color.green,
+            style = line.style_solid,
+            width = supportResistanceLineWidth
+        )
+
+        supportLabel := na
+
+        if showPriceLabels
+            supportLabel := label.new(
+                x = bar_index + 1,
+                y = support1,
+                text = "支撐 " + str.tostring(
+                    support1,
+                    format.mintick
+                ),
+                xloc = xloc.bar_index,
+                style = label.style_label_left,
+                color = color.green,
+                textcolor = color.white,
+                size = size.small
+            )
+
+    // 開啟顯示後，若已有支撐資料但尚未建立線段。
+    if na(supportLine)
+        if not na(support1)
+            if not na(supportPivotIndex)
+                supportLine := line.new(
+                    x1 = supportPivotIndex,
+                    y1 = support1,
+                    x2 = bar_index,
+                    y2 = support1,
+                    xloc = xloc.bar_index,
+                    extend = extend.right,
+                    color = color.green,
+                    style = line.style_solid,
+                    width = supportResistanceLineWidth
+                )
+
+//====================================================
+// 10. 價格標籤控制
+//====================================================
+
+if not showPriceLabels
+    if not na(resistanceLabel)
+        label.delete(resistanceLabel)
+        resistanceLabel := na
+
+    if not na(supportLabel)
+        label.delete(supportLabel)
+        supportLabel := na
+
+if showSupportResistance and showPriceLabels
+    if na(resistanceLabel)
+        if not na(resistance1)
+            resistanceLabel := label.new(
+                x = bar_index + 1,
+                y = resistance1,
+                text = "壓力 " + str.tostring(
+                    resistance1,
+                    format.mintick
+                ),
+                xloc = xloc.bar_index,
+                style = label.style_label_left,
+                color = color.red,
+                textcolor = color.white,
+                size = size.small
+            )
+
+    if na(supportLabel)
+        if not na(support1)
+            supportLabel := label.new(
+                x = bar_index + 1,
+                y = support1,
+                text = "支撐 " + str.tostring(
+                    support1,
+                    format.mintick
+                ),
+                xloc = xloc.bar_index,
+                style = label.style_label_left,
+                color = color.green,
+                textcolor = color.white,
+                size = size.small
+            )
+
+// 將標籤固定在最新 K 棒右側。
+if barstate.islast
+    if not na(resistanceLabel)
+        label.set_x(
+            resistanceLabel,
+            bar_index + 1
+        )
+
+        label.set_y(
+            resistanceLabel,
+            resistance1
+        )
+
+        label.set_text(
+            resistanceLabel,
+            "壓力 " + str.tostring(
+                resistance1,
+                format.mintick
+            )
+        )
+
+    if not na(supportLabel)
+        label.set_x(
+            supportLabel,
+            bar_index + 1
+        )
+
+        label.set_y(
+            supportLabel,
+            support1
+        )
+
+        label.set_text(
+            supportLabel,
+            "支撐 " + str.tostring(
+                support1,
+                format.mintick
+            )
+        )
+
+//====================================================
+// 11. 市場結構
+//====================================================
+
+bool hasCompleteStructure = (
+    not na(resistance1) and
+    not na(resistance2) and
+    not na(support1) and
+    not na(support2)
+)
+
+int trendState = 0
+
+if hasCompleteStructure
+    if (
+        resistance1 > resistance2 and
+        support1 > support2
+    )
+        trendState := 1
+
+    else if (
+        resistance1 < resistance2 and
+        support1 < support2
+    )
+        trendState := -1
+
+    else
+        trendState := 0
+
+string trendText = "震盪／資料不足"
+
+if trendState == 1
+    trendText := "多頭結構"
+
+else if trendState == -1
+    trendText := "空頭結構"
+
+//====================================================
+// 12. 成交量分析
+//====================================================
+
+float averageVolume = ta.sma(
+    volume,
+    activeVolumeLength
+)
+
+float volumeRatio = na
+
+if not na(averageVolume)
+    if averageVolume > 0
+        volumeRatio := volume / averageVolume
+
+bool strongVolume = false
+
+if not na(volumeRatio)
+    if volumeRatio >= activeStrongVolumeRatio
+        strongVolume := true
+
+string volumeState = "無量能資料"
+
+if not na(volumeRatio)
+    if volumeRatio >= activeStrongVolumeRatio
+        volumeState := "放量"
+
+    else if volumeRatio >= 1.0
+        volumeState := "高於均量"
+
+    else
+        volumeState := "量縮"
+
+//====================================================
+// 13. 訊號判斷基準
+//====================================================
+
+// 使用前一根已存在的支撐壓力，避免當根新轉折改變基準。
+
+float signalResistance = resistance1[1]
+float signalSupport = support1[1]
+
+float zoneFraction = (
+    activeZonePercentage /
+    100.0
+)
+
+//====================================================
+// 14. 帶量突破與跌破
+//====================================================
+
+bool breakout = (
+    barstate.isconfirmed and
+    not na(signalResistance) and
+    close > signalResistance and
+    close[1] <= signalResistance and
+    strongVolume and
+    close > bbMiddle
+)
+
+bool breakdown = (
+    barstate.isconfirmed and
+    not na(signalSupport) and
+    close < signalSupport and
+    close[1] >= signalSupport and
+    strongVolume and
+    close < bbMiddle
+)
+
+//====================================================
+// 15. 支撐壓力容許區
+//====================================================
+
+float supportZoneUpper = na
+float supportZoneLower = na
+
+float resistanceZoneUpper = na
+float resistanceZoneLower = na
+
+if not na(signalSupport)
+    supportZoneUpper := (
+        signalSupport *
+        (1.0 + zoneFraction)
+    )
+
+    supportZoneLower := (
+        signalSupport *
+        (1.0 - zoneFraction)
+    )
+
+if not na(signalResistance)
+    resistanceZoneUpper := (
+        signalResistance *
+        (1.0 + zoneFraction)
+    )
+
+    resistanceZoneLower := (
+        signalResistance *
+        (1.0 - zoneFraction)
+    )
+
+bool touchesSupportZone = (
+    not na(signalSupport) and
+    low <= supportZoneUpper and
+    high >= supportZoneLower
+)
+
+bool touchesResistanceZone = (
+    not na(signalResistance) and
+    high >= resistanceZoneLower and
+    low <= resistanceZoneUpper
+)
+
+//====================================================
+// 16. 支撐止跌與壓力遇阻
+//====================================================
+
+bool supportBounce = (
+    barstate.isconfirmed and
+    touchesSupportZone and
+    low <= bbLower and
+    close >= signalSupport and
+    close > open
+)
+
+bool resistanceRejection = (
+    barstate.isconfirmed and
+    touchesResistanceZone and
+    high >= bbUpper and
+    close <= signalResistance and
+    close < open
+)
+
+//====================================================
+// 17. 多空分數
+//====================================================
+
+int structureScore = 0
+
+if trendState == 1
+    structureScore := 2
+
+else if trendState == -1
+    structureScore := -2
+
+int positionScore = 0
+
+if close > bbMiddle
+    positionScore := 1
+
+else if close < bbMiddle
+    positionScore := -1
+
+int slopeScore = 0
+
+if bbMiddle > bbMiddle[1]
+    slopeScore := 1
+
+else if bbMiddle < bbMiddle[1]
+    slopeScore := -1
+
+int eventScore = 0
+
+if breakout
+    eventScore := 2
+
+else if breakdown
+    eventScore := -2
+
+int rawScore = (
+    structureScore +
+    positionScore +
+    slopeScore +
+    eventScore
+)
+
+int score = rawScore
+
+if score > 5
+    score := 5
+
+if score < -5
+    score := -5
+
+string scoreText = "中性"
+
+if score >= 3
+    scoreText := "偏多"
+
+else if score >= 1
+    scoreText := "弱多"
+
+else if score <= -3
+    scoreText := "偏空"
+
+else if score <= -1
+    scoreText := "弱空"
+
+//====================================================
+// 18. 圖表訊號
+//====================================================
+
+plotshape(
+    showSignals and breakout,
+    title = "帶量突破壓力",
+    style = shape.labelup,
+    location = location.belowbar,
+    color = color.lime,
+    textcolor = color.black,
+    text = "帶量突破",
+    size = size.tiny
+)
+
+plotshape(
+    showSignals and breakdown,
+    title = "帶量跌破支撐",
+    style = shape.labeldown,
+    location = location.abovebar,
+    color = color.red,
+    textcolor = color.white,
+    text = "帶量跌破",
+    size = size.tiny
+)
+
+plotshape(
+    showSignals and supportBounce,
+    title = "支撐止跌",
+    style = shape.labelup,
+    location = location.belowbar,
+    color = color.green,
+    textcolor = color.white,
+    text = "支撐止跌",
+    size = size.tiny
+)
+
+plotshape(
+    showSignals and resistanceRejection,
+    title = "壓力遇阻",
+    style = shape.labeldown,
+    location = location.abovebar,
+    color = color.orange,
+    textcolor = color.white,
+    text = "壓力遇阻",
+    size = size.tiny
+)
+
+//====================================================
+// 19. K 棒顏色
+//====================================================
+
+color scoreBarColor = na
+
+if score >= 3
+    scoreBarColor := color.green
+
+else if score <= -3
+    scoreBarColor := color.red
+
+color finalBarColor = na
+
+if showBarColor
+    finalBarColor := scoreBarColor
+
+barcolor(finalBarColor)
+
+//====================================================
+// 20. 資料視窗輸出
+//====================================================
+
+// 不直接把成交量柱畫在價格圖，避免破壞價格比例。
+// 可在右上角面板與資料視窗查看當根成交量。
+
+plot(
+    volume,
+    title = "當根 K 棒成交量",
+    display = display.data_window
+)
+
+plot(
+    averageVolume,
+    title = "成交量平均值",
+    display = display.data_window
+)
+
+plot(
+    volumeRatio,
+    title = "成交量倍數",
+    display = display.data_window
+)
+
+plot(
+    score,
+    title = "多空分數",
+    display = display.data_window
+)
+
+plot(
+    trendState,
+    title = "結構狀態",
+    display = display.data_window
+)
+
+plot(
+    activePivotBars,
+    title = "目前 Pivot 根數",
+    display = display.data_window
+)
+
+plot(
+    activeZonePercentage,
+    title = "目前容許區百分比",
+    display = display.data_window
+)
+
+plot(
+    activeStrongVolumeRatio,
+    title = "目前放量門檻",
+    display = display.data_window
+)
+
+//====================================================
+// 21. 格式化函式
+//====================================================
+
+formatPrice(float value) =>
+    string result = "—"
+
+    if not na(value)
+        result := str.tostring(
+            value,
+            format.mintick
+        )
+
+    result
+
+formatVolume(float value) =>
+    string result = "—"
+    float absoluteValue = math.abs(value)
+
+    if not na(value)
+        if absoluteValue >= 1000000000
+            result := (
+                str.tostring(
+                    value / 1000000000.0,
+                    "#.##"
+                ) +
+                "B"
+            )
+
+        else if absoluteValue >= 1000000
+            result := (
+                str.tostring(
+                    value / 1000000.0,
+                    "#.##"
+                ) +
+                "M"
+            )
+
+        else if absoluteValue >= 1000
+            result := (
+                str.tostring(
+                    value / 1000.0,
+                    "#.##"
+                ) +
+                "K"
+            )
+
+        else
+            result := str.tostring(
+                value,
+                "#"
+            )
+
+    result
+
+//====================================================
+// 22. 面板文字與顏色
+//====================================================
+
+string activeParameterText = (
+    "P" +
+    str.tostring(activePivotBars) +
+    "｜區 " +
+    str.tostring(activeZonePercentage, "#.##") +
+    "%｜量 " +
+    str.tostring(activeVolumeLength) +
+    "／" +
+    str.tostring(activeStrongVolumeRatio, "#.##") +
+    "x"
+)
+
+string currentVolumeText = formatVolume(volume)
+string averageVolumeText = formatVolume(averageVolume)
+
+string volumeRatioText = "—"
+
+if not na(volumeRatio)
+    volumeRatioText := (
+        str.tostring(volumeRatio, "#.##") +
+        " 倍｜" +
+        volumeState
+    )
+
+string bollingerPosition = "布林中軌下方"
+
+if close > bbUpper
+    bollingerPosition := "布林上軌外"
+
+else if close > bbMiddle
+    bollingerPosition := "布林中軌上方"
+
+else if close < bbLower
+    bollingerPosition := "布林下軌外"
+
+color scoreColor = color.new(
+    color.gray,
+    40
+)
+
+if score >= 3
+    scoreColor := color.new(
+        color.green,
+        20
+    )
+
+else if score <= -3
+    scoreColor := color.new(
+        color.red,
+        20
+    )
+
+color trendColor = color.new(
+    color.gray,
+    40
+)
+
+if trendState == 1
+    trendColor := color.new(
+        color.green,
+        20
+    )
+
+else if trendState == -1
+    trendColor := color.new(
+        color.red,
+        20
+    )
+
+color volumeColor = color.new(
+    color.gray,
+    40
+)
+
+if strongVolume
+    volumeColor := color.new(
+        color.orange,
+        20
+    )
+
+else if not na(volumeRatio)
+    if volumeRatio < 1.0
+        volumeColor := color.new(
+            color.blue,
+            45
+        )
+
+//====================================================
+// 23. 右上角分析面板
+//====================================================
+
+var table dashboard = table.new(
+    position.top_right,
+    2,
+    10,
+    border_width = 1
+)
+
+if barstate.islast and showDashboard
+    table.cell(
+        dashboard,
+        0,
+        0,
+        "週期角色",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        0,
+        timeframeRole,
+        text_color = color.white,
+        bgcolor = color.new(color.purple, 30)
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        1,
+        presetName,
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        1,
+        activeParameterText,
+        text_color = color.white,
+        bgcolor = color.new(color.gray, 40)
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        2,
+        "市場結構",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        2,
+        trendText,
+        text_color = color.white,
+        bgcolor = trendColor
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        3,
+        "多空分數",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        3,
+        str.tostring(score) + "｜" + scoreText,
+        text_color = color.white,
+        bgcolor = scoreColor
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        4,
+        "最近壓力",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        4,
+        formatPrice(resistance1),
+        text_color = color.white,
+        bgcolor = color.new(color.red, 40)
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        5,
+        "最近支撐",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        5,
+        formatPrice(support1),
+        text_color = color.white,
+        bgcolor = color.new(color.green, 40)
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        6,
+        "當根 K 棒量",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        6,
+        currentVolumeText,
+        text_color = color.white,
+        bgcolor = volumeColor
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        7,
+        str.tostring(activeVolumeLength) + " 根均量",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        7,
+        averageVolumeText,
+        text_color = color.white,
+        bgcolor = color.new(color.gray, 40)
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        8,
+        "量能倍數",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        8,
+        volumeRatioText,
+        text_color = color.white,
+        bgcolor = volumeColor
+    )
+
+    table.cell(
+        dashboard,
+        0,
+        9,
+        "布林位置",
+        text_color = color.white,
+        bgcolor = color.black
+    )
+
+    table.cell(
+        dashboard,
+        1,
+        9,
+        bollingerPosition,
+        text_color = color.white,
+        bgcolor = color.new(color.blue, 40)
+    )
+
+//====================================================
+// 24. TradingView 警示條件
+//====================================================
+
+alertcondition(
+    breakout,
+    title = "帶量突破壓力",
+    message = "帶量突破壓力｜{{ticker}}｜週期 {{interval}}｜收盤價 {{close}}"
+)
+
+alertcondition(
+    breakdown,
+    title = "帶量跌破支撐",
+    message = "帶量跌破支撐｜{{ticker}}｜週期 {{interval}}｜收盤價 {{close}}"
+)
+
+alertcondition(
+    supportBounce,
+    title = "支撐止跌",
+    message = "支撐附近出現止跌訊號｜{{ticker}}｜週期 {{interval}}｜收盤價 {{close}}"
+)
+
+alertcondition(
+    resistanceRejection,
+    title = "壓力遇阻",
+    message = "壓力附近出現遇阻訊號｜{{ticker}}｜週期 {{interval}}｜收盤價 {{close}}"
+)
+
+bool anySignal = (
+    breakout or
+    breakdown or
+    supportBounce or
+    resistanceRejection
+)
+
+alertcondition(
+    anySignal,
+    title = "任一技術訊號",
+    message = "偵測到技術分析訊號｜{{ticker}}｜週期 {{interval}}｜收盤價 {{close}}"
+)

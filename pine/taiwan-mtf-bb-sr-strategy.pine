@@ -1,0 +1,611 @@
+//@version=6
+//
+// 台指 MTF BB-SR 策略版
+// ─────────────────────────────────────────────────────────────────
+// 由指標版 taiwan-mtf-bb-sr.pine 改寫而來，訊號邏輯逐條對齊，
+// 並依據 2024-07-29..2026-07-31 的真實 TMF 逐筆資料回測結果設定預設值。
+//
+// 回測來源：tmf-research-agent/scripts/pine_signal_report.py
+// 對照測試：tmf-research-agent/scripts/pine_control_test.py（預先宣告）
+// 報告：output/pine-signal-report-blockA.md / blockB.md
+//
+// ⚠ 重要：預設只開啟「壓力遇阻」做空，因為在 144 個
+//   訊號×週期×變體×持倉 組合中，只有它在三個期間都是正的，
+//   而且在 2024 下半年大盤上漲 768 點時仍然為正。
+//   其餘訊號在回測中不具備跨期穩定性，預設關閉。
+//
+// ⚠ 手續費必須自己設：TradingView 的「屬性」分頁 →
+//   佣金 (Commission) 設為每邊 1.5 點的等值金額。
+//   回測用的是來回 3 點，不設的話績效會虛高。
+//
+// ⚠ 出場規則刻意只用「持有固定根數」，因為回測就是這樣測的。
+//   下方的停損停利預設關閉；一旦開啟，績效就不再對應任何已驗證的結果。
+//
+// ⚠ 這支策略的數字不會等於回測報告的數字，原因有二，都無法消除：
+//   1. 回測獨立計算每個訊號，允許重疊；策略同時只持一口，
+//      在倉時出現的訊號會被跳過，因此交易次數較少。
+//   2. 回測用 TMF 微台逐筆資料；你在 TradingView 上看的是 TXF/MXF，
+//      成交量絕對值與跳動不同（量能倍數是相對值，仍可比）。
+//   報告的數字是「訊號本身的期望值」，策略的數字是「照這個規則操作的結果」。
+//
+strategy(
+    "台指 MTF BB-SR 策略",
+    shorttitle = "台指 MTF 策略",
+    overlay = true,
+    initial_capital = 100000,
+    default_qty_type = strategy.fixed,
+    default_qty_value = 1,
+    pyramiding = 0,
+    calc_on_every_tick = false,
+    process_orders_on_close = false,
+    max_labels_count = 500,
+    max_lines_count = 20
+)
+
+//====================================================
+// 1. 布林通道參數
+//====================================================
+
+bbLength = input.int(
+    20,
+    "布林期數",
+    minval = 2,
+    group = "1. 布林通道"
+)
+
+bbMultiplier = input.float(
+    2.0,
+    "布林標準差倍數",
+    minval = 0.1,
+    step = 0.1,
+    group = "1. 布林通道"
+)
+
+showBollinger = input.bool(
+    true,
+    "顯示布林通道",
+    group = "1. 布林通道"
+)
+
+//====================================================
+// 2. 多週期自動參數
+//====================================================
+
+autoTimeframeParams = input.bool(
+    true,
+    "依 60／15／5 分鐘自動切換參數",
+    group = "2. 多週期參數"
+)
+
+manualPivotBars = input.int(
+    4,
+    "手動轉折確認根數",
+    minval = 1,
+    maxval = 20,
+    group = "2. 多週期參數"
+)
+
+manualZonePercentage = input.float(
+    0.20,
+    "手動支撐壓力容許區（%）",
+    minval = 0.0,
+    step = 0.05,
+    group = "2. 多週期參數"
+)
+
+manualVolumeLength = input.int(
+    20,
+    "手動成交量平均期數",
+    minval = 1,
+    group = "2. 多週期參數"
+)
+
+manualStrongVolumeRatio = input.float(
+    1.6,
+    "手動放量判定倍數",
+    minval = 0.1,
+    step = 0.1,
+    group = "2. 多週期參數"
+)
+
+//====================================================
+// 3. 進場訊號開關
+//====================================================
+//
+// 回測結論：只有「壓力遇阻做空」跨三個期間為正。
+// 其餘三個訊號預設關閉，開啟前請先自行驗證。
+
+useResistanceRejectionShort = input.bool(
+    true,
+    "壓力遇阻 → 做空（回測唯一跨期為正）",
+    group = "3. 進場訊號"
+)
+
+useBreakdownShort = input.bool(
+    false,
+    "帶量跌破 → 做空（跨期為正但多數落在下跌行情）",
+    group = "3. 進場訊號"
+)
+
+useBreakoutLong = input.bool(
+    false,
+    "帶量突破 → 做多（回測跨期翻面）",
+    group = "3. 進場訊號"
+)
+
+useSupportBounceLong = input.bool(
+    false,
+    "支撐止跌 → 做多（回測跨期翻面）",
+    group = "3. 進場訊號"
+)
+
+//====================================================
+// 4. 出場規則
+//====================================================
+//
+// 回測只測「持有固定時間」，沒有停損停利。
+// 15 分K：16 根 = 240 分鐘，是回測中表現最好的持倉長度。
+
+holdBars = input.int(
+    16,
+    "持有根數後平倉",
+    minval = 1,
+    maxval = 200,
+    group = "4. 出場規則",
+    tooltip = "15 分K 的 16 根 = 240 分鐘，對應回測的 240 分持倉。"
+)
+
+closeAtSessionEnd = input.bool(
+    true,
+    "時段收盤前強制平倉",
+    group = "4. 出場規則",
+    tooltip = "回測的持倉一律不跨時段（夜盤訊號以夜盤收盤為界）。" +
+              "這裡用固定時鐘時間而非最後一根 K 棒，" +
+              "因為在最後一根下單會成交在下一個時段的開盤，等於抱過夜。"
+)
+
+dayCloseHHMM = input.int(
+    1330,
+    "日盤平倉時間 (HHMM)",
+    minval = 0,
+    maxval = 2359,
+    group = "4. 出場規則"
+)
+
+nightCloseHHMM = input.int(
+    445,
+    "夜盤平倉時間 (HHMM)",
+    minval = 0,
+    maxval = 2359,
+    group = "4. 出場規則"
+)
+
+useStopLoss = input.bool(
+    false,
+    "啟用停損（偏離回測設定）",
+    group = "4. 出場規則"
+)
+
+stopLossAtr = input.float(
+    2.0,
+    "停損 ATR 倍數",
+    minval = 0.1,
+    step = 0.1,
+    group = "4. 出場規則"
+)
+
+useTakeProfit = input.bool(
+    false,
+    "啟用停利（偏離回測設定）",
+    group = "4. 出場規則"
+)
+
+takeProfitAtr = input.float(
+    3.0,
+    "停利 ATR 倍數",
+    minval = 0.1,
+    step = 0.1,
+    group = "4. 出場規則"
+)
+
+atrLength = input.int(
+    14,
+    "ATR 期數",
+    minval = 1,
+    group = "4. 出場規則"
+)
+
+//====================================================
+// 5. 回測期間篩選
+//====================================================
+
+useDateFilter = input.bool(
+    false,
+    "限定回測期間",
+    group = "5. 回測期間"
+)
+
+startDate = input.time(
+    timestamp("2024-07-29T00:00:00+0800"),
+    "起始時間",
+    group = "5. 回測期間"
+)
+
+endDate = input.time(
+    timestamp("2026-08-01T00:00:00+0800"),
+    "結束時間",
+    group = "5. 回測期間"
+)
+
+//====================================================
+// 6. 顯示設定
+//====================================================
+
+showSupportResistance = input.bool(
+    true,
+    "顯示支撐壓力水平線",
+    group = "6. 顯示設定"
+)
+
+showSignals = input.bool(
+    true,
+    "顯示訊號標記",
+    group = "6. 顯示設定"
+)
+
+//====================================================
+// 7. 判斷目前圖表週期
+//====================================================
+
+bool is5Minute = (
+    timeframe.isminutes and
+    timeframe.multiplier == 5
+)
+
+bool is15Minute = (
+    timeframe.isminutes and
+    timeframe.multiplier == 15
+)
+
+bool is60Minute = (
+    timeframe.isminutes and
+    timeframe.multiplier == 60
+)
+
+//====================================================
+// 8. 設定目前使用的有效參數
+//====================================================
+
+int activePivotBars = manualPivotBars
+float activeZonePercentage = manualZonePercentage
+int activeVolumeLength = manualVolumeLength
+float activeStrongVolumeRatio = manualStrongVolumeRatio
+
+if autoTimeframeParams
+    if is60Minute
+        activePivotBars := 3
+        activeZonePercentage := 0.30
+        activeVolumeLength := 10
+        activeStrongVolumeRatio := 1.5
+
+    else if is15Minute
+        activePivotBars := 4
+        activeZonePercentage := 0.20
+        activeVolumeLength := 20
+        activeStrongVolumeRatio := 1.6
+
+    else if is5Minute
+        activePivotBars := 5
+        activeZonePercentage := 0.10
+        activeVolumeLength := 20
+        activeStrongVolumeRatio := 1.8
+
+//====================================================
+// 9. 布林通道
+//====================================================
+
+float bbMiddle = ta.sma(
+    close,
+    bbLength
+)
+
+float bbDeviation = (
+    ta.stdev(close, bbLength) *
+    bbMultiplier
+)
+
+float bbUpper = (
+    bbMiddle +
+    bbDeviation
+)
+
+float bbLower = (
+    bbMiddle -
+    bbDeviation
+)
+
+plot(
+    showBollinger ? bbUpper : na,
+    title = "布林上軌",
+    color = color.blue,
+    linewidth = 1
+)
+
+plot(
+    showBollinger ? bbMiddle : na,
+    title = "布林中軌",
+    color = color.orange,
+    linewidth = 2
+)
+
+plot(
+    showBollinger ? bbLower : na,
+    title = "布林下軌",
+    color = color.blue,
+    linewidth = 1
+)
+
+//====================================================
+// 10. 波段高低點與支撐壓力
+//====================================================
+
+float pivotHigh = ta.pivothigh(
+    high,
+    activePivotBars,
+    activePivotBars
+)
+
+float pivotLow = ta.pivotlow(
+    low,
+    activePivotBars,
+    activePivotBars
+)
+
+var float resistance1 = na
+var float support1 = na
+
+if not na(pivotHigh)
+    resistance1 := pivotHigh
+
+if not na(pivotLow)
+    support1 := pivotLow
+
+plot(
+    showSupportResistance ? resistance1 : na,
+    title = "壓力",
+    color = color.red,
+    linewidth = 2,
+    style = plot.style_stepline
+)
+
+plot(
+    showSupportResistance ? support1 : na,
+    title = "支撐",
+    color = color.green,
+    linewidth = 2,
+    style = plot.style_stepline
+)
+
+//====================================================
+// 11. 成交量分析
+//====================================================
+
+float averageVolume = ta.sma(
+    volume,
+    activeVolumeLength
+)
+
+bool strongVolume = (
+    not na(averageVolume) and
+    averageVolume > 0 and
+    volume >= activeStrongVolumeRatio * averageVolume
+)
+
+//====================================================
+// 12. 訊號判斷基準
+//====================================================
+//
+// 與指標版一致：使用前一根已確認的支撐壓力，
+// 避免當根新轉折回頭改變判斷基準（回測也是這樣做的）。
+
+float signalResistance = resistance1[1]
+float signalSupport = support1[1]
+
+float zoneFraction = (
+    activeZonePercentage /
+    100.0
+)
+
+//====================================================
+// 13. 四種訊號
+//====================================================
+
+bool breakout = (
+    not na(signalResistance) and
+    close > signalResistance and
+    close[1] <= signalResistance and
+    strongVolume and
+    close > bbMiddle
+)
+
+bool breakdown = (
+    not na(signalSupport) and
+    close < signalSupport and
+    close[1] >= signalSupport and
+    strongVolume and
+    close < bbMiddle
+)
+
+bool touchesSupportZone = (
+    not na(signalSupport) and
+    low <= signalSupport * (1.0 + zoneFraction) and
+    high >= signalSupport * (1.0 - zoneFraction)
+)
+
+bool touchesResistanceZone = (
+    not na(signalResistance) and
+    high >= signalResistance * (1.0 - zoneFraction) and
+    low <= signalResistance * (1.0 + zoneFraction)
+)
+
+bool supportBounce = (
+    touchesSupportZone and
+    low <= bbLower and
+    close >= signalSupport and
+    close > open
+)
+
+bool resistanceRejection = (
+    touchesResistanceZone and
+    high >= bbUpper and
+    close <= signalResistance and
+    close < open
+)
+
+//====================================================
+// 14. 進場
+//====================================================
+
+bool inDateRange = (
+    not useDateFilter or
+    (time >= startDate and time <= endDate)
+)
+
+bool longSignal = (
+    (useBreakoutLong and breakout) or
+    (useSupportBounceLong and supportBounce)
+)
+
+bool shortSignal = (
+    (useResistanceRejectionShort and resistanceRejection) or
+    (useBreakdownShort and breakdown)
+)
+
+if inDateRange and longSignal and strategy.position_size == 0
+    strategy.entry(
+        "多",
+        strategy.long
+    )
+
+if inDateRange and shortSignal and strategy.position_size == 0
+    strategy.entry(
+        "空",
+        strategy.short
+    )
+
+//====================================================
+// 15. 出場
+//====================================================
+
+float atrValue = ta.atr(atrLength)
+
+// 記錄進場當根，用來數持有根數。
+var int entryBarIndex = na
+
+if strategy.position_size != 0 and strategy.position_size[1] == 0
+    entryBarIndex := bar_index
+
+if strategy.position_size == 0
+    entryBarIndex := na
+
+bool heldLongEnough = (
+    not na(entryBarIndex) and
+    bar_index - entryBarIndex >= holdBars
+)
+
+// 用時鐘時間而不是 session.islastbar：在最後一根送單，
+// 成交價會落在下一個時段的開盤，等於抱過夜跳空。
+int nowHHMM = hour * 100 + minute
+
+bool pastDayCutoff = (
+    nowHHMM >= dayCloseHHMM and
+    nowHHMM < 1500
+)
+
+bool pastNightCutoff = (
+    nowHHMM >= nightCloseHHMM and
+    nowHHMM < 845
+)
+
+bool isSessionEnd = (
+    closeAtSessionEnd and
+    (pastDayCutoff or pastNightCutoff)
+)
+
+if strategy.position_size != 0 and (heldLongEnough or isSessionEnd)
+    strategy.close_all(
+        comment = heldLongEnough ? "持有到期" : "時段結束"
+    )
+
+// 停損停利：預設關閉，開啟後即偏離已驗證的設定。
+if strategy.position_size != 0 and (useStopLoss or useTakeProfit)
+    float entryPrice = strategy.position_avg_price
+    bool isLong = strategy.position_size > 0
+
+    float stopPrice = na
+    float limitPrice = na
+
+    if useStopLoss and not na(atrValue)
+        stopPrice := isLong
+             ? entryPrice - stopLossAtr * atrValue
+             : entryPrice + stopLossAtr * atrValue
+
+    if useTakeProfit and not na(atrValue)
+        limitPrice := isLong
+             ? entryPrice + takeProfitAtr * atrValue
+             : entryPrice - takeProfitAtr * atrValue
+
+    strategy.exit(
+        "出場",
+        from_entry = isLong ? "多" : "空",
+        stop = stopPrice,
+        limit = limitPrice
+    )
+
+//====================================================
+// 16. 圖表訊號標記
+//====================================================
+
+plotshape(
+    showSignals and useResistanceRejectionShort and resistanceRejection,
+    title = "壓力遇阻",
+    style = shape.labeldown,
+    location = location.abovebar,
+    color = color.orange,
+    textcolor = color.white,
+    text = "壓力遇阻",
+    size = size.tiny
+)
+
+plotshape(
+    showSignals and useBreakdownShort and breakdown,
+    title = "帶量跌破",
+    style = shape.labeldown,
+    location = location.abovebar,
+    color = color.red,
+    textcolor = color.white,
+    text = "帶量跌破",
+    size = size.tiny
+)
+
+plotshape(
+    showSignals and useBreakoutLong and breakout,
+    title = "帶量突破",
+    style = shape.labelup,
+    location = location.belowbar,
+    color = color.lime,
+    textcolor = color.black,
+    text = "帶量突破",
+    size = size.tiny
+)
+
+plotshape(
+    showSignals and useSupportBounceLong and supportBounce,
+    title = "支撐止跌",
+    style = shape.labelup,
+    location = location.belowbar,
+    color = color.green,
+    textcolor = color.white,
+    text = "支撐止跌",
+    size = size.tiny
+)

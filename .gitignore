@@ -50,3 +50,10 @@ test-results/
 playwright-report/
 
 .worktrees/
+
+# Research data and environment. The tick archive here runs to 13G and the
+# built artefacts are large enough that a single `git add -A` would try to
+# commit all of it; only the code under tmf-research-agent/ belongs in git.
+tmf-research-agent/data/
+tmf-research-agent/phase5-holdout/
+tmf-research-agent/.venv/

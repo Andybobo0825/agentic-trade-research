@@ -36,6 +36,39 @@ def load(paths: list[Path]) -> list[dict]:
     return rows
 
 
+def simulate_combo(rows: list[dict], specs: list[tuple[int, str, str, int]], *,
+                   hold_minutes: int, cost: float) -> list[dict]:
+    """Several signals sharing one position slot, as the Pine strategy does.
+
+    Enabling two signals is not the same as running two strategies: whichever
+    fires first occupies the slot and the other is skipped, so the combined
+    result is not the sum of the parts.
+    """
+    horizon = HOLD_KEY.get(hold_minutes, "sclose")
+    wanted = {(tf, sig, var, direction) for tf, sig, var, direction in specs}
+    candidates = [
+        row for row in rows
+        if row["kind"] == "signal" and horizon in row["deltas"]
+        and (row["timeframe"], row["signal"], row["variant"],
+             row["direction"]) in wanted
+    ]
+    candidates.sort(key=lambda row: row["when"])
+    trades: list[dict] = []
+    blocked_until: dict[tuple[str, str], datetime] = {}
+    for row in candidates:
+        key = (row["trading_date"], row["session"])
+        when = datetime.fromisoformat(row["when"])
+        if key in blocked_until and when < blocked_until[key]:
+            continue
+        blocked_until[key] = when + timedelta(minutes=hold_minutes)
+        trades.append({
+            "when": when, "period": row["period"], "session": row["session"],
+            "trading_date": row["trading_date"], "signal": row["signal"],
+            "net": row["direction"] * row["deltas"][horizon] - cost,
+        })
+    return trades
+
+
 def simulate(rows: list[dict], *, timeframe: int, signal: str, variant: str,
              direction: int, hold_minutes: int, cost: float,
              ) -> list[dict]:
@@ -137,6 +170,28 @@ def main(argv: list[str]) -> int:
     cost = float(flags.get("cost", 3.0))
     point_value = float(flags.get("point-value", 50.0))
     hold = int(flags.get("hold", 240))
+
+    if "combo" in flags:
+        # e.g. --combo 15:breakdown:orig:-1,15:breakout:orig:1
+        specs = []
+        for part in flags["combo"].split(","):
+            tf, signal, variant, direction = part.split(":")
+            specs.append((int(tf), signal, variant, int(direction)))
+        trades = simulate_combo(rows, specs, hold_minutes=hold, cost=cost)
+        print(f"載入 {len(rows):,} 列事件｜持有 {hold} 分鐘｜成本 {cost} 點／筆")
+        report(f"組合：{flags['combo']}", trades, point_value)
+        by_month: dict[str, list[dict]] = defaultdict(list)
+        for trade in trades:
+            by_month[trade["trading_date"][:7]].append(trade)
+        print(f"\n  月別分布（看獲利是分散還是集中在單一個月）")
+        print(f"  {'月份':<10}{'交易':>6}{'淨點數':>11}{'累計':>11}")
+        cumulative = 0.0
+        for month in sorted(by_month):
+            stats = metrics(by_month[month])
+            cumulative += stats["net"]
+            print(f"  {month:<10}{stats['trades']:>6}{stats['net']:>+11.0f}"
+                  f"{cumulative:>+11.0f}")
+        return 0
 
     if "signal" in flags:
         configs = [(int(flags.get("tf", 15)), flags["signal"],

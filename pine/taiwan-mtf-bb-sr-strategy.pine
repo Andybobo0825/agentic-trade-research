@@ -32,10 +32,12 @@ strategy(
     "台指 MTF BB-SR 策略",
     shorttitle = "台指 MTF 策略",
     overlay = true,
-    initial_capital = 100000,
+    initial_capital = 5000000,
     default_qty_type = strategy.fixed,
     default_qty_value = 1,
     pyramiding = 0,
+    margin_long = 0,
+    margin_short = 0,
     calc_on_every_tick = false,
     process_orders_on_close = false,
     max_labels_count = 500,
@@ -499,18 +501,18 @@ if inDateRange and shortSignal and strategy.position_size == 0
 
 float atrValue = ta.atr(atrLength)
 
-// 記錄進場當根，用來數持有根數。
-var int entryBarIndex = na
-
-if strategy.position_size != 0 and strategy.position_size[1] == 0
-    entryBarIndex := bar_index
-
-if strategy.position_size == 0
-    entryBarIndex := na
+// 用內建的未平倉紀錄數持有根數，不自己維護狀態變數：
+// 自維護的版本只要有一次沒歸零，部位就永遠不平，
+// 之後所有訊號都會被「同時只持一口」的條件擋掉。
+int barsHeld = (
+    strategy.opentrades > 0
+         ? bar_index - strategy.opentrades.entry_bar_index(strategy.opentrades - 1)
+         : na
+)
 
 bool heldLongEnough = (
-    not na(entryBarIndex) and
-    bar_index - entryBarIndex >= holdBars
+    not na(barsHeld) and
+    barsHeld >= holdBars
 )
 
 // 用時鐘時間而不是 session.islastbar：在最後一根送單，

@@ -167,6 +167,50 @@ allowed to claim:
 Gate B's number is reported with the verdict either way. It is not permitted
 to be recomputed, resampled, or reinterpreted after the holdout is seen.
 
+## Amendment 2 (2026-08-06) — the 15-minute aggregation rule was ambiguous
+
+**Written before any holdout data was processed.** The holdout window
+2020-03-02..2024-07-26 has still never been run through a signal program.
+
+**What happened:** Gate A failed at 81.0% / 88.7% against a 95% threshold. The
+cause is a sentence I wrote badly, not an implementation error. The Data
+section says a 15-minute bar "is emitted only if the full 15 minutes fall
+inside one session". I meant session containment — the whole window must lie
+within one trading session. It was implemented as data completeness — all
+fifteen constituent 1-minute bars must exist — and both are fair readings.
+
+The two readings are not close in effect. Shioaji's 1-minute kbars routinely
+omit minutes: across 20 sampled gate days the mean is 1,061.6 minutes against
+1,140 for a complete day, and 12 of those 20 days are short. Under the
+completeness reading each missing minute deletes an entire 15-minute bar,
+which shifts the pivot and Bollinger history and changes which signals fire.
+The tick path has no such rule — it builds a bar from whatever ticks fall in
+the window.
+
+**The rule, stated so it cannot be read two ways:**
+
+- A 15-minute bucket is emitted when the whole window [t, t+15min) lies inside
+  one resolved session. This is the only containment test.
+- Its OHLC is built from whichever 1-minute bars are present in that window:
+  open from the earliest present minute, close from the latest present minute,
+  high and low the extremes across present minutes, volume their sum.
+- A bucket containing no 1-minute bars at all emits nothing.
+- A window not wholly inside one session is dropped, never padded, as before.
+
+**Binding limit on this amendment:** this is the **only** change to bar
+construction, bar alignment, or aggregation that will be made in this study.
+Gate A is re-run once under this rule. If it still fails, the answer is that
+the bar path cannot reproduce the tick path, the holdout does not run, and the
+project's conclusion is that the candidate cannot be validated against history.
+No third reading of this rule will be entertained.
+
+**Cost, stated rather than buried:** this is the second amendment to a
+pre-registered protocol. A protocol amended twice carries less weight than one
+written once and left alone, and a reader is entitled to discount it. Both
+amendments were forced by facts about the data — when an instrument began
+trading, and what a vendor's bars contain — rather than by any result, and the
+holdout remains untouched. That is the mitigation, not a refutation.
+
 ## Appendix — crash months
 
 Computed 2026-08-06, **before any holdout signal was generated**, from daily

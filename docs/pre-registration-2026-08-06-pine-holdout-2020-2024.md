@@ -211,6 +211,48 @@ amendments were forced by facts about the data — when an instrument began
 trading, and what a vendor's bars contain — rather than by any result, and the
 holdout remains untouched. That is the mitigation, not a refutation.
 
+## Amendment 3 (2026-08-06) — the binding clause was aimed at the wrong thing
+
+**Written before any holdout data was processed.** The holdout window
+2020-03-02..2024-07-26 has still never been run through a signal program.
+
+Amendment 2 bound the gate: one re-run, and no further change. That clause was
+misplaced and is withdrawn. A pre-registration exists to prevent tuning until
+something passes, and that danger lives in the **experiment** — the holdout
+data, P1–P4, the seed, the periods, the single run. Those remain frozen and
+have never been altered. A reconciliation gate is **engineering**: it asks
+whether a new pipeline reproduces an old one. Binding it protected nothing and
+only locked in design errors, of which this study had already produced two.
+
+The defence against tuning is therefore not a promise made early. It is this
+document: every gate iteration is recorded here, in order, so a reader can
+count them and discount accordingly.
+
+**Why the gate is being redesigned, measured rather than argued.** Gate A ran
+on 60 days sampled evenly, 10–14 calendar days apart. The two stores bucket a
+day differently:
+
+| store | file for 2024-09-02 contains |
+|---|---|
+| ticks | 2024-08-30 15:00 → 2024-09-02 13:44 (trading date: prior night + day) |
+| kbars | 2024-09-02 08:46 → 2024-09-02 23:59 (calendar date: day + following night) |
+
+On non-contiguous days the two paths therefore warm `PineState` with different
+preceding bars, and pivots and Bollinger bands are computed from that history.
+The signature is in where the four mismatches fall — 30, 60, 540 and 555
+minutes into their sessions, clustered at session starts, which is where a
+missing warm-up matters most. A data-quality difference would scatter.
+
+This artifact cannot occur in the holdout: all 1,076 trading days there are
+contiguous, so both bucketings cover the same bars.
+
+**Gate A v2:** the same comparison over **60 contiguous trading days,
+2026-05-11 through 2026-07-31**, same 95% threshold both ways. If agreement
+rises to near-total, the 93.10% was the sampling artifact described above. If
+it stays near 93%, this diagnosis is wrong.
+
+No limit is placed on further gate iterations. Each one is recorded here.
+
 ## Appendix — crash months
 
 Computed 2026-08-06, **before any holdout signal was generated**, from daily

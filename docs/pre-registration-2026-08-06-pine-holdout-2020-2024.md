@@ -253,6 +253,25 @@ it stays near 93%, this diagnosis is wrong.
 
 No limit is placed on further gate iterations. Each one is recorded here.
 
+### Gate A iteration log
+
+| run | days | left agreement | right agreement | result |
+|---|---|---|---|---|
+| v1 | 60 sampled, 10–14 days apart | 81.03% | 88.68% | FAIL — aggregation read as completeness (Amendment 2) |
+| v2 | 60 sampled, corrected aggregation | 93.10% | 100.00% | FAIL |
+| v3 | 60 contiguous, 2026-05-11..2026-07-31 | 91.67% | 100.00% | FAIL — **the contiguity diagnosis in this amendment is refuted** |
+
+The contiguity explanation above did not survive its own test: agreement fell
+rather than rose. Recorded here rather than revised away.
+
+What the same measurement did establish is narrower and firmer. At all four v3
+mismatch bars the 15-minute OHLC is byte-identical on both paths
+(2026-07-27 09:00 O=43697 H=43750 L=43469 C=43534, and three others). The
+vendor's bars and the signal bar are therefore not the cause. `bar-only` has
+been 0 in every run: the bar path never invents a signal, only misses some,
+which points at the bar history that PineState is fed rather than at the data.
+That is a defect in this project's code, and the next iteration hunts it.
+
 ## Appendix — crash months
 
 Computed 2026-08-06, **before any holdout signal was generated**, from daily

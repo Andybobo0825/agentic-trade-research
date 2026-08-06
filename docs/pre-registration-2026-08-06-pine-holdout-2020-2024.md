@@ -110,6 +110,63 @@ The holdout is computed **once**. No re-running with a different seed, cost
 assumption, bar-alignment rule, or period split after seeing a result. Any
 such change makes the result exploratory and it is reported as exploratory.
 
+## Amendment 1 (2026-08-06) — the instrument changes to TXF
+
+**Written before any holdout data was processed.** The holdout window
+2020-03-02..2024-07-26 has still never been run through a signal program. What
+follows is forced by a fact about the instrument, not by a result.
+
+**The fact:** 微型臺指期貨 (TMF) began trading on **2024-07-29**. The tick
+dataset the original result was computed on starts that day because that is
+the instrument's first trading day, not because of a backfill limit. The
+candidate signal was therefore validated on an instrument with two years of
+existence, and a 2020–2024 holdout on TMF cannot exist. Shioaji confirms this
+from the other side: TMF returns zero kbars for every historical date.
+
+**The change:** the holdout runs on **TXF (臺股期貨)**, continuous near-month
+alias TXFR1, 1-minute bars, 2020-03-02 onward. Everything else in this
+document — candidate, horizons, cost, periods, control construction, seed,
+P1–P4, the crash-month list, the no-fallbacks rule and the single-run rule —
+stands unchanged. The crash-month appendix was already computed from TX daily
+closes, so it needs no revision.
+
+**What this costs, stated plainly:** TXF and TMF track the same index and
+their price paths are near-identical, but they are different contracts with
+different volume. `PineState`'s 帶量 test compares bar volume against its own
+rolling SMA, so it is a relative measure and may transfer — may. That is an
+assumption, and the gate below exists to price it rather than assume it.
+
+### The reconciliation gate is replaced by two separate checks
+
+The original single gate compared a TXF bar path against a TMF tick baseline.
+That confounds two variables, and a number that agreed would have agreed for
+reasons nobody could name. It is void and replaced.
+
+Both checks run on the same sample: **60 trading days drawn evenly across
+2024-07-29 to the present**, the only window where TMF exists.
+
+**Gate A — granularity.** TXF bar path vs TXF tick path, same days, same
+instrument. This isolates the effect of reading 1-minute bars instead of
+ticks. Compared signal by signal, not in aggregate: aggregate means can agree
+while the underlying signals differ.
+
+*Pass requires:* at least 95% of tick-path signals have a bar-path signal on
+the same 15-minute bar, and at least 95% the other way. Below that, the bar
+path is not the same signal and the holdout does not run.
+
+**Gate B — instrument portability.** TMF tick path vs TXF tick path, same
+days, same granularity. This isolates the effect of changing contract. It is
+not a pass/fail gate on the pipeline; it decides what the holdout result is
+allowed to claim:
+
+| Agreement | What a TXF holdout result may claim |
+|---|---|
+| ≥ 80% | It speaks to the original TMF result |
+| < 80% | It is a separate question about a different contract. The original TMF result remains unvalidated by history, and must be reported as such |
+
+Gate B's number is reported with the verdict either way. It is not permitted
+to be recomputed, resampled, or reinterpreted after the holdout is seen.
+
 ## Appendix — crash months
 
 Computed 2026-08-06, **before any holdout signal was generated**, from daily

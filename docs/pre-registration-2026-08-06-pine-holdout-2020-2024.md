@@ -295,6 +295,19 @@ pipeline under the conditions the holdout will actually meet.
 | v1 | 60 sampled, 10–14 days apart | 81.03% | 88.68% | FAIL — aggregation read as completeness (Amendment 2) |
 | v2 | 60 sampled, corrected aggregation | 93.10% | 100.00% | FAIL |
 | v3 | 60 contiguous, 2026-05-11..2026-07-31 | 91.67% | 100.00% | FAIL — **the contiguity diagnosis in this amendment is refuted** |
+| v4 | v3 days, source-minute intersection (Amendment 4) | **100.00%** | **100.00%** | **PASS** |
+
+v4 detail: 55 signals on each side, all 55 matched, zero mismatches in either
+direction. Across the entire bar sequence the only residual difference is
+volume at index 95 (2026-05-12 DAY 13:30–13:45): 6,882 from ticks against
+6,886 summed from vendor kbars, with OHLC identical. Tick counting and vendor
+volume are not the same quantity; it moves no signal.
+
+Gate B on the same contiguous window: 94.44% / 89.47% (18 TMF, 19 TXF, 17
+matched), above the 80% claim threshold and better than the 85.00% / 80.95%
+measured on the sampled days.
+
+**Both gates pass. The holdout may run, once.**
 
 The contiguity explanation above did not survive its own test: agreement fell
 rather than rose. Recorded here rather than revised away.

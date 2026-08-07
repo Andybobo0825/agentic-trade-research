@@ -253,6 +253,41 @@ it stays near 93%, this diagnosis is wrong.
 
 No limit is placed on further gate iterations. Each one is recorded here.
 
+## Amendment 4 (2026-08-07) — Friday nights end at midnight, and the gate must say so
+
+**Written before any holdout data was processed.**
+
+**The finding.** The kbar store buckets by calendar date; the tick store buckets
+by trading date. A night session runs 15:00 to 05:00, so it straddles midnight
+and lands in two calendar files. Monday through Thursday both halves are
+present, because the following calendar day is itself a trading day that was
+pulled. Friday nights are not: their 00:00-05:00 tail belongs to a Saturday,
+and Shioaji returns Saturday kbars **only for 2026** — 2020-06-13, 2021-06-12,
+2022-06-11, 2023-06-10, 2024-06-08 and 2025-06-14 all return zero bars, while
+2026-06-13, 2026-07-18 and 2026-07-25 return 294, 297 and 301.
+
+**Consequence, accepted as a documented limitation.** Across the holdout window
+the final five hours of every Friday night session do not exist and cannot be
+obtained. That is roughly 5% of all bars. Signals that would have fired in
+those hours are absent, and the truncation also shortens the rolling history
+PineState carries into the following session.
+
+**Day-only was considered and rejected.** Restricting the study to day sessions
+would remove the problem entirely, but the candidate fires 159 times at night
+against 107 by day across the committed event dumps — 59.8% nocturnal, n=266.
+A day-only study would discard most of the phenomenon in order to tidy up the
+data, which is the wrong trade.
+
+**Gate rule, changed.** Gate A compares the two paths **only over minutes where
+both paths have source data**. The 2026 gate window does have Saturday kbars,
+and using them would make the gate measure a data condition the holdout will
+never enjoy — a gate that passes for a reason the real run cannot reproduce is
+worse than one that fails. Both paths are therefore held to the intersection.
+
+This changes the gate, not the holdout. The holdout was always going to run on
+kbars and always had this gap; what changes is that the gate now tests the
+pipeline under the conditions the holdout will actually meet.
+
 ### Gate A iteration log
 
 | run | days | left agreement | right agreement | result |

@@ -309,6 +309,28 @@ measured on the sampled days.
 
 **Both gates pass. The holdout may run, once.**
 
+## Result — run once, 2026-08-07
+
+`scripts/pine_holdout_verdict.py` over `output/pine-holdout-2020-2024.ndjson`
+(1,076 trading days, 1,148,889 one-minute bars, 1,278 candidate signals).
+Report: `output/pine-holdout-verdict-2026-08-07.txt`.
+
+| criterion | 60m | 240m | sclose | required |
+|---|---|---|---|---|
+| P1 | 3/9 | 2/9 | 2/9 | ≥7/9 |
+| P3 | 1/9 | 0/9 | 1/9 | ≥7/9 |
+| P4 | 8/9 | 8/9 | 8/9 | ≥6/9 |
+
+**Verdict: FAIL at every horizon**, and on the wrong side of zero rather than
+merely short of it. Pooled 95% CI of (signal − control) at 240m is plain
+`[-9.94, -1.97]`, at session close `[-9.96, -1.21]`: the candidate loses to
+random same-direction entry with significance. Excluding the three crash
+months changes nothing.
+
+Per the verdict table above, the 2024–2026 result was selection noise, the
+signal is retired, and the project's conclusion is written as negative —
+`docs/conclusion-2026-08-07.md`.
+
 The contiguity explanation above did not survive its own test: agreement fell
 rather than rose. Recorded here rather than revised away.
 

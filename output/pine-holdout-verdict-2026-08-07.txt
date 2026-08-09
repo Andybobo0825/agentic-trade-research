@@ -1,0 +1,110 @@
+# Pine TXF holdout verdict
+
+Protocol: `docs/pre-registration-2026-08-06-pine-holdout-2020-2024.md`
+
+- Input: ../output/pine-holdout-2020-2024.ndjson
+- Holdout: 2020-03-02..2024-07-26
+- Candidate: timeframe 15, `rejection`, `orig`, SHORT
+- Horizons: 60, 240, sclose; round-trip cost: 3.0 points
+- Bootstrap: 10,000 resamples; seed: 20260806
+- Periods: 2020H1 (2020-03-02..2020-06-30), 2020H2 (2020-07-01..2020-12-31), 2021H1 (2021-01-01..2021-06-30), 2021H2 (2021-07-01..2021-12-31), 2022H1 (2022-01-01..2022-06-30), 2022H2 (2022-07-01..2022-12-31), 2023H1 (2023-01-01..2023-06-30), 2023H2 (2023-07-01..2023-12-31), 2024H1 (2024-01-01..2024-07-26)
+- Fixed crash months excluded for the second P2 check: 2020-03, 2021-05, 2022-06
+
+Controls are the stored `kind=random` rows: uniform session moments, reported both plainly and matched by period × session × 30-minute-of-session bucket.
+
+## Horizon 60
+
+All means and differences below are net after the 3.0-point cost.
+
+| period | signal N | control N | matched N | signal mean | control plain | control time-matched | Δ signal−plain | Δ signal−matched |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2020H1 | 77 | 3257 | 77 | +0.25 | -1.38 | -2.43 | +1.63 | +2.68 |
+| 2020H2 | 145 | 5149 | 145 | -0.88 | -2.36 | -1.73 | +1.49 | +0.85 |
+| 2021H1 | 127 | 4630 | 127 | -11.36 | -1.12 | -2.03 | -10.25 | -9.33 |
+| 2021H2 | 165 | 5108 | 165 | -4.87 | -2.69 | -2.62 | -2.18 | -2.24 |
+| 2022H1 | 129 | 4670 | 129 | -1.70 | -1.51 | +0.37 | -0.18 | -2.07 |
+| 2022H2 | 140 | 5151 | 140 | -2.34 | -1.78 | -3.14 | -0.56 | +0.79 |
+| 2023H1 | 158 | 4509 | 158 | -7.48 | -3.62 | -5.12 | -3.86 | -2.36 |
+| 2023H2 | 154 | 5032 | 154 | -7.65 | -2.63 | -2.16 | -5.02 | -5.49 |
+| 2024H1 | 183 | 5389 | 183 | -2.21 | -5.40 | -5.73 | +3.19 | +3.52 |
+
+### Criteria
+
+- **P1** signal beats plain control in 3/9 and time-matched control in 4/9; joint 3/9 (required ≥7): **FAIL**
+- **P2** pooled 95% CI, plain: `[-4.33, +0.56]`; time-matched: `[-3.97, +0.91]`; both exclude zero: **FAIL**
+- **P3** signal mean net > 0 in 1/9 periods (required ≥7): **FAIL**
+- **P4** signal N ≥ 100 in 8/9 periods (required ≥6): **PASS**
+
+### P2 with crash months excluded
+
+- Plain pooled 95% CI: `[-3.58, +1.31]`
+- Time-matched pooled 95% CI: `[-3.34, +1.52]`
+- Both exclude zero: **FAIL**
+
+**Horizon verdict: FAIL**
+
+## Horizon 240
+
+All means and differences below are net after the 3.0-point cost.
+
+| period | signal N | control N | matched N | signal mean | control plain | control time-matched | Δ signal−plain | Δ signal−matched |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2020H1 | 77 | 3257 | 77 | -6.17 | +1.64 | +0.13 | -7.81 | -6.30 |
+| 2020H2 | 145 | 5149 | 145 | -2.23 | -3.29 | -2.63 | +1.06 | +0.41 |
+| 2021H1 | 127 | 4630 | 127 | -15.35 | +0.17 | -1.30 | -15.53 | -14.05 |
+| 2021H2 | 165 | 5108 | 165 | -12.72 | -4.11 | -4.18 | -8.61 | -8.54 |
+| 2022H1 | 129 | 4670 | 129 | -0.41 | +1.76 | +2.91 | -2.17 | -3.32 |
+| 2022H2 | 140 | 5151 | 140 | -5.64 | -0.41 | -2.69 | -5.22 | -2.95 |
+| 2023H1 | 158 | 4509 | 158 | -11.04 | -5.10 | -8.00 | -5.94 | -3.05 |
+| 2023H2 | 154 | 5032 | 154 | -12.34 | -1.79 | -0.91 | -10.55 | -11.44 |
+| 2024H1 | 183 | 5389 | 183 | -7.54 | -8.58 | -10.99 | +1.04 | +3.45 |
+
+### Criteria
+
+- **P1** signal beats plain control in 2/9 and time-matched control in 2/9; joint 2/9 (required ≥7): **FAIL**
+- **P2** pooled 95% CI, plain: `[-9.94, -1.97]`; time-matched: `[-8.63, -0.91]`; both exclude zero: **PASS**
+- **P3** signal mean net > 0 in 0/9 periods (required ≥7): **FAIL**
+- **P4** signal N ≥ 100 in 8/9 periods (required ≥6): **PASS**
+
+### P2 with crash months excluded
+
+- Plain pooled 95% CI: `[-8.41, -0.70]`
+- Time-matched pooled 95% CI: `[-7.35, +0.48]`
+- Both exclude zero: **FAIL**
+
+**Horizon verdict: FAIL**
+
+## Horizon sclose
+
+All means and differences below are net after the 3.0-point cost.
+
+| period | signal N | control N | matched N | signal mean | control plain | control time-matched | Δ signal−plain | Δ signal−matched |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2020H1 | 77 | 3257 | 77 | -3.03 | +2.05 | +2.92 | -5.07 | -5.95 |
+| 2020H2 | 145 | 5149 | 145 | -1.37 | -3.83 | -2.25 | +2.46 | +0.88 |
+| 2021H1 | 127 | 4630 | 127 | -15.00 | -1.34 | -1.15 | -13.66 | -13.85 |
+| 2021H2 | 165 | 5108 | 165 | -12.89 | -5.47 | -5.46 | -7.43 | -7.44 |
+| 2022H1 | 129 | 4670 | 129 | +10.60 | +3.83 | +3.28 | +6.76 | +7.32 |
+| 2022H2 | 140 | 5151 | 140 | -6.32 | -2.25 | -3.70 | -4.07 | -2.63 |
+| 2023H1 | 158 | 4509 | 158 | -11.61 | -6.75 | -8.43 | -4.86 | -3.18 |
+| 2023H2 | 154 | 5032 | 154 | -21.10 | -3.27 | -3.18 | -17.83 | -17.91 |
+| 2024H1 | 183 | 5389 | 183 | -13.32 | -10.84 | -14.46 | -2.48 | +1.15 |
+
+### Criteria
+
+- **P1** signal beats plain control in 2/9 and time-matched control in 3/9; joint 2/9 (required ≥7): **FAIL**
+- **P2** pooled 95% CI, plain: `[-9.96, -1.21]`; time-matched: `[-9.00, -0.10]`; both exclude zero: **PASS**
+- **P3** signal mean net > 0 in 1/9 periods (required ≥7): **FAIL**
+- **P4** signal N ≥ 100 in 8/9 periods (required ≥6): **PASS**
+
+### P2 with crash months excluded
+
+- Plain pooled 95% CI: `[-9.02, -0.29]`
+- Time-matched pooled 95% CI: `[-7.93, +0.63]`
+- Both exclude zero: **FAIL**
+
+**Horizon verdict: FAIL**
+
+## Overall verdict
+
+**FAIL**

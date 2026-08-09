@@ -80,6 +80,10 @@ def test_only_runtime(root: Path) -> tuple[FrozenLiveRuntime, str]:
     return runtime, checksum
 
 
+# This is a fixture-style helper imported by tests, not a pytest test itself.
+test_only_runtime.__test__ = False  # type: ignore[attr-defined]
+
+
 def runner_for(runtime: FrozenLiveRuntime, checksum: str) -> LiveResearchRunner:
     return LiveResearchRunner(
         runtime=runtime,

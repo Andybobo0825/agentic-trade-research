@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import chdir
@@ -13,6 +14,66 @@ SIDECAR_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
+    def test_build_calendar_restricts_evidence_to_named_dataset(self) -> None:
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "manifest.ndjson").write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "segment_id": "backfill-kbar-1m-TXFR1-2020-03-06-2020-03-06",
+                            "event_type": "historical-kbar-1m",
+                            "dataset_version": "tx-holdout-kbars-v1",
+                            "minimum_event_time": "2020-03-06T08:46:00+08:00",
+                            "maximum_event_time": "2020-03-06T23:59:00+08:00",
+                        },
+                        {
+                            "segment_id": "backfill-kbar-1m-TXFR1-2020-03-09-2020-03-09",
+                            "event_type": "historical-kbar-1m",
+                            "dataset_version": "tx-holdout-kbars-v1",
+                            "minimum_event_time": "2020-03-09T08:46:00+08:00",
+                            "maximum_event_time": "2020-03-09T13:44:00+08:00",
+                        },
+                        {
+                            "segment_id": "backfill-tick-TMFR1-2020-03-06",
+                            "event_type": "historical-tick",
+                            "dataset_version": "dataset-v1",
+                            "minimum_event_time": "2020-03-05T15:00:00+08:00",
+                            "maximum_event_time": "2020-03-06T13:44:00+08:00",
+                        },
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out = root / "calendar.json"
+
+            status = main(
+                [
+                    "build-calendar",
+                    "--data-root", str(root),
+                    "--dataset-version", "tx-holdout-kbars-v1",
+                    "--start-date", "2020-03-06",
+                    "--end-date", "2020-03-09",
+                    "--out", str(out),
+                ],
+                stdout=output,
+            )
+
+            self.assertEqual(status, 0, output.getvalue())
+            payload = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [entry["trading_date"] for entry in payload["days"]],
+                ["2020-03-06", "2020-03-09"],
+            )
+            self.assertEqual(
+                payload["days"][1]["night_open"],
+                "2020-03-06T15:00:00",
+            )
+        self.assertIn("CALENDAR WRITTEN days=2", output.getvalue())
+
     def test_phase5_status_fails_closed_offline_when_inputs_are_missing(self) -> None:
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from tmf_research.domain.sessions import TradingCalendar, TradingDay
+from tmf_research.domain.sessions import (
+    SessionResolution,
+    TradingCalendar,
+    TradingDay,
+)
+from tmf_research.features.context_builder import ResearchBuildSpec
 from tmf_research.processing.session_resolver import SessionResolver
 
 
@@ -94,6 +100,93 @@ class SessionResolverTests(unittest.TestCase):
         self.assertTrue(before_close.is_expiry)
         self.assertEqual(close.session, "CLOSED")
         self.assertEqual(after_close.session, "CLOSED")
+
+    def test_real_calendar_matches_linear_first_match_across_expiry_week(self) -> None:
+        calendar_path = Path(__file__).resolve().parents[2] / "data" / "calendar-v2.json"
+        calendar = ResearchBuildSpec(calendar=calendar_path).trading_calendar()
+        expiry_index = next(
+            index
+            for index, day in enumerate(calendar.days)
+            if day.is_expiry and 2 <= index < len(calendar.days) - 2
+        )
+        expiry_date = calendar.days[expiry_index].trading_date
+        week_start = expiry_date - timedelta(days=expiry_date.weekday())
+        start = datetime.combine(week_start, time(0), tzinfo=calendar.zone)
+        end = datetime.combine(
+            week_start + timedelta(days=5),
+            time(6),
+            tzinfo=calendar.zone,
+        )
+
+        samples = {
+            start + timedelta(minutes=offset)
+            for offset in range(int((end - start).total_seconds() // 60) + 1)
+        }
+        for boundary in (
+            datetime.combine(week_start, time(15), tzinfo=calendar.zone),
+            datetime.combine(week_start + timedelta(days=1), time(0), tzinfo=calendar.zone),
+            datetime.combine(week_start + timedelta(days=1), time(5), tzinfo=calendar.zone),
+            datetime.combine(week_start + timedelta(days=1), time(8, 45), tzinfo=calendar.zone),
+        ):
+            samples.update(
+                boundary + timedelta(seconds=second)
+                for second in range(-120, 121)
+            )
+
+        resolver = SessionResolver(calendar)
+        for timestamp in sorted(samples):
+            self.assertEqual(
+                resolver.resolve(timestamp),
+                _linear_first_match(calendar, timestamp),
+                timestamp.isoformat(),
+            )
+
+
+def _linear_first_match(
+    calendar: TradingCalendar,
+    value: datetime,
+) -> SessionResolution:
+    local = value.astimezone(calendar.zone)
+    for day in calendar.days:
+        day_start = datetime.combine(
+            day.trading_date,
+            day.day_open,
+            tzinfo=calendar.zone,
+        )
+        day_end = datetime.combine(
+            day.trading_date,
+            day.day_close,
+            tzinfo=calendar.zone,
+        )
+        if day_start <= local < day_end:
+            return SessionResolution(
+                session="DAY",
+                trading_date=day.trading_date,
+                session_start=day_start,
+                session_end=day_end,
+                calendar_version=calendar.version,
+                is_expiry=day.is_expiry,
+            )
+        if (
+            day.night_open is not None
+            and day.night_close is not None
+            and day.night_open <= local < day.night_close
+        ):
+            return SessionResolution(
+                session="NIGHT",
+                trading_date=day.trading_date,
+                session_start=day.night_open,
+                session_end=day.night_close,
+                calendar_version=calendar.version,
+                is_expiry=day.is_expiry,
+            )
+    return SessionResolution(
+        session="CLOSED",
+        trading_date=None,
+        session_start=None,
+        session_end=None,
+        calendar_version=calendar.version,
+    )
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ class FakeApi:
             delivery_date="2026-07-15",
         )
         self.Contracts = SimpleNamespace(Futures={"TMFR1": self.raw_contract})
-        self.subscription_calls: list[tuple[str, object, object]] = []
+        self.subscription_calls: list[tuple[str, object, object, object]] = []
         self.history_calls: list[tuple[object, ...]] = []
         self.quote_callback: Callable[..., None] | None = None
         self.tick_payload: object = {
@@ -71,8 +71,9 @@ class FakeApi:
         *,
         start: str,
         end: str,
+        timeout: int,
     ) -> dict[str, object]:
-        self.history_calls.append(("kbars", contract, start, end))
+        self.history_calls.append(("kbars", contract, start, end, timeout))
         return {"ts": [1], "Close": [101.0]}
 
 
@@ -170,6 +171,7 @@ class ReadonlyGatewayTests(unittest.TestCase):
                     self.api.raw_contract,
                     "2026-07-01",
                     "2026-07-14",
+                    120000,
                 ),
             ],
         )
@@ -211,10 +213,44 @@ class ReadonlyGatewayTests(unittest.TestCase):
             self.gateway.resolve_near_contract()
 
     def test_fails_closed_when_continuous_contract_has_no_target_code(self) -> None:
-        self.api.raw_contract.target_code = ""
+        del self.api.raw_contract.target_code
+        del self.api.raw_contract.code
 
         with self.assertRaisesRegex(ContractResolutionError, "target code"):
             self.gateway.resolve_near_contract()
+
+    def test_derives_tmf_category_when_registry_entry_lacks_category(self) -> None:
+        del self.api.raw_contract.category
+
+        contract = self.gateway.resolve_near_contract()
+
+        self.assertEqual(contract.category, "TMF")
+
+    def test_resolves_verified_txf_continuous_alias_shape(self) -> None:
+        raw_contract = SimpleNamespace(
+            code="TXFR1",
+            name="TX continuous near-month",
+            delivery_month="202607",
+        )
+        self.api.Contracts = SimpleNamespace(
+            Futures=SimpleNamespace(TXF={"TXFR1": raw_contract}),
+        )
+        self.gateway = ShioajiMarketDataGateway(
+            self.api,
+            quote_type="quote",
+            quote_version="v1",
+            alias_code="TXFR1",
+            clock=lambda: FIXED_NOW,
+        )
+
+        contract = self.gateway.resolve_near_contract()
+
+        self.assertEqual(contract.alias_code, "TXFR1")
+        self.assertEqual(contract.target_code, "TXFR1")
+        self.assertEqual(contract.symbol, "TX continuous near-month")
+        self.assertEqual(contract.category, "TXF")
+        self.assertEqual(contract.delivery_month, "202607")
+        self.assertEqual(contract.delivery_date, "")
 
 
 if __name__ == "__main__":

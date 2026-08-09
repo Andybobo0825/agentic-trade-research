@@ -126,6 +126,26 @@ class NormalizationTests(unittest.TestCase):
 
         self.assertEqual(normalize_tick_batch(batch), ())
 
+    def test_txf_normalization_uses_the_contract_category_for_target_label(self) -> None:
+        txf_contract = ContractInfo(
+            alias_code="TXFR1",
+            target_code="TXF202607",
+            symbol="TXFR1",
+            category="TXF",
+            delivery_month="202607",
+            delivery_date="2026-07-15",
+            resolved_at=FIXED_NOW,
+            resolver_version="shioaji-near-v1",
+        )
+        records = normalize_tick_batch(TickBatch(
+            contract=txf_contract,
+            date="2026-07-16",
+            fetched_at=FIXED_NOW,
+            payload=day_payload(16),
+        ))
+
+        self.assertEqual(records[0].derived_target_code, "TXF202608")
+
 
 class RunBackfillTests(unittest.TestCase):
     def setUp(self) -> None:

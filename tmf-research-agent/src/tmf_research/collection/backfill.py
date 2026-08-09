@@ -133,7 +133,10 @@ def normalize_tick_batch(batch: TickBatch) -> tuple[HistoricalTickRecord, ...]:
             f"{batch.date}: payload mixes ticks inside and outside the"
             " trading-date window"
         )
-    target_code, delivery_date = derived_near_target(trading_date)
+    target_code, delivery_date = derived_near_target(
+        trading_date,
+        category=batch.contract.category,
+    )
     records = []
     for index in range(count):
         records.append(HistoricalTickRecord(
@@ -165,15 +168,22 @@ def third_wednesday(year: int, month: int) -> date:
     return first + timedelta(days=offset + 14)
 
 
-def derived_near_target(trading_date: date) -> tuple[str, str]:
+def derived_near_target(
+    trading_date: date,
+    *,
+    category: str = "TMF",
+) -> tuple[str, str]:
     """Derive the near-month target for one trading date from the expiry rule."""
+
+    if not category.strip():
+        raise BackfillError("contract category is required for target derivation")
 
     expiry = third_wednesday(trading_date.year, trading_date.month)
     if trading_date > expiry:
         year = trading_date.year + (1 if trading_date.month == 12 else 0)
         month = 1 if trading_date.month == 12 else trading_date.month + 1
         expiry = third_wednesday(year, month)
-    return f"TMF{expiry.year}{expiry.month:02d}", expiry.isoformat()
+    return f"{category}{expiry.year}{expiry.month:02d}", expiry.isoformat()
 
 
 def run_backfill(

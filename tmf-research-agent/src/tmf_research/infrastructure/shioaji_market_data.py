@@ -6,6 +6,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from enum import Enum
 from types import MappingProxyType
+from typing import cast
 
 from tmf_research.domain.contracts import ContractInfo, KbarBatch, TickBatch
 
@@ -21,7 +22,10 @@ class ContractResolutionError(LookupError):
 def _value(subject: object, name: str, default: object = "") -> object:
     if isinstance(subject, Mapping):
         return subject.get(name, default)
-    return getattr(subject, name, default)
+    try:
+        return getattr(subject, name, default)
+    except KeyError:
+        return default
 
 
 def _text(subject: object, name: str, default: str = "") -> str:
@@ -108,17 +112,26 @@ class ShioajiMarketDataGateway:
 
     def resolve_near_contract(self) -> ContractInfo:
         raw_contract = self._resolve_alias(self._alias_code)
-        target_code = _text(raw_contract, "target_code")
+        target_code = _text(raw_contract, "target_code") or _text(
+            raw_contract, "code",
+        )
         if not target_code:
             raise ContractResolutionError(
                 f"resolved {self._alias_code} contract has no target code"
             )
 
+        category = _text(raw_contract, "category") or _text(raw_contract, "root")
+        if not category:
+            category = _category_for_alias(self._alias_code)
+
         contract = ContractInfo(
             alias_code=self._alias_code,
             target_code=target_code,
-            symbol=_text(raw_contract, "symbol", self._alias_code),
-            category=_text(raw_contract, "category", "TMF"),
+            symbol=(
+                _text(raw_contract, "symbol")
+                or _text(raw_contract, "name", self._alias_code)
+            ),
+            category=category,
             delivery_month=_text(raw_contract, "delivery_month"),
             delivery_date=_text(raw_contract, "delivery_date"),
             resolved_at=self._clock(),
@@ -166,6 +179,7 @@ class ShioajiMarketDataGateway:
             raw_contract,
             start=start,
             end=end,
+            timeout=120000,
         )
         return KbarBatch(
             contract=contract,
@@ -184,11 +198,11 @@ class ShioajiMarketDataGateway:
                 "Shioaji futures contract registry is unavailable"
             ) from error
 
-        raw_contract: object | None = None
-        try:
-            raw_contract = futures[alias_code]
-        except (KeyError, TypeError):
-            raw_contract = getattr(futures, alias_code, None)
+        # Shioaji 1.7 exposes TX futures as Contracts.Futures.TXF["TXFR1"].
+        txf = getattr(futures, "TXF", None)
+        raw_contract: object | None = _lookup(txf, alias_code)
+        if raw_contract is None:
+            raw_contract = _lookup(futures, alias_code)
         if raw_contract is None:
             raise ContractResolutionError(f"near contract {alias_code} is unavailable")
         return raw_contract
@@ -226,6 +240,30 @@ class ShioajiMarketDataGateway:
         method(raw_contract, **kwargs)
 
 
+def _lookup(container: object, key: str) -> object | None:
+    if container is None:
+        return None
+    if isinstance(container, Mapping):
+        return cast(object | None, container.get(key))
+    indexer = getattr(container, "__getitem__", None)
+    if callable(indexer):
+        try:
+            return cast(object | None, indexer(key))
+        except (KeyError, TypeError, AttributeError):
+            pass
+    try:
+        return cast(object | None, getattr(container, key, None))
+    except (AttributeError, KeyError):
+        return None
+
+
+def _category_for_alias(alias_code: str) -> str:
+    """Derive the instrument root from a continuous near-month alias."""
+
+    root = alias_code.removesuffix("R1")
+    return root or alias_code
+
+
 def create_market_data_session(
     *,
     api_key: str,
@@ -242,7 +280,7 @@ def create_market_data_session(
 
     if not api_key.strip() or not secret_key.strip():
         raise ValueError("api_key and secret_key are required")
-    import shioaji  # type: ignore[import-not-found]
+    import shioaji  # type: ignore[import-untyped]
 
     api = shioaji.Shioaji(simulation=simulation)
     api.login(

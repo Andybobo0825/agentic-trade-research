@@ -23,6 +23,23 @@ def manifest(
     }
 
 
+def kbar_manifest(
+    day: str,
+    minimum: str,
+    maximum: str,
+    *,
+    alias: str = "TXFR1",
+    dataset_version: str = "tx-holdout-kbars-v1",
+) -> dict[str, object]:
+    return {
+        "segment_id": f"backfill-kbar-1m-{alias}-{day}-{day}",
+        "event_type": "historical-kbar-1m",
+        "dataset_version": dataset_version,
+        "minimum_event_time": minimum,
+        "maximum_event_time": maximum,
+    }
+
+
 class CalendarBuilderTests(unittest.TestCase):
     def test_normal_day_gets_night_and_1345_close(self) -> None:
         payload = build_calendar_payload([
@@ -198,3 +215,82 @@ class MidnightFragmentTests(unittest.TestCase):
         entry = by_date["2025-01-02"]
         self.assertEqual(entry["night_open"], "2024-12-31T15:00:00")
         self.assertEqual(entry["night_close"], "2025-01-01T05:00:01")
+
+
+class DatasetAndAliasTests(unittest.TestCase):
+    def test_txf_alias_and_dataset_are_selected_without_tmfr1_assumption(self) -> None:
+        payload = build_calendar_payload([
+            kbar_manifest(
+                "2024-07-25",
+                "2024-07-25T08:46:00+08:00",
+                "2024-07-25T23:59:00+08:00",
+            ),
+            kbar_manifest(
+                "2024-07-26",
+                "2024-07-26T08:46:00+08:00",
+                "2024-07-26T13:44:00+08:00",
+            ),
+            kbar_manifest(
+                "2024-07-25",
+                "2024-07-25T08:46:00+08:00",
+                "2024-07-25T13:44:00+08:00",
+                alias="TMFR1",
+                dataset_version="dataset-v1",
+            ),
+        ], version="txf-holdout-v1", dataset_version="tx-holdout-kbars-v1")
+
+        days = payload["days"]
+        assert isinstance(days, list)
+        self.assertEqual(
+            [entry["trading_date"] for entry in days if isinstance(entry, dict)],
+            ["2024-07-25", "2024-07-26"],
+        )
+
+    def test_friday_night_attaches_to_following_monday(self) -> None:
+        payload = build_calendar_payload([
+            kbar_manifest(
+                "2020-03-06",
+                "2020-03-06T08:46:00+08:00",
+                "2020-03-06T23:59:00+08:00",
+            ),
+            kbar_manifest(
+                "2020-03-09",
+                "2020-03-09T03:06:00+08:00",
+                "2020-03-09T13:44:00+08:00",
+            ),
+        ], version="txf-holdout-v1", dataset_version="tx-holdout-kbars-v1")
+
+        days = payload["days"]
+        assert isinstance(days, list)
+        by_date = {
+            entry["trading_date"]: entry
+            for entry in days
+            if isinstance(entry, dict)
+        }
+        self.assertIsNone(by_date["2020-03-06"]["night_open"])
+        self.assertNotIn("2020-03-07", by_date)
+        self.assertEqual(by_date["2020-03-09"]["night_open"], "2020-03-06T15:00:00")
+
+    def test_date_range_filters_output_after_night_attribution(self) -> None:
+        payload = build_calendar_payload([
+            kbar_manifest(
+                "2024-07-26",
+                "2024-07-26T08:46:00+08:00",
+                "2024-07-26T23:59:00+08:00",
+            ),
+            kbar_manifest(
+                "2024-07-29",
+                "2024-07-29T08:46:00+08:00",
+                "2024-07-29T13:44:00+08:00",
+            ),
+        ],
+            version="txf-holdout-v1",
+            dataset_version="tx-holdout-kbars-v1",
+            start_date="2024-07-26",
+            end_date="2024-07-26",
+        )
+
+        days = payload["days"]
+        assert isinstance(days, list)
+        self.assertEqual(len(days), 1)
+        self.assertEqual(days[0]["trading_date"], "2024-07-26")

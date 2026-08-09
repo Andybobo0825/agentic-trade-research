@@ -7,12 +7,13 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, TextIO
+from typing import TYPE_CHECKING, Protocol, TextIO, cast
 
 from tmf_research.security.readonly_verifier import verify_readonly
 
 if TYPE_CHECKING:
     from tmf_research.collection.backfill import HistoricalTickSource
+    from tmf_research.collection.kbar_backfill import HistoricalKbarSource
 
 
 class GatewayFactory(Protocol):
@@ -24,6 +25,17 @@ class GatewayFactory(Protocol):
         simulation: bool,
         alias_code: str,
     ) -> HistoricalTickSource: ...
+
+
+class KbarGatewayFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        api_key: str,
+        secret_key: str,
+        simulation: bool,
+        alias_code: str,
+    ) -> HistoricalKbarSource: ...
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,6 +108,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     calendar_command.add_argument("--data-root", type=Path, default=Path("data"))
     calendar_command.add_argument("--out", type=Path, required=True)
+    calendar_command.add_argument(
+        "--dataset-version",
+        required=True,
+        help="only use manifests from this immutable dataset",
+    )
+    calendar_command.add_argument(
+        "--event-type",
+        default=None,
+        help="optional historical event type when the dataset contains several",
+    )
+    calendar_command.add_argument(
+        "--start-date",
+        default="",
+        help="first trading date to retain in the calendar, YYYY-MM-DD",
+    )
+    calendar_command.add_argument(
+        "--end-date",
+        default="",
+        help="last trading date to retain in the calendar, YYYY-MM-DD",
+    )
     calendar_command.add_argument("--calendar-version", default="")
     backfill = commands.add_parser(
         "backfill",
@@ -111,6 +143,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--simulation",
         action="store_true",
         help="use the Shioaji simulation environment (never for research data)",
+    )
+    pull_kbars = commands.add_parser(
+        "pull-kbars",
+        help="download read-only TXFR1 1-minute kbars into immutable segments",
+    )
+    pull_kbars.add_argument("--start", required=True, help="first date, YYYY-MM-DD")
+    pull_kbars.add_argument("--end", required=True, help="last date, YYYY-MM-DD")
+    pull_kbars.add_argument("--data-root", type=Path, default=Path("data"))
+    pull_kbars.add_argument("--dataset-version", default="dataset-v1")
+    pull_kbars.add_argument("--alias-code", default="TXFR1")
+    pull_kbars.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help="dotenv-style credentials file (default: checkout .env)",
+    )
+    pull_kbars.add_argument("--pause-seconds", type=float, default=0.35)
+    pull_kbars.add_argument("--max-retries", type=int, default=3)
+    pull_kbars.add_argument("--retry-backoff-seconds", type=float, default=1.0)
+    aggregate_kbars = commands.add_parser(
+        "aggregate-kbars",
+        help="derive complete 15-minute bars from stored 1-minute kbars",
+    )
+    aggregate_kbars.add_argument("--data-root", type=Path, default=Path("data"))
+    aggregate_kbars.add_argument("--dataset-version", default="dataset-v1")
+    aggregate_kbars.add_argument("--calendar", type=Path, required=True)
+    aggregate_kbars.add_argument("--alias-code", default="TXFR1")
+    aggregate_kbars.add_argument(
+        "--derived-dataset-version",
+        default="dataset-v1",
+        help="dataset version receiving derived 15-minute segments",
     )
     collect = commands.add_parser(
         "collect",
@@ -166,10 +229,21 @@ def main(
         )
     if args.command == "build-calendar":
         return _build_calendar(
-            Path(args.data_root), Path(args.out), str(args.calendar_version), output,
+            Path(args.data_root),
+            Path(args.out),
+            str(args.calendar_version),
+            output,
+            dataset_version=str(args.dataset_version),
+            event_type=(None if args.event_type is None else str(args.event_type)),
+            start_date=str(args.start_date),
+            end_date=str(args.end_date),
         )
     if args.command == "backfill":
         return _backfill(args, output, gateway_factory)
+    if args.command == "pull-kbars":
+        return _pull_kbars(args, output, gateway_factory)
+    if args.command == "aggregate-kbars":
+        return _aggregate_kbars(args, output)
     if args.command == "collect":
         return _collect(args, output, gateway_factory)
     if args.command != "verify-readonly":
@@ -269,6 +343,171 @@ def _backfill(
     return 0
 
 
+def _pull_kbars(
+    args: argparse.Namespace,
+    output: TextIO,
+    gateway_factory: object | None,
+) -> int:
+    root = discover_project_root()
+    report = verify_readonly(root / "src")
+    if not report.ok:
+        print(f"READONLY VIOLATION ({len(report.findings)} findings)", file=output)
+        print(report.render(), file=output)
+        return 1
+
+    from tmf_research.collection.kbar_backfill import (
+        KbarChunkResult,
+        KbarPullError,
+        read_shioaji_credentials,
+        run_kbar_pull,
+    )
+    from tmf_research.infrastructure.raw_store import AppendOnlyRawStore
+
+    env_file = (
+        Path(args.env_file).resolve()
+        if args.env_file is not None
+        else root.parent / ".env"
+    )
+    try:
+        credentials = read_shioaji_credentials(env_file)
+    except KbarPullError as error:
+        print(f"KBAR PULL FAILED: {error}", file=output)
+        return 1
+
+    if gateway_factory is None:
+        from tmf_research.infrastructure.market_session import (
+            open_market_data_session,
+        )
+
+        gateway_factory = open_market_data_session
+    factory = cast(KbarGatewayFactory, gateway_factory)
+    # This command is deliberately not given a simulation flag: the holdout
+    # dataset may only come from the real read-only market-data environment.
+    gateway = factory(
+        api_key=credentials.api_key,
+        secret_key=credentials.secret_key,
+        simulation=False,
+        alias_code=str(args.alias_code),
+    )
+    store = AppendOnlyRawStore(
+        Path(args.data_root),
+        writer_version="kbar-backfill-v1",
+        dataset_version=str(args.dataset_version),
+    )
+    pause_seconds = max(0.0, float(args.pause_seconds))
+
+    def emit(result: KbarChunkResult) -> None:
+        print(
+            f"{result.start_date}..{result.end_date} {result.status}"
+            f" records={result.record_count}",
+            file=output,
+            flush=True,
+        )
+
+    try:
+        summary = run_kbar_pull(
+            gateway,
+            store,
+            start_date=str(args.start),
+            end_date=str(args.end),
+            pause=(lambda: time.sleep(pause_seconds)) if pause_seconds else None,
+            max_retries=int(args.max_retries),
+            retry_backoff_seconds=float(args.retry_backoff_seconds),
+            on_result=emit,
+        )
+    except KbarPullError as error:
+        print(f"KBAR PULL FAILED: {error}", file=output)
+        return 1
+    print(
+        f"KBAR PULL COMPLETE alias={summary.alias_code}"
+        f" dataset={summary.dataset_version}"
+        f" stored_chunks={summary.stored_chunks}"
+        f" already_stored_chunks={summary.already_stored_chunks}"
+        f" no_data_chunks={summary.no_data_chunks}"
+        f" non_trading_days={summary.non_trading_days}"
+        f" stored_records={summary.stored_records}",
+        file=output,
+    )
+    return 0
+
+
+def _aggregate_kbars(args: argparse.Namespace, output: TextIO) -> int:
+    root = discover_project_root()
+    report = verify_readonly(root / "src")
+    if not report.ok:
+        print(f"READONLY VIOLATION ({len(report.findings)} findings)", file=output)
+        print(report.render(), file=output)
+        return 1
+
+    from datetime import datetime, timezone
+
+    from tmf_research.collection.kbar_backfill import read_kbar_records
+    from tmf_research.infrastructure.raw_store import AppendOnlyRawStore
+    from tmf_research.processing.kbar_aggregation import (
+        DERIVED_EVENT_TYPE,
+        aggregate_15m,
+        encode_15m_bars,
+        load_trading_calendar,
+        minute_kbars_from_records,
+    )
+
+    data_root = Path(args.data_root)
+    source_store = AppendOnlyRawStore(
+        data_root,
+        writer_version="kbar-backfill-v1",
+        dataset_version=str(args.dataset_version),
+    )
+    derived_store = AppendOnlyRawStore(
+        data_root,
+        writer_version="kbar-aggregate-v1",
+        dataset_version=str(args.derived_dataset_version),
+    )
+    try:
+        records = read_kbar_records(
+            source_store,
+            data_root,
+            dataset_version=str(args.dataset_version),
+        )
+        calendar = load_trading_calendar(Path(args.calendar))
+        bars = aggregate_15m(
+            minute_kbars_from_records(records),
+            calendar=calendar,
+        )
+        created_at = datetime.now(timezone.utc)
+        encoded = encode_15m_bars(
+            bars,
+            alias_code=str(args.alias_code),
+            created_at=created_at,
+        )
+        grouped: dict[tuple[str, str], list[object]] = {}
+        for record in encoded:
+            grouped.setdefault((record.trading_date, record.session), []).append(record)
+        stored_segments = 0
+        already_stored_segments = 0
+        for (trading_date, session), segment_records in sorted(grouped.items()):
+            segment_id = f"aggregate-kbar-15m-{args.alias_code}-{trading_date}-{session}"
+            if derived_store.has_segment(DERIVED_EVENT_TYPE, segment_id):
+                already_stored_segments += 1
+                continue
+            derived_store.append_segment(
+                DERIVED_EVENT_TYPE,
+                segment_records,
+                segment_id=segment_id,
+                created_at=created_at,
+            )
+            stored_segments += 1
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        print(f"KBAR AGGREGATION FAILED: {error}", file=output)
+        return 1
+    print(
+        f"KBAR AGGREGATION COMPLETE source_records={len(records)}"
+        f" bars_15m={len(bars)} stored_segments={stored_segments}"
+        f" already_stored_segments={already_stored_segments}",
+        file=output,
+    )
+    return 0
+
+
 def _collect(
     args: argparse.Namespace,
     output: TextIO,
@@ -300,6 +539,7 @@ def _collect(
         print("COLLECT FAILED: --until must be timezone-aware", file=output)
         return 1
 
+    from tmf_research.collection.live_collector import LiveGateway
     from tmf_research.collection.live_run import run_live_collection
     from tmf_research.infrastructure.raw_store import AppendOnlyRawStore
 
@@ -325,7 +565,7 @@ def _collect(
         print(f"FLUSHED {segment_id} total_records={stored_records}", file=output, flush=True)
 
     summary = run_live_collection(
-        gateway,
+        cast(LiveGateway, gateway),
         store,
         until=until,
         flush_interval_seconds=float(args.flush_interval_seconds),
@@ -348,6 +588,11 @@ def _build_calendar(
     out: Path,
     calendar_version: str,
     output: TextIO,
+    *,
+    dataset_version: str,
+    event_type: str | None,
+    start_date: str,
+    end_date: str,
 ) -> int:
     from tmf_research.processing.calendar_builder import (
         CalendarBuilderError,
@@ -367,6 +612,10 @@ def _build_calendar(
         payload = build_calendar_payload(
             rows,
             version=calendar_version or "tmf-historical-evidence-v1",
+            dataset_version=dataset_version,
+            event_type=event_type,
+            start_date=start_date,
+            end_date=end_date,
         )
     except (CalendarBuilderError, ValueError) as error:
         print(f"CALENDAR FAILED: {error}", file=output)
@@ -377,9 +626,16 @@ def _build_calendar(
     )
     days = payload["days"]
     assert isinstance(days, list)
+    first = days[0]["trading_date"] if days else "n/a"
+    last = days[-1]["trading_date"] if days else "n/a"
+    night_sessions = sum(
+        isinstance(entry, dict) and entry.get("night_open") is not None
+        for entry in days
+    )
     print(
         f"CALENDAR WRITTEN days={len(days)} version={payload['version']}"
-        f" out={out}",
+        f" first={first} last={last} night_sessions={night_sessions}"
+        f" dataset={dataset_version} out={out}",
         file=output,
     )
     return 0

@@ -60,6 +60,23 @@ Treat `xiaoyu-etf` as auxiliary ETF-holding / inferred ETF-flow evidence only. I
 
 若同時詢問多檔股票，只需對相同 evidence 執行一次 `phase3-screen`，再逐檔查即時 quote 與外部信心因子。若 Phase 3 資料不足，必須明示缺口並停止進場判斷，不能改用歷史 study 代替主策略。
 
+## LLM 判讀護欄(PA-guard)
+
+任何涉及大盤/指數/個股位置判讀的回答,必須走「兩階段 + 事實表」流程:
+
+```sh
+node src/cli.js market-diagnosis --ticker TAIEX --format markdown
+node src/cli.js judgment-validate --judgment-file <j.json> --facts-file <f.json> --report-file <r.md>
+```
+
+1. **事實表是數字的唯一權威**:先跑 `market-diagnosis` 取得確定性事實表(fact ids)與 regime 分類;回答中所有點位、量能、均線數字只准引用事實表或其他 CLI 實際輸出,禁止憑記憶或自行心算補數字。
+2. **兩階段分離**:先產出診斷 JSON(regime、direction、gate_trace 引用 fact ids),`gate_result=proceed` 才能給四個參考價;`wait` 時四價必須為 null,但仍要說明等待條件。
+3. **驗證後才交付**:最終回答與判讀 JSON 需通過 `judgment-validate`(含報告數字可追溯檢查);驗證失敗依 retry feedback 修正——**不得為了通過驗證而改結論(regime/direction/stance),只准修正引用與數值**。
+4. **視窗角色**:background 60 日只作風險脈絡、structure 20 日決定方向、immediate 5 日看訊號品質;背景與結構衝突時以結構為主,背景寫入風險提示,不得互相否決。
+5. **全局硬禁令(優先權最高,覆蓋其他一切指引)**:(a) 禁止未經事實表的數字;(b) 禁止輸出手數、倉位比例、加碼減碼、移動停損等倉位管理;(c) 禁止保證語言;(d) 禁止用外部資訊/題材推翻技術結論——eligibility 只來自 `phase3-screen`。
+6. **機率錨點**:只准引用本 repo 驗證過的統計結果;未驗證的機率數字(不論出處)一律不得寫進回答。
+7. **經驗庫**:判讀完成後用 `experience-log` 依 regime 歸檔;回答同類行情前可用 `experience-recall --regime <r>` 取最近 5 筆作參考,參考時須標注「歷史案例,非當下訊號」。
+
 ## Synthesis template
 
 Use this answer structure for LINE:

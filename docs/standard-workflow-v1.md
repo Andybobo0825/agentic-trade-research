@@ -124,6 +124,19 @@ node src/cli.js phase3-screen --evidence-root .omx/evidence/phase3 --format mark
 
 `phase3-dataset` 只建立與稽核 point-in-time 證據；`phase3-screen` 是唯一策略入口。
 
+## 2B. LLM 判讀護欄(PA-guard)
+
+LLM(Codex/Claude 或任何外部 runtime)產出的市場/位置判讀,不再是自由文本,必須被程式驗證:
+
+1. **事實表權威**:`market-diagnosis` 用純算術產出確定性事實表(fact ids)與 regime 分類(`spike / tight_channel / normal_channel / trading_range / insufficient_data`,唯一裁決樹,邊界模糊時輸出 alternative);LLM 的所有數字只准引用事實表,禁止自行生成點位。
+2. **兩階段 + gate**:診斷(regime/direction/gate_trace)先行且不得含價格;`gate_result=proceed` 才允許輸出四個參考價,`wait` 時四價為 null。
+3. **程式驗證**:`judgment-validate` 檢查枚舉、必經節點(D1–D4)、trace 與結論一致性、引用事實存在且數值相符、報告內數字可追溯、RR 由程式重算(≥1.0)、禁令內容掃描。驗證失敗依 retry feedback 修正,且不得為通過驗證而改結論。
+4. **硬禁令**:未經事實表的數字、倉位管理輸出、保證語言、外部資訊推翻技術結論——四者為最高優先禁令。
+5. **機率錨點紀律**:回答中的機率宣稱只准來自本 repo 驗證過的結果;外部書籍/專案的統計數字未經驗證不得引用。
+6. **經驗庫**:判讀按 regime 歸檔於 `.omx/experience/`,`experience-recall` 取同 regime 歷史案例,僅作參考標注,不作訊號。
+
+PA-guard 驗證 LLM 的「表達與引用」,不賦予 LLM 判讀任何 eligibility 權力;技術合格仍唯一來自 `phase3-screen`。
+
 ## 3. Gooaye / News / 法說 Topic Research Workflow
 
 外部資訊只作題材熱度與信心加權，不作價格資料、策略認證或單獨買賣依據。

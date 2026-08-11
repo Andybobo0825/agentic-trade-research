@@ -30,7 +30,7 @@ export async function buildXiaoyuEtfLens(args = {}) {
   const common = {
     source: 'xiaoyu-etf',
     sourceUrl: XIAOYU_ETF_BASE_URL,
-    usage: 'ETF 持股、ETF 推估買賣與三大法人輔助資料；價格/量價/交易判斷仍以 Shioaji 與 Standard Workflow 1.01 為主。',
+    usage: 'ETF 持股、ETF 推估買賣與三大法人輔助資料；價格/量價/交易判斷仍以 Shioaji 與 Standard Workflow 1.4 為主。',
     meta: data.meta || {},
   };
 

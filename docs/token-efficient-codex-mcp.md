@@ -132,3 +132,14 @@ Token savings are valid only when the final memo still identifies:
 - which data was direct evidence versus inference;
 - any provider/API errors;
 - any intentionally omitted rendered rows caused by `maxRows`/`outputFields`.
+
+
+## 2026-only strategy optimization bundle
+
+`strategy-optimize` is available as a direct CLI/MCP tool and as an explicit `research-pack` include. Keep it explicit instead of default so a normal memo does not silently trigger a Shioaji historical backtest.
+
+```sh
+node src/cli.js research-pack --ticker 2330 --market tw --include strategy-optimize --start-date 2026-01-01 --end-date 2026-07-07 --format markdown
+```
+
+Boundary: this is a strategy-agent research sidecar. It does not replace Standard Workflow 1.01 until the candidate is separately reviewed and promoted.

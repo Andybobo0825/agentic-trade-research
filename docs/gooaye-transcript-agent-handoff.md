@@ -55,7 +55,7 @@ stock-data/scripts/run_gooaye_worker.sh
    worker 完成後，讀取 `GOOAYE_LATEST_MANIFEST_S3_URI`，再依 manifest 的 `summaryJsonS3Uri` / `transcriptJsonS3Uri` 抓 JSON 下來摘要。
 
 5. **分析與驗證**  
-   逐字稿只作為題材熱度來源。結論要再用 Shioaji 檢查台股同族群量價、成交量、同步性與 MVP `R18H6_VOL_exit_only_WR3` 條件。
+   逐字稿只作為題材熱度來源。結論要再用 Shioaji 檢查台股同族群量價、成交量、同步性與 Phase 3 (`phase3_stability`) 技術條件。
 
 決策規則：
 
@@ -402,6 +402,6 @@ A run is considered successful only when all are true:
 2. 拉 summary / transcript。
 3. 萃取題材：例如被動元件、功率半導體、AIPC、衛星、ASIC、CPO。
 4. 再用 Shioaji 量價、成交量、產業同步性驗證。
-5. 只有「題材熱度 + 台股量價確認」同時成立，才進入 MVP 策略評分。
+5. 只有「題材熱度 + 台股量價確認」同時成立，才進入 Phase 3 (`phase3_stability`) 技術評分。
 
-目前 `trade` repo 的 MVP 策略是：`R18H6_VOL_exit_only_WR3`（Standard Workflow 1.1）。逐字稿 worker 不需要理解或實作這套策略，只要提供乾淨、可追溯、即時的題材資料。
+目前 `trade` repo 的唯一主策略是:`phase3_stability`(Standard Workflow 1.4)。逐字稿 worker 不需要理解或實作這套策略，只要提供乾淨、可追溯、即時的題材資料。

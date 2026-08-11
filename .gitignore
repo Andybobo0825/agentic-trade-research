@@ -57,3 +57,6 @@ playwright-report/
 tmf-research-agent/data/
 tmf-research-agent/phase5-holdout/
 tmf-research-agent/.venv/
+
+# Historical market data (k-bar / event exports) stay local
+output/*.ndjson

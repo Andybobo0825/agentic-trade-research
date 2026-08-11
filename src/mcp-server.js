@@ -171,6 +171,36 @@ function toolSchema(name, tool) {
       noFetch: { type: 'boolean' },
       spotFrom: { type: 'string' },
     };
+  } else if (name === 'market-diagnosis') {
+    base.inputSchema.properties = {
+      ticker: { type: 'string' },
+      provider: { type: 'string' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+    };
+  } else if (name === 'judgment-validate') {
+    base.inputSchema.properties = {
+      judgment: { type: 'object' },
+      facts: { type: 'object' },
+      report: { type: 'string' },
+      judgmentFile: { type: 'string' },
+      factsFile: { type: 'string' },
+      reportFile: { type: 'string' },
+      tickers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+    };
+  } else if (name === 'experience-log') {
+    base.inputSchema.properties = {
+      regime: { type: 'string', enum: ['spike', 'tight_channel', 'normal_channel', 'trading_range', 'insufficient_data'] },
+      date: { type: 'string' },
+      ticker: { type: 'string' },
+      judgment: { type: 'object' },
+      note: { type: 'string' },
+    };
+  } else if (name === 'experience-recall') {
+    base.inputSchema.properties = {
+      regime: { type: 'string', enum: ['spike', 'tight_channel', 'normal_channel', 'trading_range', 'insufficient_data'] },
+      limit: { type: 'number' },
+    };
   } else if (name === 'xiaoyu-etf') {
     base.inputSchema.properties = {
       mode: { type: 'string', enum: ['stock', 'etf', 'rank', 'overview'] },

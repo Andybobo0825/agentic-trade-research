@@ -31,6 +31,9 @@ import { buildXiaoyuEtfLens, renderXiaoyuEtfMarkdown } from './xiaoyu-etf.js';
 import { buildTaiwanAgentTeam, renderTaiwanAgentTeamMarkdown } from './taiwan-agent-team.js';
 import { renderPhase3DatasetMarkdown, runPhase3Dataset } from './phase3-dataset.js';
 import { renderPhase3ScreenMarkdown, runPhase3Screen } from './phase3-screen.js';
+import { computeMarketFacts, renderMarketDiagnosisMarkdown } from './market-facts.js';
+import { renderJudgmentGuardMarkdown, runJudgmentGuard } from './judgment-guard.js';
+import { recallExperience, recordExperience, renderExperienceMarkdown } from './experience-store.js';
 import { compactJson, compactNumber, shapeForTokenBudget, toMarkdownTable } from './format.js';
 import { detectHmaSignals, evaluateHmaTrendSignal, normalizeCandleRows } from './indicators.js';
 
@@ -583,6 +586,44 @@ export const tools = {
     },
     toMarkdown(result) {
       return renderPhase3ScreenMarkdown(result);
+    },
+  },
+  'market-diagnosis': {
+    description: 'Build the deterministic market fact table and regime classification an LLM must cite; read-only, no order mode.',
+    async run(args) {
+      return buildMarketDiagnosis(args || {});
+    },
+    toMarkdown(result) {
+      return renderMarketDiagnosisMarkdown(result);
+    },
+  },
+  'judgment-validate': {
+    description: 'Validate an LLM judgment against a fact table: enums, mandatory nodes, trace consistency, cited values, reward-to-risk, untraceable numbers and banned content.',
+    async run(args) {
+      return runJudgmentGuard({ ...(await loadGuardInputs(args || {})), tickers: args?.tickers });
+    },
+    toMarkdown(result) {
+      return renderJudgmentGuardMarkdown(result);
+    },
+  },
+  'experience-log': {
+    description: 'File a completed judgment in the experience library under its regime.',
+    async run(args) {
+      const payload = args?.entry || (args?.entryJson ? JSON.parse(String(args.entryJson)) : args) || {};
+      return recordExperience(args?.rootDir || process.cwd(), payload);
+    },
+    toMarkdown(result) {
+      return `# Experience recorded\n\n- Path: ${result.path}\n- Regime: ${result.entry.regime}\n- Ticker: ${result.entry.ticker}\n`;
+    },
+  },
+  'experience-recall': {
+    description: 'Recall the most recent judgments filed under one regime; reference material only, never a current signal.',
+    async run(args) {
+      const regime = args?.regime;
+      return { regime, entries: recallExperience(args?.rootDir || process.cwd(), { regime, limit: args?.limit }) };
+    },
+    toMarkdown(result) {
+      return renderExperienceMarkdown(result);
     },
   },
   'research-pack': {
@@ -1887,4 +1928,31 @@ function renderResearchPackMarkdown(pack) {
     for (const [toolName, message] of errors) sections.push(`- ${toolName}: ${message}`);
   }
   return sections.join('\n');
+}
+
+async function buildMarketDiagnosis(args) {
+  const ticker = String(args.ticker || 'TAIEX').toUpperCase();
+  const startDate = args.startDate || defaultDiagnosisStart();
+  const payload = await getTaiwanPrice({ ticker, provider: args.provider || 'auto-history', startDate, endDate: args.endDate });
+  const rows = Array.isArray(payload) ? payload : payload?.data || [];
+  return computeMarketFacts(rows, { ticker, windows: args.windows });
+}
+
+function defaultDiagnosisStart() {
+  const start = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
+  return start.toISOString().slice(0, 10);
+}
+
+async function loadGuardInputs(args) {
+  const { readFile } = await import('node:fs/promises');
+  const parse = async (inline, file) => {
+    if (inline && typeof inline === 'object') return inline;
+    if (inline) return JSON.parse(String(inline));
+    if (file) return JSON.parse(await readFile(String(file), 'utf8'));
+    return null;
+  };
+  const judgment = await parse(args.judgment, args.judgmentFile);
+  const facts = await parse(args.facts, args.factsFile);
+  const report = args.report ? String(args.report) : args.reportFile ? await readFile(String(args.reportFile), 'utf8') : null;
+  return { judgment, facts, report };
 }

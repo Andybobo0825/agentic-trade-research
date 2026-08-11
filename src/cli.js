@@ -25,6 +25,10 @@ US / global commands:
   signal-study  --ticker 2330 [--market tw] [--period 20] [--volume-window 20] [--institutional-days 5] [--forward-days 3,5,10] [--format markdown]
   daily-decision-study --ticker 2330 [--market tw] [--period 20] [--decision-days 20] [--lookback-bars 60] [--min-average-turnover 20000000] [--format markdown]
   chip-study    --ticker 2330 [--market tw] [--foreign-days 3] [--holder-weeks 3] [--min-holder-lots 1000] [--format markdown]
+  market-diagnosis  --ticker TAIEX [--start-date 2026-01-01] [--format markdown]
+  judgment-validate --judgment-file j.json --facts-file f.json [--report-file r.md]
+  experience-log    --regime trading_range --date 2026-08-11 --ticker TAIEX [--note "..."]
+  experience-recall --regime trading_range [--limit 5]
   xiaoyu-etf    [--mode stock|etf|rank|overview] [--ticker 2330] [--etf 00981A] [--scope active|market] [--window d1|d5|d10|d20|d60] [--direction buy|sell] [--limit 10] [--format markdown]
   taiwan-agent-team [--query "盤前+回測+推測"] [--tickers 2330,00981A] [--date YYYY-MM-DD] [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--capital 500000] [--offline] [--format markdown]
   memory-sync   [--memory-dir .omx/memory] [--entry-file entries.json] [--entry "text" --date YYYY-MM-DD --category decision|verified-fix|failure-case|milestone] [--now YYYY-MM-DD] [--format markdown]
@@ -269,6 +273,33 @@ export async function main(argv = process.argv.slice(2)) {
       limit: common.limit,
       includeDetail: args['include-detail'] === true || args['include-detail'] === 'true',
       baseUrl: args['base-url'] ? String(args['base-url']) : undefined,
+    };
+  } else if (command === 'market-diagnosis') {
+    toolArgs = {
+      ticker: args.ticker ? String(args.ticker).toUpperCase() : undefined,
+      provider: args.provider ? String(args.provider) : undefined,
+      startDate: args['start-date'] ? String(args['start-date']) : undefined,
+      endDate: args['end-date'] ? String(args['end-date']) : undefined,
+    };
+  } else if (command === 'judgment-validate') {
+    toolArgs = {
+      judgmentFile: args['judgment-file'] ? String(args['judgment-file']) : undefined,
+      factsFile: args['facts-file'] ? String(args['facts-file']) : undefined,
+      reportFile: args['report-file'] ? String(args['report-file']) : undefined,
+      tickers: args.tickers ? String(args.tickers) : undefined,
+    };
+  } else if (command === 'experience-log') {
+    toolArgs = {
+      entryJson: args.entry ? String(args.entry) : undefined,
+      regime: args.regime ? String(args.regime) : undefined,
+      date: args.date ? String(args.date) : undefined,
+      ticker: args.ticker ? String(args.ticker).toUpperCase() : undefined,
+      note: args.note ? String(args.note) : undefined,
+    };
+  } else if (command === 'experience-recall') {
+    toolArgs = {
+      regime: args.regime ? String(args.regime) : undefined,
+      limit: common.limit,
     };
   } else if (command === 'taiwan-agent-team') {
     toolArgs = parseTaiwanAgentTeamCliArgs(args, optionalInt);

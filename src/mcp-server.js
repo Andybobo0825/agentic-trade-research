@@ -7,6 +7,11 @@ import { TAIWAN_AGENT_TEAM_INPUT_SCHEMA } from './taiwan-agent-team.js';
 
 const serverInfo = { name: 'codex-finance-tools', version: '0.1.0' };
 
+// Recalling past judgments would let a model copy its own earlier answer instead
+// of re-deriving one from the fact table, so consecutive days would stop being
+// independent observations. It stays a CLI tool for humans to review.
+const CLI_ONLY_TOOLS = new Set(['experience-recall']);
+
 function toolSchema(name, tool) {
   const base = {
     name,
@@ -335,8 +340,11 @@ function outputControlProperties() {
 async function handle(message) {
   const { id, method, params = {} } = message;
   if (method === 'initialize') return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo } };
-  if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: Object.entries(tools).map(([name, tool]) => toolSchema(name, tool)) } };
+  if (method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: Object.entries(tools).filter(([name]) => !CLI_ONLY_TOOLS.has(name)).map(([name, tool]) => toolSchema(name, tool)) } };
   if (method === 'tools/call') {
+    if (CLI_ONLY_TOOLS.has(params.name)) {
+      return { jsonrpc: '2.0', id, error: { code: -32601, message: `${params.name} is a CLI-only review tool and is not callable by a model` } };
+    }
     const args = params.arguments || {};
     const { format = 'compact-json', outputFields, maxRows, ...toolArgs } = args;
     const result = await runTool(params.name, toolArgs);

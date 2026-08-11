@@ -75,7 +75,7 @@ node src/cli.js judgment-validate --judgment-file <j.json> --facts-file <f.json>
 4. **視窗角色**:background 60 日只作風險脈絡、structure 20 日決定方向、immediate 5 日看訊號品質;背景與結構衝突時以結構為主,背景寫入風險提示,不得互相否決。
 5. **全局硬禁令(優先權最高,覆蓋其他一切指引)**:(a) 禁止未經事實表的數字;(b) 禁止輸出手數、倉位比例、加碼減碼、移動停損等倉位管理;(c) 禁止保證語言;(d) 禁止用外部資訊/題材推翻技術結論——eligibility 只來自 `phase3-screen`。
 6. **機率錨點**:只准引用本 repo 驗證過的統計結果;未驗證的機率數字(不論出處)一律不得寫進回答。
-7. **經驗庫**:判讀完成後用 `experience-log` 依 regime 歸檔;回答同類行情前可用 `experience-recall --regime <r>` 取最近 5 筆作參考,參考時須標注「歷史案例,非當下訊號」。
+7. **經驗庫只寫不讀**:判讀完成後用 `experience-log` 依 regime 歸檔。**回答時不得讀取歷史判讀** —— `experience-recall` 是給人檢視的 CLI 工具,已從 MCP 移除,模型無法呼叫。理由:讀了會傾向照抄上次結論,而不是重新從事實表推導,使每天的判讀不再獨立。同理,**任何事後漲跌結果都不得寫入經驗庫或出現在判讀輸入中**;績效評估由獨立程式在事先約定的時間點進行。
 
 ## Synthesis template
 

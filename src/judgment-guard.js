@@ -12,11 +12,16 @@ const MIN_TRACEABLE_NUMBER = 1000;
 const FORBIDDEN_PATTERNS = [
   { label: '倉位比例', re: /\d+\s*%[^。\n]{0,6}(倉|部位|資金)/ },
   { label: '倉位比例', re: /(倉位|部位)[^。\n]{0,6}\d+\s*%/ },
-  { label: '手數', re: /\d+\s*(口|張|手)(?![^。\n]{0,4}(風險|價值))/ },
+  // Volume is reported in 張 too, so a lot count only counts as position sizing
+  // when it sits next to an act of buying, selling or holding.
+  { label: '手數', re: /(買|賣|進場|建倉|投入|下單|做多|做空|部位|倉位)[^。\n]{0,8}\d+\s*(口|張|手)/ },
+  { label: '手數', re: /\d+\s*(口|張|手)[^。\n]{0,6}(部位|倉位|進場|建倉|試單)/ },
+  { label: '倉位比例', re: /(部位|倉位)[^。\n]{0,8}\d+\s*\/\s*\d+/ },
   { label: '加碼', re: /加碼|攤平|補倉/ },
   { label: '減碼', re: /減碼|分批出場|分批減/ },
   { label: '移動停損', re: /移(動|到|至)?[^。\n]{0,3}(停損|止損)|(停損|止損)[^。\n]{0,4}(移|上移|拉高|下移)|保本停損|盈虧平衡/ },
-  { label: '保證語言', re: /保證|穩賺|必漲|必跌|一定(會)?(漲|跌)|包賺/ },
+  // A disclaimer that something is NOT guaranteed is the opposite of a promise.
+  { label: '保證語言', re: /(?<!非|不|未|無法|沒有|不能|難以)保證|穩賺|必漲|必跌|一定(會)?(漲|跌)|包賺/ },
   { label: '全押', re: /all[- ]?in|梭哈|重壓/i },
 ];
 

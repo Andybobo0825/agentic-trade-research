@@ -233,6 +233,26 @@ test('position-management and guarantee language is banned outright', () => {
   assert.deepEqual(scanForbiddenContent('等回測 43,615 止穩再分批觀察,失守則本次假設失效。'), []);
 });
 
+test('market data and disclaimers are not mistaken for position advice', () => {
+  const allowed = [
+    '成交量 45,997 張(20 日均量 38,575 張,1.19 倍)',
+    '本分析為決策支援,非保證獲利,亦非個人化投資建議。',
+    '無法保證後續走勢。',
+  ];
+  for (const text of allowed) {
+    assert.deepEqual(scanForbiddenContent(text), [], `false positive on: ${text}`);
+  }
+
+  const banned = [
+    '單筆不超過計畫部位的 1/3,保留加碼彈性',
+    '先買 3 張試單',
+    '這檔保證獲利',
+  ];
+  for (const text of banned) {
+    assert.ok(scanForbiddenContent(text).length > 0, `expected a ban for: ${text}`);
+  }
+});
+
 test('retry feedback classifies the failures and forbids gaming the validator', () => {
   const bad = baseJudgment();
   bad.diagnosis.regime = 'super_bull';

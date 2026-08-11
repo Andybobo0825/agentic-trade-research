@@ -37,11 +37,18 @@ test('readLineBridgeConfig requires token, secret, and tmux target', () => {
   assert.equal(discovery.submitDelayMs, 800);
   assert.equal(discovery.clearBeforeSend, true);
   assert.equal(discovery.handoffMode, 'once');
+  assert.equal(discovery.completionTimeoutMs, 60 * 60 * 1000);
 
   const config = readLineBridgeConfig({ LINE_CHANNEL_ACCESS_TOKEN: 'token', LINE_CHANNEL_SECRET: 'secret', LINE_ALLOWED_USER_IDS: 'U1,U2', LINE_BRIDGE_TMUX_TARGET: '%9', LINE_BRIDGE_PORT: '9999' });
   assert.equal(config.discoveryOnly, false);
   assert.equal(config.port, 9999);
   assert.equal(config.allowedUserIds.has('U1'), true);
+  assert.equal(readLineBridgeConfig({
+    LINE_CHANNEL_ACCESS_TOKEN: 'token',
+    LINE_CHANNEL_SECRET: 'secret',
+    LINE_BRIDGE_TMUX_TARGET: '%9',
+    LINE_BRIDGE_COMPLETION_TIMEOUT_MS: '120000',
+  }).completionTimeoutMs, 120000);
 });
 
 test('readLineBridgeConfig loads persisted auto-authorized whitelist users', () => {

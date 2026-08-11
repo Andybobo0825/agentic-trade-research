@@ -56,6 +56,7 @@ playwright-report/
 # commit all of it; only the code under tmf-research-agent/ belongs in git.
 tmf-research-agent/data/
 tmf-research-agent/phase5-holdout/
+tmf-research-agent/.phase5-holdout.phase5-holdout-audit/
 tmf-research-agent/.venv/
 
 # Historical market data (k-bar / event exports) stay local

@@ -29,6 +29,8 @@ import { buildPreopenBrief, renderPreopenBriefMarkdown } from './preopen-brief.j
 import { loadMemoryEntryFile, renderMemorySyncMarkdown, syncDynamicMemory } from './dynamic-memory.js';
 import { buildXiaoyuEtfLens, renderXiaoyuEtfMarkdown } from './xiaoyu-etf.js';
 import { buildTaiwanAgentTeam, renderTaiwanAgentTeamMarkdown } from './taiwan-agent-team.js';
+import { renderPhase3DatasetMarkdown, runPhase3Dataset } from './phase3-dataset.js';
+import { renderPhase3ScreenMarkdown, runPhase3Screen } from './phase3-screen.js';
 import { compactJson, compactNumber, shapeForTokenBudget, toMarkdownTable } from './format.js';
 import { detectHmaSignals, evaluateHmaTrendSignal, normalizeCandleRows } from './indicators.js';
 
@@ -563,6 +565,24 @@ export const tools = {
     },
     toMarkdown(result) {
       return renderChipStudyMarkdown(result);
+    },
+  },
+  'phase3-dataset': {
+    description: 'Build and audit immutable Phase 3 point-in-time market and institutional evidence. Read-only; no order mode.',
+    async run(args) {
+      return runPhase3Dataset(args || {});
+    },
+    toMarkdown(result) {
+      return renderPhase3DatasetMarkdown(result);
+    },
+  },
+  'phase3-screen': {
+    description: 'Run the deterministic Phase 3 technical screen over read-only point-in-time evidence; this tool has no live order mode.',
+    async run(args) {
+      return runPhase3Screen(args || {});
+    },
+    toMarkdown(result) {
+      return renderPhase3ScreenMarkdown(result);
     },
   },
   'research-pack': {

@@ -110,6 +110,32 @@ function toolSchema(name, tool) {
       forwardDays: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'number' } }] },
     };
     base.inputSchema.required = ['ticker'];
+  } else if (name === 'phase3-dataset') {
+    base.inputSchema.additionalProperties = false;
+    base.inputSchema.properties = {
+      universeFile: { type: 'string' },
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      evidenceRoot: { type: 'string' },
+      reportJson: { type: 'string' },
+      reportMarkdown: { type: 'string' },
+      refreshUniverse: { type: 'boolean' },
+    };
+    base.inputSchema.required = [];
+  } else if (name === 'phase3-screen') {
+    base.inputSchema.additionalProperties = false;
+    base.inputSchema.properties = {
+      startDate: { type: 'string' },
+      endDate: { type: 'string' },
+      evidenceRoot: { type: 'string' },
+      candidateArtifact: { type: 'string' },
+      top: { type: 'number' },
+      includeRejected: { type: 'boolean' },
+      rebuild: { type: 'boolean' },
+      reportJson: { type: 'string' },
+      reportMarkdown: { type: 'string' },
+    };
+    base.inputSchema.required = [];
   } else if (name === 'sector-flow') {
     base.inputSchema.properties = {
       mode: { type: 'string', enum: ['realtime', 'close'] },

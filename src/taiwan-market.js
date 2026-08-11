@@ -328,3 +328,12 @@ function rowsOf(payload) {
   if (Array.isArray(payload?.data)) return payload.data;
   return [];
 }
+
+export function taiwanProviderEnvelope(result, fetchedAt) {
+  return {
+    rows: rowsOf(result),
+    source: result?.source || 'unknown',
+    sourceUrl: result?.url,
+    fetchedAt,
+  };
+}
